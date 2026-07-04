@@ -27,7 +27,7 @@ _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 _JUNK_RE = re.compile(
     r"\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|web[- ]?dl|webrip|bluray|blu-ray|"
     r"remux|hdtv|dvdrip|proper|repack|amzn|dsnp|nf|atvp|hulu|flac|mp3|320|v0|aac|dts|"
-    r"truehd|atmos|dv|hdr10?|10bit|8bit|multi|vostfr|internal)\b", re.IGNORECASE)
+    r"truehd|atmos|dv|hdr(10)?|10bit|8bit|multi|vostfr|internal)\b", re.IGNORECASE)
 
 # --- SSE fan-out: scan cycles publish events, /imports/events subscribers consume them ---
 _subscribers: set[asyncio.Queue] = set()
