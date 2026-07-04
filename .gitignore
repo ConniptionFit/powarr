@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+node_modules/
+frontend/dist/
+config/
+*.db
+*.sqlite
+.DS_Store
+
+# Contains DB password inline - use docker-compose.example.yml as the tracked template
+docker-compose.yml

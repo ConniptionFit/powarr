@@ -1,0 +1,50 @@
+from pydantic import BaseModel
+from typing import Optional
+
+
+class ScoringWeights(BaseModel):
+    watch_history_weight: float = 4.0
+    file_size_weight: float = 3.0
+    file_age_weight: float = 1.5
+    release_date_weight: float = 1.5
+    min_score_threshold: float = 40.0
+    never_watched_boost: float = 2.0
+    max_size_gb_reference: float = 50.0
+    max_age_days_reference: float = 1825.0
+    max_release_age_years_reference: float = 20.0
+
+
+class ImportMatchingSettings(BaseModel):
+    enabled: bool = True  # read-only queue polling/detection
+    poll_interval_seconds: int = 300
+    high_confidence_threshold: float = 0.90  # >= this → eligible for auto-resolve
+    low_confidence_floor: float = 0.50  # < this → log only, no triage row
+    auto_resolve_enabled: bool = False  # writes back to *arr apps — off until explicitly enabled
+    sonarr_enabled: bool = True
+    radarr_enabled: bool = True
+    lidarr_enabled: bool = True
+
+
+class OllamaSettings(BaseModel):
+    enabled: bool = False
+    host: str = ""  # ip:port or http(s)://host:port
+    model: str = ""
+
+
+class IntegrationConfig(BaseModel):
+    name: str
+    url: Optional[str] = None
+    api_key: Optional[str] = None
+    enabled: bool = False
+    remove_from_monitored_on_delete: bool = True
+    delete_from_arr_list: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+class IntegrationConfigUpdate(BaseModel):
+    url: Optional[str] = None
+    api_key: Optional[str] = None
+    enabled: Optional[bool] = None
+    remove_from_monitored_on_delete: Optional[bool] = None
+    delete_from_arr_list: Optional[bool] = None

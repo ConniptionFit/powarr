@@ -1,0 +1,30 @@
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+
+class FailedImportOut(BaseModel):
+    id: int
+    source_app: str
+    queue_item_id: Optional[str] = None
+    download_id: Optional[str] = None
+    raw_title: str
+    matched_title: Optional[str] = None
+    matched_id: Optional[int] = None
+    confidence: float
+    llm_confidence: Optional[float] = None
+    llm_rationale: Optional[str] = None
+    status: str
+    message: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ImportStats(BaseModel):
+    suggested: int = 0
+    auto_resolved: int = 0
+    accepted: int = 0
+    rejected: int = 0
