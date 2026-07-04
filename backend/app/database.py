@@ -26,7 +26,7 @@ def get_db():
 
 
 def init_db():
-    from app.models import media, integration, app_setting, failed_import  # noqa: F401
+    from app.models import media, integration, app_setting, failed_import, deletion_log  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate()
 
@@ -37,8 +37,13 @@ def _migrate():
     pending_by_table = {
         "media_items": {
             "parent_title": "VARCHAR",
+            "protected": "BOOLEAN DEFAULT FALSE",
+            "pending_delete_at": "TIMESTAMP",
         },
-        "failed_imports": {},
+        "failed_imports": {
+            "verified": "BOOLEAN",
+        },
+        "deletion_log": {},
     }
     with engine.connect() as conn:
         for table, pending in pending_by_table.items():

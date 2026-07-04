@@ -6,31 +6,37 @@ import asyncio
 import logging
 
 from app.database import init_db
-from app.api.v1 import media, settings, integrations, imports
+from app.api.v1 import media, settings, integrations, imports, system
+from app import log_buffer
 
 logging.basicConfig(level=logging.INFO)
+log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.1.0", docs_url="/api/docs")
+app = FastAPI(title="Powarr", version="0.2.0", docs_url="/api/docs")
 
 _poller_task: asyncio.Task | None = None
+_maintenance_task: asyncio.Task | None = None
 
 
 @app.on_event("startup")
 async def startup():
-    global _poller_task
+    global _poller_task, _maintenance_task
     logger.info("Powarr starting up...")
     init_db()
     _seed_integrations()
     _seed_settings()
     from app.services.import_matcher import poller_loop
+    from app.services.scheduler import maintenance_loop
     _poller_task = asyncio.create_task(poller_loop())
+    _maintenance_task = asyncio.create_task(maintenance_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    if _poller_task:
-        _poller_task.cancel()
+    for task in (_poller_task, _maintenance_task):
+        if task:
+            task.cancel()
 
 
 def _seed_integrations():
@@ -39,7 +45,8 @@ def _seed_integrations():
 
     db = SessionLocal()
     try:
-        for name in ("plex", "tautulli", "sonarr", "radarr", "lidarr"):
+        for name in ("plex", "tautulli", "sonarr", "radarr", "lidarr",
+                     "readarr", "seerr", "qbittorrent", "transmission"):
             if not db.query(Integration).filter_by(name=name).first():
                 db.add(Integration(name=name))
         db.commit()
@@ -50,13 +57,16 @@ def _seed_integrations():
 def _seed_settings():
     from app.database import SessionLocal
     from app.models.app_setting import AppSetting
-    from app.schemas.settings import ScoringWeights, ImportMatchingSettings, OllamaSettings
+    from app.schemas.settings import (ScoringWeights, ImportMatchingSettings, OllamaSettings,
+                                      CleanupSettings, SyncSettings)
     import json
 
     defaults = {
         "scoring_weights": ScoringWeights,
         "import_matching": ImportMatchingSettings,
         "ollama": OllamaSettings,
+        "cleanup": CleanupSettings,
+        "sync": SyncSettings,
     }
     db = SessionLocal()
     try:
@@ -72,6 +82,7 @@ app.include_router(media.router, prefix="/api/v1")
 app.include_router(settings.router, prefix="/api/v1")
 app.include_router(integrations.router, prefix="/api/v1")
 app.include_router(imports.router, prefix="/api/v1")
+app.include_router(system.router, prefix="/api/v1")
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 

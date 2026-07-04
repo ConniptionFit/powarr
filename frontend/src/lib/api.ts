@@ -27,9 +27,29 @@ export interface MediaItem {
   score: number;
   ignored: boolean;
   parent_title: string | null;
+  protected: boolean | null;
+  pending_delete_at: string | null;
   sonarr_id: number | null;
   radarr_id: number | null;
   lidarr_id: number | null;
+}
+
+export interface DeletionLogEntry {
+  id: number;
+  title: string;
+  parent_title: string | null;
+  media_type: string;
+  library_section: string | null;
+  file_size: number;
+  arr_action: string | null;
+  deleted_at: string | null;
+}
+
+export interface DeletionStats {
+  deleted_30d: number;
+  freed_30d_bytes: number;
+  deleted_total: number;
+  freed_total_bytes: number;
 }
 
 export interface MediaStats {
@@ -51,6 +71,12 @@ export const mediaApi = {
   delete: (id: number) => req(`/media/${id}`, { method: "DELETE" }),
   deleteBatch: (ids: number[]) =>
     req(`/media/batch`, { method: "DELETE", body: JSON.stringify(ids) }),
+  libraries: () => req<string[]>("/media/libraries"),
+  restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
+  explain: (id: number) =>
+    req<{ rationale: string | null; message: string | null }>(`/media/${id}/explain`, { method: "POST" }),
+  deletionLog: () => req<DeletionLogEntry[]>("/media/deletion-log"),
+  deletionStats: () => req<DeletionStats>("/media/deletion-stats"),
 };
 
 // --- Settings ---
@@ -72,15 +98,30 @@ export interface ImportMatchingSettings {
   high_confidence_threshold: number;
   low_confidence_floor: number;
   auto_resolve_enabled: boolean;
+  grace_period_minutes: number;
+  include_stalled: boolean;
+  verify_timeout_minutes: number;
   sonarr_enabled: boolean;
   radarr_enabled: boolean;
   lidarr_enabled: boolean;
+  readarr_enabled: boolean;
 }
 
 export interface OllamaSettings {
   enabled: boolean;
   host: string;
   model: string;
+  api_style: string;
+}
+
+export interface CleanupSettings {
+  excluded_libraries: string[];
+  soft_delete_days: number;
+  protect_requested: boolean;
+}
+
+export interface SyncSettings {
+  plex_sync_interval_hours: number;
 }
 
 export const settingsApi = {
@@ -93,6 +134,12 @@ export const settingsApi = {
   getOllama: () => req<OllamaSettings>("/settings/ollama"),
   updateOllama: (s: OllamaSettings) =>
     req<OllamaSettings>("/settings/ollama", { method: "PUT", body: JSON.stringify(s) }),
+  getCleanup: () => req<CleanupSettings>("/settings/cleanup"),
+  updateCleanup: (s: CleanupSettings) =>
+    req<CleanupSettings>("/settings/cleanup", { method: "PUT", body: JSON.stringify(s) }),
+  getSync: () => req<SyncSettings>("/settings/sync"),
+  updateSync: (s: SyncSettings) =>
+    req<SyncSettings>("/settings/sync", { method: "PUT", body: JSON.stringify(s) }),
 };
 
 // --- Failed imports ---
@@ -119,6 +166,19 @@ export interface ImportStats {
   auto_resolved: number;
   accepted: number;
   rejected: number;
+  closed_external: number;
+  resolve_failed: number;
+  by_service: Record<string, number>;
+  auto_resolved_7d: number;
+}
+
+export interface ImportFileDetail {
+  path: string | null;
+  size: number;
+  quality: string | null;
+  mapped_to: string | null;
+  detail: string;
+  rejections: string[];
 }
 
 export const importsApi = {
@@ -128,8 +188,21 @@ export const importsApi = {
   scan: () => req<Record<string, unknown>>("/imports/scan", { method: "POST" }),
   accept: (id: number) =>
     req<{ id: number; status: string; ok: boolean; message: string }>(`/imports/${id}/accept`, { method: "POST" }),
-  reject: (id: number) =>
-    req<{ id: number; status: string }>(`/imports/${id}/reject`, { method: "POST" }),
+  reject: (id: number, removeDownload = false) =>
+    req<{ id: number; status: string; download_client?: string[] }>(
+      `/imports/${id}/reject?remove_download=${removeDownload}`, { method: "POST" }),
+  batch: (ids: number[], action: "accept" | "reject") =>
+    req<{ results: Array<Record<string, unknown>> }>("/imports/batch", {
+      method: "POST", body: JSON.stringify({ ids, action }),
+    }),
+  files: (id: number) =>
+    req<{ files: ImportFileDetail[]; message: string | null }>(`/imports/${id}/files`),
+};
+
+// --- System ---
+export const systemApi = {
+  health: () => req<{ status: string; db: string }>("/system/health"),
+  logs: (lines = 200) => req<{ lines: string[] }>(`/system/logs?lines=${lines}`),
 };
 
 // --- Ollama (optional local-LLM assist) ---
@@ -153,7 +226,8 @@ export const integrationsApi = {
   update: (name: string, body: Partial<IntegrationConfig>) =>
     req<IntegrationConfig>(`/integrations/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   test: (name: string) => req<{ ok: boolean; message: string; version: string | null }>(`/integrations/${name}/test`, { method: "POST" }),
-  syncPlex: () => req<{ synced: number }>("/integrations/plex/sync", { method: "POST" }),
+  syncPlex: () => req<{ synced: number; protected?: number }>("/integrations/plex/sync", { method: "POST" }),
+  syncSeerr: () => req<{ protected: number }>("/integrations/seerr/sync", { method: "POST" }),
 };
 
 // --- Formatters ---

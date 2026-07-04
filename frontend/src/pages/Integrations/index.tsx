@@ -9,6 +9,10 @@ const INTEGRATION_META: Record<string, { label: string; color: string; descripti
   sonarr: { label: "Sonarr", color: "bg-teal-600", description: "TV show management" },
   radarr: { label: "Radarr", color: "bg-amber-600", description: "Movie management" },
   lidarr: { label: "Lidarr", color: "bg-pink-600", description: "Music management" },
+  readarr: { label: "Readarr", color: "bg-orange-700", description: "Book management — failed-import matching" },
+  seerr: { label: "Seerr", color: "bg-purple-700", description: "Request management — protects requested media from deletion" },
+  qbittorrent: { label: "qBittorrent", color: "bg-sky-700", description: "Download client — API key field takes username:password" },
+  transmission: { label: "Transmission", color: "bg-red-800", description: "Download client — API key field takes username:password" },
 };
 
 function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
@@ -173,12 +177,13 @@ function OllamaCard() {
   const [enabled, setEnabled] = useState(false);
   const [host, setHost] = useState("");
   const [model, setModel] = useState("");
+  const [apiStyle, setApiStyle] = useState("ollama");
   const [useOther, setUseOther] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
 
   useEffect(() => {
-    if (cfg) { setEnabled(cfg.enabled); setHost(cfg.host); setModel(cfg.model); }
+    if (cfg) { setEnabled(cfg.enabled); setHost(cfg.host); setModel(cfg.model); setApiStyle(cfg.api_style || "ollama"); }
   }, [cfg]);
 
   const { data: modelsResp, refetch: refetchModels, isFetching: loadingModels } = useQuery({
@@ -190,7 +195,7 @@ function OllamaCard() {
   const dropdownValue = useOther || (model !== "" && models.length > 0 && !models.includes(model)) ? OTHER : model;
 
   const saveMut = useMutation({
-    mutationFn: () => settingsApi.updateOllama({ enabled, host, model }),
+    mutationFn: () => settingsApi.updateOllama({ enabled, host, model, api_style: apiStyle }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["ollama-settings"] });
       if (host) refetchModels();
@@ -201,7 +206,7 @@ function OllamaCard() {
     setTesting(true);
     setTestResult(null);
     try {
-      await settingsApi.updateOllama({ enabled, host, model }); // test runs against saved config
+      await settingsApi.updateOllama({ enabled, host, model, api_style: apiStyle }); // test runs against saved config
       const r = await ollamaApi.test();
       setTestResult(r);
     } catch (e: unknown) {
@@ -231,15 +236,28 @@ function OllamaCard() {
       </div>
 
       <div className="space-y-3">
-        <div>
-          <label className="text-xs text-slate-400 mb-1 block">Host</label>
-          <input
-            type="text"
-            placeholder="10.1.1.x:11434"
-            value={host}
-            onChange={e => setHost(e.target.value)}
-            className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
-          />
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <label className="text-xs text-slate-400 mb-1 block">Host</label>
+            <input
+              type="text"
+              placeholder="10.1.1.x:11434"
+              value={host}
+              onChange={e => setHost(e.target.value)}
+              className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 mb-1 block">API Style</label>
+            <select
+              value={apiStyle}
+              onChange={e => setApiStyle(e.target.value)}
+              className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white"
+            >
+              <option value="ollama">Ollama native</option>
+              <option value="openai">OpenAI-compatible</option>
+            </select>
+          </div>
         </div>
         <div>
           <label className="text-xs text-slate-400 mb-1 block">Model</label>
@@ -316,7 +334,7 @@ export default function IntegrationsPage() {
     queryFn: integrationsApi.list,
   });
 
-  const order = ["plex", "tautulli", "radarr", "sonarr", "lidarr"];
+  const order = ["plex", "tautulli", "radarr", "sonarr", "lidarr", "readarr", "seerr", "qbittorrent", "transmission"];
   const sorted = [...integrations].sort(
     (a, b) => order.indexOf(a.name) - order.indexOf(b.name)
   );

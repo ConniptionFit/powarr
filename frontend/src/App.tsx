@@ -1,15 +1,17 @@
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
-import { Zap, LayoutDashboard, Trash2, Settings, Plug } from "lucide-react";
+import { Zap, LayoutDashboard, Trash2, Settings, Plug, ScrollText } from "lucide-react";
 import Dashboard from "./pages/Dashboard";
 import Cleanup from "./pages/Cleanup";
 import SettingsPage from "./pages/Settings";
 import IntegrationsPage from "./pages/Integrations";
+import LogsPage from "./pages/Logs";
 
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/cleanup", icon: Trash2, label: "Cleanup" },
   { to: "/integrations", icon: Plug, label: "Integrations" },
   { to: "/settings", icon: Settings, label: "Settings" },
+  { to: "/logs", icon: ScrollText, label: "Logs" },
 ];
 
 export default function App() {
@@ -42,7 +44,7 @@ export default function App() {
             ))}
           </nav>
           <div className="px-5 py-3 text-xs text-slate-600 border-t border-purple-900/40">
-            v0.1.0
+            v0.2.0
           </div>
         </aside>
 
@@ -53,6 +55,7 @@ export default function App() {
             <Route path="/cleanup" element={<Cleanup />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/logs" element={<LogsPage />} />
           </Routes>
         </main>
       </div>

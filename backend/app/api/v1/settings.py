@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.app_setting import AppSetting
-from app.schemas.settings import ScoringWeights, ImportMatchingSettings, OllamaSettings
+from app.schemas.settings import (ScoringWeights, ImportMatchingSettings, OllamaSettings,
+                                  CleanupSettings, SyncSettings)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -71,4 +72,26 @@ def get_ollama(db: Session = Depends(get_db)):
 @router.put("/ollama", response_model=OllamaSettings)
 def update_ollama(body: OllamaSettings, db: Session = Depends(get_db)):
     _put_json_setting(db, "ollama", body)
+    return body
+
+
+@router.get("/cleanup", response_model=CleanupSettings)
+def get_cleanup(db: Session = Depends(get_db)):
+    return _get_json_setting(db, "cleanup", CleanupSettings)
+
+
+@router.put("/cleanup", response_model=CleanupSettings)
+def update_cleanup(body: CleanupSettings, db: Session = Depends(get_db)):
+    _put_json_setting(db, "cleanup", body)
+    return body
+
+
+@router.get("/sync", response_model=SyncSettings)
+def get_sync(db: Session = Depends(get_db)):
+    return _get_json_setting(db, "sync", SyncSettings)
+
+
+@router.put("/sync", response_model=SyncSettings)
+def update_sync(body: SyncSettings, db: Session = Depends(get_db)):
+    _put_json_setting(db, "sync", body)
     return body

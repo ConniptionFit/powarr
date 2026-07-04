@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean
 from datetime import datetime
 
 from app.database import Base
@@ -19,7 +19,9 @@ class FailedImport(Base):
     confidence = Column(Float, default=0.0)
     llm_confidence = Column(Float, nullable=True)
     llm_rationale = Column(String, nullable=True)
-    status = Column(String, default="suggested")  # suggested | auto_resolved | accepted | rejected
+    # suggested | auto_resolved | accepted | rejected | closed_external | resolve_failed
+    status = Column(String, default="suggested")
+    verified = Column(Boolean, nullable=True)  # import confirmed in *arr history after resolve
     message = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

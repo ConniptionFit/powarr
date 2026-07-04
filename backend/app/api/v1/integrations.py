@@ -9,7 +9,8 @@ from app.schemas.settings import IntegrationConfig, IntegrationConfigUpdate
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
-INTEGRATION_NAMES = ("plex", "tautulli", "sonarr", "radarr", "lidarr")
+INTEGRATION_NAMES = ("plex", "tautulli", "sonarr", "radarr", "lidarr",
+                     "readarr", "seerr", "qbittorrent", "transmission")
 
 
 def _get_client(integration: Integration):
@@ -29,6 +30,18 @@ def _get_client(integration: Integration):
     if integration.name == "lidarr":
         from app.integrations.lidarr import LidarrIntegration
         return LidarrIntegration(integration.url, integration.api_key, extra)
+    if integration.name == "readarr":
+        from app.integrations.readarr import ReadarrIntegration
+        return ReadarrIntegration(integration.url, integration.api_key, extra)
+    if integration.name == "seerr":
+        from app.integrations.seerr import SeerrIntegration
+        return SeerrIntegration(integration.url, integration.api_key, extra)
+    if integration.name == "qbittorrent":
+        from app.integrations.qbittorrent import QbittorrentIntegration
+        return QbittorrentIntegration(integration.url, integration.api_key, extra)
+    if integration.name == "transmission":
+        from app.integrations.transmission import TransmissionIntegration
+        return TransmissionIntegration(integration.url, integration.api_key, extra)
     raise HTTPException(status_code=404, detail=f"Unknown integration: {integration.name}")
 
 
@@ -48,14 +61,25 @@ def _ollama_settings(db: Session):
 async def ollama_models(db: Session = Depends(get_db)) -> dict[str, Any]:
     from app.services import llm_assist
     cfg = _ollama_settings(db)
-    return await llm_assist.list_models(cfg.host)
+    return await llm_assist.list_models(cfg.host, cfg.api_style)
 
 
 @router.post("/ollama/test")
 async def ollama_test(db: Session = Depends(get_db)) -> dict[str, Any]:
     from app.services import llm_assist
     cfg = _ollama_settings(db)
-    return await llm_assist.test_connection(cfg.host, cfg.model)
+    return await llm_assist.test_connection(cfg.host, cfg.model, cfg.api_style)
+
+
+@router.post("/seerr/sync")
+async def sync_seerr(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Refresh request-based deletion protection from Seerr on demand."""
+    from app.services.plex_sync import refresh_seerr_protection
+    try:
+        protected = await refresh_seerr_protection(db)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Seerr sync failed: {e}")
+    return {"protected": protected}
 
 
 @router.get("", response_model=list[IntegrationConfig])
@@ -117,34 +141,8 @@ async def test_integration(name: str, db: Session = Depends(get_db)) -> dict[str
 
 @router.post("/plex/sync")
 async def sync_plex(db: Session = Depends(get_db)) -> dict[str, Any]:
-    from app.models.media import MediaItem
-    from app.models.app_setting import AppSetting
-    from app.services.scorer import score_item
-    import json as _json
-
-    row = db.query(Integration).filter_by(name="plex").first()
-    if not row or not row.enabled:
-        raise HTTPException(status_code=400, detail="Plex integration not enabled")
-
-    from app.integrations.plex import PlexIntegration
-    plex = PlexIntegration(row.url, row.api_key)
-
-    weights_row = db.query(AppSetting).filter_by(key="scoring_weights").first()
-    from app.schemas.settings import ScoringWeights
-    weights = ScoringWeights(**_json.loads(weights_row.value)) if weights_row else ScoringWeights()
-
-    items = await plex.fetch_media_items()
-    upserted = 0
-    for item_data in items:
-        existing = db.query(MediaItem).filter_by(plex_rating_key=item_data["plex_rating_key"]).first()
-        if existing:
-            for k, v in item_data.items():
-                setattr(existing, k, v)
-            existing.score = score_item(item_data, weights)
-        else:
-            item_data["score"] = score_item(item_data, weights)
-            db.add(MediaItem(**item_data))
-        upserted += 1
-
-    db.commit()
-    return {"synced": upserted}
+    from app.services.plex_sync import run_plex_sync
+    try:
+        return await run_plex_sync(db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

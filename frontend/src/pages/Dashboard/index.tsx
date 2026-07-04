@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HardDrive, Film, Trash2, TrendingDown, RefreshCw } from "lucide-react";
-import { mediaApi, integrationsApi, fmtBytes } from "../../lib/api";
+import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle } from "lucide-react";
+import { mediaApi, integrationsApi, importsApi, fmtBytes } from "../../lib/api";
 
 function StatCard({ icon: Icon, label, value, sub, color }: {
   icon: React.ElementType;
@@ -31,6 +31,21 @@ export default function Dashboard() {
     queryFn: mediaApi.stats,
   });
 
+  const { data: importStats } = useQuery({
+    queryKey: ["import-stats"],
+    queryFn: importsApi.stats,
+  });
+
+  const { data: deletionStats } = useQuery({
+    queryKey: ["deletion-stats"],
+    queryFn: mediaApi.deletionStats,
+  });
+
+  const byService = importStats?.by_service ?? {};
+  const byServiceLabel = Object.entries(byService)
+    .map(([app, n]) => `${app} ${n}`)
+    .join(" · ") || "none pending";
+
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
@@ -54,7 +69,12 @@ export default function Dashboard() {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-          <p className="text-slate-400 text-sm mt-1">Media library overview</p>
+          <p className="text-slate-400 text-sm mt-1">
+            Media library overview
+            {stats?.last_synced && (
+              <span className="text-slate-500"> — last synced {new Date(stats.last_synced).toLocaleString()}</span>
+            )}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {syncMsg && (
@@ -109,6 +129,34 @@ export default function Dashboard() {
             value={fmtBytes(stats?.potential_savings_bytes ?? 0)}
             sub="if candidates deleted"
             color="bg-emerald-700"
+          />
+          <StatCard
+            icon={DownloadCloud}
+            label="Failed Imports"
+            value={(importStats?.suggested ?? 0).toLocaleString()}
+            sub={byServiceLabel}
+            color="bg-purple-700"
+          />
+          <StatCard
+            icon={CheckCircle}
+            label="Auto-Resolved (7d)"
+            value={(importStats?.auto_resolved_7d ?? 0).toLocaleString()}
+            sub="imports pushed automatically"
+            color="bg-teal-700"
+          />
+          <StatCard
+            icon={Recycle}
+            label="Space Freed (30d)"
+            value={fmtBytes(deletionStats?.freed_30d_bytes ?? 0)}
+            sub={`${deletionStats?.deleted_30d ?? 0} items deleted`}
+            color="bg-green-800"
+          />
+          <StatCard
+            icon={Trash2}
+            label="Push Failures"
+            value={(importStats?.resolve_failed ?? 0).toLocaleString()}
+            sub="imports needing re-triage"
+            color="bg-red-800"
           />
         </div>
       )}

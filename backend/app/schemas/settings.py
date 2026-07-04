@@ -20,15 +20,30 @@ class ImportMatchingSettings(BaseModel):
     high_confidence_threshold: float = 0.90  # >= this → eligible for auto-resolve
     low_confidence_floor: float = 0.50  # < this → log only, no triage row
     auto_resolve_enabled: bool = False  # writes back to *arr apps — off until explicitly enabled
+    grace_period_minutes: int = 10  # skip queue items younger than this — *arr often self-retries
+    include_stalled: bool = False  # also flag stalled downloads, not just import failures
+    verify_timeout_minutes: int = 30  # resolved rows unverified after this → resolve_failed
     sonarr_enabled: bool = True
     radarr_enabled: bool = True
     lidarr_enabled: bool = True
+    readarr_enabled: bool = True
 
 
 class OllamaSettings(BaseModel):
     enabled: bool = False
     host: str = ""  # ip:port or http(s)://host:port
     model: str = ""
+    api_style: str = "ollama"  # ollama | openai (LM Studio, llama.cpp server, etc.)
+
+
+class CleanupSettings(BaseModel):
+    excluded_libraries: list[str] = []  # library_section names never suggested for deletion
+    soft_delete_days: int = 0  # 0 = delete immediately (current behavior); >0 = pending window
+    protect_requested: bool = True  # hide Seerr-requested items from suggestions
+
+
+class SyncSettings(BaseModel):
+    plex_sync_interval_hours: int = 0  # 0 = manual sync only
 
 
 class IntegrationConfig(BaseModel):

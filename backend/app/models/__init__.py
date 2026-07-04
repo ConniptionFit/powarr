@@ -2,5 +2,6 @@ from app.models.media import MediaItem
 from app.models.integration import Integration
 from app.models.app_setting import AppSetting
 from app.models.failed_import import FailedImport
+from app.models.deletion_log import DeletionLog
 
-__all__ = ["MediaItem", "Integration", "AppSetting", "FailedImport"]
+__all__ = ["MediaItem", "Integration", "AppSetting", "FailedImport", "DeletionLog"]

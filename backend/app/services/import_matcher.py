@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 
 from app.database import SessionLocal
@@ -29,6 +29,27 @@ _JUNK_RE = re.compile(
     r"remux|hdtv|dvdrip|proper|repack|amzn|dsnp|nf|atvp|hulu|flac|mp3|320|v0|aac|dts|"
     r"truehd|atmos|dv|hdr10?|10bit|8bit|multi|vostfr|internal)\b", re.IGNORECASE)
 
+# --- SSE fan-out: scan cycles publish events, /imports/events subscribers consume them ---
+_subscribers: set[asyncio.Queue] = set()
+
+
+def subscribe() -> asyncio.Queue:
+    q: asyncio.Queue = asyncio.Queue(maxsize=50)
+    _subscribers.add(q)
+    return q
+
+
+def unsubscribe(q: asyncio.Queue) -> None:
+    _subscribers.discard(q)
+
+
+def publish(event: dict) -> None:
+    for q in list(_subscribers):
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            pass
+
 
 def load_settings(db) -> tuple[ImportMatchingSettings, OllamaSettings]:
     def _load(key, schema):
@@ -46,6 +67,9 @@ def _get_client(name: str, row: Integration):
     if name == "radarr":
         from app.integrations.radarr import RadarrIntegration
         return RadarrIntegration(row.url, row.api_key)
+    if name == "readarr":
+        from app.integrations.readarr import ReadarrIntegration
+        return ReadarrIntegration(row.url, row.api_key)
     from app.integrations.lidarr import LidarrIntegration
     return LidarrIntegration(row.url, row.api_key)
 
@@ -70,10 +94,28 @@ def title_similarity(release_title: str, library_title: str) -> float:
     return min(1.0, ratio)
 
 
-def _is_stuck(rec: dict) -> bool:
+def _is_stuck(rec: dict, include_stalled: bool = False) -> bool:
     if rec.get("trackedDownloadState") in STUCK_STATES:
         return True
-    return rec.get("status") == "completed" and rec.get("trackedDownloadStatus") == "warning"
+    if rec.get("status") == "completed" and rec.get("trackedDownloadStatus") == "warning":
+        return True
+    if include_stalled and "stalled" in (rec.get("errorMessage") or "").lower():
+        return True
+    return False
+
+
+def _within_grace(rec: dict, grace_minutes: int) -> bool:
+    """True if the queue item is younger than the grace period (skip it — *arr may self-retry)."""
+    if grace_minutes <= 0:
+        return False
+    added = rec.get("added")
+    if not added:
+        return False
+    try:
+        added_dt = datetime.fromisoformat(str(added).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return False
+    return datetime.utcnow() - added_dt < timedelta(minutes=grace_minutes)
 
 
 def _queue_messages(rec: dict) -> str:
@@ -82,6 +124,8 @@ def _queue_messages(rec: dict) -> str:
         msgs.extend(sm.get("messages", []) or [])
         if sm.get("title"):
             msgs.append(sm["title"])
+    if rec.get("errorMessage"):
+        msgs.append(rec["errorMessage"])
     return "; ".join(msgs)[:1000]
 
 
@@ -90,6 +134,7 @@ APP_FIELDS = {
     "sonarr": ("seriesId", "get_series", "title"),
     "radarr": ("movieId", "get_movies", "title"),
     "lidarr": ("artistId", "get_artists", "artistName"),
+    "readarr": ("authorId", "get_authors", "authorName"),
 }
 
 
@@ -134,7 +179,8 @@ async def _match_record(app_name: str, rec: dict, history: list[dict],
     if matched_title and ollama.enabled and ollama.host and ollama.model:
         llm = await llm_assist.score_candidate(
             ollama.host, ollama.model, raw_title, matched_title,
-            context=f"Source app: {app_name}. Queue error: {_queue_messages(rec)[:200]}")
+            context=f"Source app: {app_name}. Queue error: {_queue_messages(rec)[:200]}",
+            api_style=ollama.api_style)
         if llm:
             llm_confidence = llm["confidence"]
             llm_rationale = llm["rationale"]
@@ -149,13 +195,65 @@ async def _match_record(app_name: str, rec: dict, history: list[dict],
     }
 
 
+def _close_stale_rows(db, app_name: str, queue: list[dict], summary: dict) -> None:
+    """Suggested rows whose download left the queue on its own no longer need triage."""
+    queue_download_ids = {rec.get("downloadId") for rec in queue if rec.get("downloadId")}
+    queue_item_ids = {str(rec.get("id", "")) for rec in queue}
+    open_rows = db.query(FailedImport).filter(
+        FailedImport.source_app == app_name,
+        FailedImport.status == "suggested",
+    ).all()
+    for row in open_rows:
+        still_queued = (row.download_id in queue_download_ids if row.download_id
+                        else row.queue_item_id in queue_item_ids)
+        if not still_queued:
+            row.status = "closed_external"
+            row.resolved_at = datetime.utcnow()
+            row.message = ((row.message + " | ") if row.message else "") + "Left the queue on its own"
+            summary["closed_external"] += 1
+    db.commit()
+
+
+async def _verify_resolved(db, app_name: str, client, cfg: ImportMatchingSettings, summary: dict) -> None:
+    """Confirm pushed imports actually landed: look for an import event in recent history.
+    Unverified past the timeout → resolve_failed (surfaced back into triage)."""
+    pending = db.query(FailedImport).filter(
+        FailedImport.source_app == app_name,
+        FailedImport.status.in_(("auto_resolved", "accepted")),
+        FailedImport.verified.is_(None),
+    ).all()
+    if not pending:
+        return
+    try:
+        history = await client.get_history(event_type=None)
+    except Exception as e:
+        logger.warning(f"Import verify: {app_name} history fetch failed: {e}")
+        return
+    imported_ids = {h.get("downloadId") for h in history
+                    if "imported" in str(h.get("eventType", "")).lower() and h.get("downloadId")}
+    now = datetime.utcnow()
+    for row in pending:
+        if row.download_id and row.download_id in imported_ids:
+            row.verified = True
+            summary["verified"] += 1
+        elif row.resolved_at and now - row.resolved_at > timedelta(minutes=cfg.verify_timeout_minutes):
+            row.verified = False
+            row.status = "resolve_failed"
+            row.message = ((row.message + " | ") if row.message else "") + \
+                f"Import not confirmed in history within {cfg.verify_timeout_minutes} min"
+            summary["resolve_failed"] += 1
+            logger.warning(f"Import verify: '{row.raw_title}' ({app_name}) push not confirmed — marked resolve_failed")
+    db.commit()
+
+
 async def scan_once() -> dict:
     """One detection cycle across all enabled *arr apps. Returns a per-app summary."""
-    summary: dict = {"scanned": [], "new_suggestions": 0, "auto_resolved": 0, "skipped_existing": 0, "below_floor": 0}
+    summary: dict = {"scanned": [], "new_suggestions": 0, "auto_resolved": 0, "skipped_existing": 0,
+                     "below_floor": 0, "in_grace": 0, "closed_external": 0, "verified": 0, "resolve_failed": 0}
     db = SessionLocal()
     try:
         cfg, ollama = load_settings(db)
-        for app_name in ("sonarr", "radarr", "lidarr"):
+        for app_name in ("sonarr", "radarr", "lidarr", "readarr"):
             if not getattr(cfg, f"{app_name}_enabled", True):
                 continue
             row = db.query(Integration).filter_by(name=app_name, enabled=True).first()
@@ -167,7 +265,11 @@ async def scan_once() -> dict:
             except Exception as e:
                 logger.warning(f"Import scan: {app_name} queue fetch failed: {e}")
                 continue
-            stuck = [rec for rec in queue if _is_stuck(rec)]
+
+            _close_stale_rows(db, app_name, queue, summary)
+            await _verify_resolved(db, app_name, client, cfg, summary)
+
+            stuck = [rec for rec in queue if _is_stuck(rec, cfg.include_stalled)]
             summary["scanned"].append({"app": app_name, "queue": len(queue), "stuck": len(stuck)})
             if not stuck:
                 continue
@@ -185,6 +287,9 @@ async def scan_once() -> dict:
                 library = []
 
             for rec in stuck:
+                if _within_grace(rec, cfg.grace_period_minutes):
+                    summary["in_grace"] += 1
+                    continue
                 download_id = rec.get("downloadId")
                 queue_item_id = str(rec.get("id", ""))
                 dedupe = db.query(FailedImport).filter(
@@ -246,6 +351,10 @@ async def scan_once() -> dict:
                 db.commit()
     finally:
         db.close()
+
+    if any(summary[k] for k in ("new_suggestions", "auto_resolved", "closed_external", "resolve_failed")):
+        publish({"type": "scan", **{k: summary[k] for k in
+                                    ("new_suggestions", "auto_resolved", "closed_external", "resolve_failed")}})
     return summary
 
 

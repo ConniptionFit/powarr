@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Save, AlertTriangle } from "lucide-react";
-import { settingsApi, type ScoringWeights, type ImportMatchingSettings } from "../../lib/api";
+import { settingsApi, mediaApi, type ScoringWeights, type ImportMatchingSettings,
+         type CleanupSettings, type SyncSettings } from "../../lib/api";
 
 function WeightRow({ label, field, value, onChange, description }: {
   label: string;
@@ -127,6 +128,9 @@ function ImportMatchingSection() {
       {numRow("Poll Interval", "Seconds between background scans (minimum 60)", "poll_interval_seconds", { min: 60, max: 86400, step: 30, unit: "sec" })}
       {numRow("High Confidence Threshold", "Matches at or above this are eligible for auto-resolve", "high_confidence_threshold", { min: 0, max: 1, step: 0.01 })}
       {numRow("Low Confidence Floor", "Matches below this are logged only, never listed", "low_confidence_floor", { min: 0, max: 1, step: 0.01 })}
+      {numRow("Grace Period", "Skip queue items younger than this — the *arr app often retries on its own", "grace_period_minutes", { min: 0, max: 1440, step: 5, unit: "min" })}
+      {numRow("Verify Timeout", "Pushed imports unconfirmed in history after this are marked failed", "verify_timeout_minutes", { min: 5, max: 1440, step: 5, unit: "min" })}
+      {toggleRow("Include Stalled Downloads", "Also flag downloads stalled with no connections, not just import failures", "include_stalled")}
 
       <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
         <div>
@@ -148,7 +152,7 @@ function ImportMatchingSection() {
 
       <div className="py-4 flex items-center gap-6">
         <p className="text-white text-sm font-medium">Services</p>
-        {(["sonarr", "radarr", "lidarr"] as const).map(s => (
+        {(["sonarr", "radarr", "lidarr", "readarr"] as const).map(s => (
           <label key={s} className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer capitalize">
             <input
               type="checkbox"
@@ -159,6 +163,146 @@ function ImportMatchingSection() {
             {s}
           </label>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function CleanupSection() {
+  const { data } = useQuery({ queryKey: ["cleanup-settings"], queryFn: settingsApi.getCleanup });
+  const { data: libraries = [] } = useQuery({ queryKey: ["libraries"], queryFn: mediaApi.libraries });
+  const [cfg, setCfg] = useState<CleanupSettings | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => { if (data) setCfg(data); }, [data]);
+
+  const mut = useMutation({
+    mutationFn: (c: CleanupSettings) => settingsApi.updateCleanup(c),
+    onSuccess: () => { setSaved(true); setTimeout(() => setSaved(false), 2000); },
+  });
+
+  if (!cfg) return null;
+
+  const toggleLibrary = (lib: string) =>
+    setCfg(c => c ? {
+      ...c,
+      excluded_libraries: c.excluded_libraries.includes(lib)
+        ? c.excluded_libraries.filter(l => l !== lib)
+        : [...c.excluded_libraries, lib],
+    } : c);
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center justify-between pt-5 pb-3">
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Cleanup Behavior</h2>
+        <button
+          onClick={() => mut.mutate(cfg)}
+          disabled={mut.isPending}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+        >
+          <Save size={13} />
+          {saved ? "Saved!" : "Save"}
+        </button>
+      </div>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Soft-Delete Window</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Days deletions stay restorable before purging (0 = delete immediately). Pending items appear in Cleanup → Deletion History
+          </p>
+        </div>
+        <div className="flex items-center gap-2 ml-6">
+          <input
+            type="number" min={0} max={90} step={1}
+            value={cfg.soft_delete_days}
+            onChange={e => setCfg(c => c ? { ...c, soft_delete_days: Number(e.target.value) } : c)}
+            className="w-24 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white text-right"
+          />
+          <span className="text-slate-500 text-xs">days</span>
+        </div>
+      </div>
+
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Protect Requested Media</p>
+          <p className="text-slate-500 text-xs mt-0.5">Hide items matching recent Seerr requests from deletion suggestions</p>
+        </div>
+        <input
+          type="checkbox"
+          checked={cfg.protect_requested}
+          onChange={e => setCfg(c => c ? { ...c, protect_requested: e.target.checked } : c)}
+          className="accent-purple-500 ml-6"
+        />
+      </label>
+
+      <div className="py-4">
+        <p className="text-white text-sm font-medium mb-1">Excluded Libraries</p>
+        <p className="text-slate-500 text-xs mb-3">Items in these Plex libraries are never suggested for deletion</p>
+        {libraries.length === 0 ? (
+          <p className="text-slate-500 text-xs">No libraries found — run a Plex sync first.</p>
+        ) : (
+          <div className="flex flex-wrap gap-3">
+            {libraries.map(lib => (
+              <label key={lib} className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cfg.excluded_libraries.includes(lib)}
+                  onChange={() => toggleLibrary(lib)}
+                  className="accent-purple-500"
+                />
+                {lib}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SyncSection() {
+  const { data } = useQuery({ queryKey: ["sync-settings"], queryFn: settingsApi.getSync });
+  const [cfg, setCfg] = useState<SyncSettings | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => { if (data) setCfg(data); }, [data]);
+
+  const mut = useMutation({
+    mutationFn: (c: SyncSettings) => settingsApi.updateSync(c),
+    onSuccess: () => { setSaved(true); setTimeout(() => setSaved(false), 2000); },
+  });
+
+  if (!cfg) return null;
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center justify-between pt-5 pb-3">
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Scheduled Sync</h2>
+        <button
+          onClick={() => mut.mutate(cfg)}
+          disabled={mut.isPending}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+        >
+          <Save size={13} />
+          {saved ? "Saved!" : "Save"}
+        </button>
+      </div>
+
+      <div className="py-4 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Plex Sync Interval</p>
+          <p className="text-slate-500 text-xs mt-0.5">Automatically re-sync the library every N hours (0 = manual sync only)</p>
+        </div>
+        <div className="flex items-center gap-2 ml-6">
+          <input
+            type="number" min={0} max={168} step={1}
+            value={cfg.plex_sync_interval_hours}
+            onChange={e => setCfg(c => c ? { ...c, plex_sync_interval_hours: Number(e.target.value) } : c)}
+            className="w-24 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white text-right"
+          />
+          <span className="text-slate-500 text-xs">hours</span>
+        </div>
       </div>
     </div>
   );
@@ -228,6 +372,8 @@ export default function SettingsPage() {
       </div>
 
       <ImportMatchingSection />
+      <CleanupSection />
+      <SyncSection />
     </div>
   );
 }

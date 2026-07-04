@@ -1,11 +1,13 @@
 import { useState } from "react";
-import { Trash2, DownloadCloud } from "lucide-react";
+import { Trash2, DownloadCloud, History } from "lucide-react";
 import DeletionSuggestions from "./DeletionSuggestions";
 import FailedImports from "./FailedImports";
+import DeletionHistory from "./DeletionHistory";
 
 const TABS = [
   { key: "deletion", label: "Deletion Suggestions", icon: Trash2 },
   { key: "imports", label: "Failed Imports", icon: DownloadCloud },
+  { key: "history", label: "Deletion History", icon: History },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -34,12 +36,15 @@ export default function Cleanup() {
         ))}
       </div>
 
-      {/* Both tabs stay mounted so their state (filters, sort, confirmations) is fully independent and preserved */}
+      {/* Tabs stay mounted so their state (filters, sort, confirmations) is fully independent and preserved */}
       <div className={tab === "deletion" ? "" : "hidden"}>
         <DeletionSuggestions />
       </div>
       <div className={tab === "imports" ? "" : "hidden"}>
         <FailedImports />
+      </div>
+      <div className={tab === "history" ? "" : "hidden"}>
+        <DeletionHistory />
       </div>
     </div>
   );

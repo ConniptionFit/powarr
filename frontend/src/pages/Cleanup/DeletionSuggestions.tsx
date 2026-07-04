@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw } from "lucide-react";
+import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot } from "lucide-react";
 import { mediaApi, integrationsApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
 
 function ScoreBadge({ score }: { score: number }) {
@@ -268,6 +268,20 @@ export default function DeletionSuggestions() {
                         <td className="px-4 py-3 text-slate-400">{fmtDate(item.last_watched_at)}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2 justify-end">
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const r = await mediaApi.explain(item.id);
+                                  alert(r.rationale ?? r.message ?? "No response from LLM");
+                                } catch (e: unknown) {
+                                  alert(`Explain failed: ${e instanceof Error ? e.message : String(e)}`);
+                                }
+                              }}
+                              title="Ask the local LLM whether this is a good deletion candidate (requires Ollama assist)"
+                              className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-brand-light transition-colors"
+                            >
+                              <Bot size={15} />
+                            </button>
                             <button onClick={() => ignoreMut.mutate({ id: item.id, ignored: !item.ignored })} title={item.ignored ? "Un-ignore" : "Ignore"} className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
                               {item.ignored ? <Eye size={15} /> : <EyeOff size={15} />}
                             </button>

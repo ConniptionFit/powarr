@@ -15,6 +15,7 @@ class FailedImportOut(BaseModel):
     llm_confidence: Optional[float] = None
     llm_rationale: Optional[str] = None
     status: str
+    verified: Optional[bool] = None
     message: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -28,3 +29,7 @@ class ImportStats(BaseModel):
     auto_resolved: int = 0
     accepted: int = 0
     rejected: int = 0
+    closed_external: int = 0
+    resolve_failed: int = 0
+    by_service: dict[str, int] = {}  # suggested count per source app
+    auto_resolved_7d: int = 0

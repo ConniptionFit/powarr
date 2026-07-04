@@ -19,6 +19,8 @@ class MediaItemOut(BaseModel):
     score: float
     ignored: bool
     parent_title: Optional[str]
+    protected: Optional[bool] = False
+    pending_delete_at: Optional[datetime] = None
     sonarr_id: Optional[int]
     radarr_id: Optional[int]
     lidarr_id: Optional[int]
@@ -32,3 +34,23 @@ class MediaStats(BaseModel):
     candidates_above_threshold: int
     potential_savings_bytes: int
     last_synced: Optional[datetime]
+
+
+class DeletionLogOut(BaseModel):
+    id: int
+    title: str
+    parent_title: Optional[str] = None
+    media_type: str
+    library_section: Optional[str] = None
+    file_size: int
+    arr_action: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class DeletionStats(BaseModel):
+    deleted_30d: int = 0
+    freed_30d_bytes: int = 0
+    deleted_total: int = 0
+    freed_total_bytes: int = 0

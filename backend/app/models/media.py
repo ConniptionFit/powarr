@@ -20,6 +20,8 @@ class MediaItem(Base):
     score = Column(Float, default=0.0)
     ignored = Column(Boolean, default=False)
     parent_title = Column(String, nullable=True)  # Show name for episodes, artist name for tracks
+    protected = Column(Boolean, default=False)  # actively requested in Seerr — hidden from suggestions
+    pending_delete_at = Column(DateTime, nullable=True)  # soft-delete: when deletion was requested
 
     # *arr app link IDs (set after matching)
     sonarr_id = Column(Integer, nullable=True)

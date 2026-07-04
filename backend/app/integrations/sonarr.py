@@ -44,15 +44,24 @@ class SonarrIntegration(BaseIntegration):
             data = r.json()
             return data.get("records", []) if isinstance(data, dict) else data
 
-    async def get_history(self, event_type: int = 1, page_size: int = 100) -> list[dict]:
-        # eventType 1 = grabbed
-        params = {"page": 1, "pageSize": page_size, "eventType": event_type,
+    async def get_history(self, event_type: int | None = 1, page_size: int = 100) -> list[dict]:
+        # eventType 1 = grabbed; None = all event types
+        params = {"page": 1, "pageSize": page_size,
                   "sortKey": "date", "sortDirection": "descending"}
+        if event_type is not None:
+            params["eventType"] = event_type
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             r = await client.get(f"{self._base()}/history", headers=self._headers(), params=params)
             r.raise_for_status()
             data = r.json()
             return data.get("records", []) if isinstance(data, dict) else data
+
+    async def get_manual_import(self, download_id: str) -> list[dict]:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/manualimport", headers=self._headers(),
+                                 params={"downloadId": download_id, "filterExistingFiles": "false"})
+            r.raise_for_status()
+            return r.json()
 
     async def push_import_command(self, download_id: str, series_id: int | None = None) -> dict:
         """Fetch manual-import candidates for a download and POST back the importable ones."""
