@@ -155,6 +155,7 @@ export interface FailedImport {
   llm_confidence: number | null;
   llm_rationale: string | null;
   status: string;
+  verified: boolean | null;
   message: string | null;
   created_at: string | null;
   updated_at: string | null;
