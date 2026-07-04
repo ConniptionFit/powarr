@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.app_setting import AppSetting
 from app.schemas.settings import (ScoringWeights, ImportMatchingSettings, OllamaSettings,
-                                  CleanupSettings, SyncSettings)
+                                  CleanupSettings, SyncSettings, NotificationSettings)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -95,3 +95,21 @@ def get_sync(db: Session = Depends(get_db)):
 def update_sync(body: SyncSettings, db: Session = Depends(get_db)):
     _put_json_setting(db, "sync", body)
     return body
+
+
+@router.get("/notifications", response_model=NotificationSettings)
+def get_notifications(db: Session = Depends(get_db)):
+    return _get_json_setting(db, "notifications", NotificationSettings)
+
+
+@router.put("/notifications", response_model=NotificationSettings)
+def update_notifications(body: NotificationSettings, db: Session = Depends(get_db)):
+    _put_json_setting(db, "notifications", body)
+    return body
+
+
+@router.post("/notifications/test")
+async def test_notification(db: Session = Depends(get_db)):
+    from app.services import notifier
+    ok = await notifier.notify(db, "Powarr test", "Notifications are working 🎉", tags="tada")
+    return {"ok": ok, "message": "Sent" if ok else "Failed — check URL/topic and that notifications are enabled"}

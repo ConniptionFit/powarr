@@ -46,6 +46,12 @@ class SyncSettings(BaseModel):
     plex_sync_interval_hours: int = 0  # 0 = manual sync only
 
 
+class NotificationSettings(BaseModel):
+    enabled: bool = False
+    ntfy_url: str = ""  # e.g. http://10.1.1.2:8091
+    topic: str = "powarr"
+
+
 class IntegrationConfig(BaseModel):
     name: str
     url: Optional[str] = None

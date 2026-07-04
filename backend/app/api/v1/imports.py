@@ -179,6 +179,54 @@ async def _remove_from_download_clients(download_id: str, db: Session) -> list[s
     return messages or ["No download client integration enabled"]
 
 
+@router.get("/{item_id}/candidates")
+async def match_candidates(item_id: int, query: Optional[str] = Query(None), db: Session = Depends(get_db)):
+    """Top library candidates for a manual match override, scored by title similarity."""
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    row = db.query(Integration).filter_by(name=item.source_app, enabled=True).first()
+    if not row:
+        raise HTTPException(status_code=400, detail=f"{item.source_app} integration not enabled")
+    from app.services.import_matcher import APP_FIELDS, title_similarity
+    _, lib_method, title_key = APP_FIELDS[item.source_app]
+    client = _get_client(item.source_app, row)
+    try:
+        library = await getattr(client, lib_method)()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Library fetch failed: {e}")
+    q = query or item.raw_title
+    scored = sorted(
+        ({"id": e["id"], "title": e.get(title_key, ""),
+          "score": round(title_similarity(q, e.get(title_key, "")), 3)} for e in library),
+        key=lambda c: c["score"], reverse=True,
+    )[:10]
+    return {"candidates": scored}
+
+
+@router.post("/{item_id}/match")
+def set_match(item_id: int, body: dict = Body(...), db: Session = Depends(get_db)):
+    """Manual match override: point this failed import at a different library entry."""
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    matched_id = body.get("matched_id")
+    if not matched_id:
+        raise HTTPException(status_code=400, detail="matched_id required")
+    item.matched_id = int(matched_id)
+    item.matched_title = body.get("matched_title") or item.matched_title
+    item.confidence = 1.0  # user said so
+    item.llm_confidence = None
+    item.llm_rationale = None
+    item.message = ((item.message + " | ") if item.message else "") + "Manually matched"
+    if item.status in ("rejected", "closed_external", "resolve_failed"):
+        item.status = "suggested"
+        item.resolved_at = None
+    db.commit()
+    return {"id": item.id, "matched_id": item.matched_id, "matched_title": item.matched_title,
+            "confidence": item.confidence, "status": item.status}
+
+
 @router.post("/{item_id}/accept")
 async def accept_import(item_id: int, db: Session = Depends(get_db)):
     return await _accept(item_id, db)

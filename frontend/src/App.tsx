@@ -5,6 +5,7 @@ import Cleanup from "./pages/Cleanup";
 import SettingsPage from "./pages/Settings";
 import IntegrationsPage from "./pages/Integrations";
 import LogsPage from "./pages/Logs";
+import AuthGate from "./components/AuthGate";
 
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -17,6 +18,7 @@ const nav = [
 export default function App() {
   return (
     <BrowserRouter>
+      <AuthGate>
       <div className="flex h-screen overflow-hidden">
         {/* Sidebar */}
         <aside className="w-56 flex-shrink-0 bg-surface-raised border-r border-purple-900/40 flex flex-col">
@@ -44,7 +46,7 @@ export default function App() {
             ))}
           </nav>
           <div className="px-5 py-3 text-xs text-slate-600 border-t border-purple-900/40">
-            v0.2.0
+            v0.3.0
           </div>
         </aside>
 
@@ -59,6 +61,7 @@ export default function App() {
           </Routes>
         </main>
       </div>
+      </AuthGate>
     </BrowserRouter>
   );
 }

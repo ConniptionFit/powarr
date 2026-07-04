@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { Save, AlertTriangle } from "lucide-react";
-import { settingsApi, mediaApi, type ScoringWeights, type ImportMatchingSettings,
-         type CleanupSettings, type SyncSettings } from "../../lib/api";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Save, AlertTriangle, Lock, Bell, Send } from "lucide-react";
+import { settingsApi, mediaApi, authApi, type ScoringWeights, type ImportMatchingSettings,
+         type CleanupSettings, type SyncSettings, type NotificationSettings } from "../../lib/api";
 
 function WeightRow({ label, field, value, onChange, description }: {
   label: string;
@@ -308,6 +308,244 @@ function SyncSection() {
   );
 }
 
+function SecuritySection() {
+  const qc = useQueryClient();
+  const { data: status } = useQuery({ queryKey: ["auth-status"], queryFn: authApi.status });
+  const [msg, setMsg] = useState<string | null>(null);
+
+  // enable form
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  // change password form
+  const [curPw, setCurPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  // totp
+  const [totpSetup, setTotpSetup] = useState<{ secret: string; otpauth_uri: string } | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  // lan
+  const [lanBypass, setLanBypass] = useState(true);
+  const [cidrs, setCidrs] = useState("");
+  // disable
+  const [disablePw, setDisablePw] = useState("");
+
+  useEffect(() => {
+    if (status) {
+      setLanBypass(status.lan_bypass);
+      setCidrs(status.lan_cidrs.join("\n"));
+    }
+  }, [status]);
+
+  const refresh = () => qc.invalidateQueries({ queryKey: ["auth-status"] });
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
+    setMsg(null);
+    try { await fn(); setMsg(ok); refresh(); }
+    catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+
+  if (!status) return null;
+
+  const inputCls = "w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600";
+  const btnCls = "px-3 py-1.5 rounded bg-brand hover:bg-brand-dark text-white text-sm transition-colors disabled:opacity-40";
+  const subtleBtnCls = "px-3 py-1.5 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors disabled:opacity-40";
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center gap-2 pt-5 pb-3">
+        <Lock size={14} className="text-brand-light" />
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Security</h2>
+        {msg && <span className="text-xs text-slate-300 ml-auto">{msg}</span>}
+      </div>
+
+      {!status.enabled ? (
+        <div className="py-4 space-y-3">
+          <p className="text-slate-400 text-sm">
+            Authentication is <span className="text-yellow-300">disabled</span>. Set credentials to enable password login
+            (LAN traffic keeps working via the bypass below).
+          </p>
+          <div className="grid grid-cols-3 gap-3">
+            <input type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} className={inputCls} />
+            <input type="password" placeholder="Password (min 8 chars)" value={password} onChange={e => setPassword(e.target.value)} className={inputCls} />
+            <input type="password" placeholder="Confirm password" value={confirm} onChange={e => setConfirm(e.target.value)} className={inputCls} />
+          </div>
+          <button
+            disabled={!username || password.length < 8 || password !== confirm}
+            onClick={() => run(() => authApi.setup(username, password), "Authentication enabled")}
+            className={btnCls}
+          >
+            Enable Authentication
+          </button>
+          {password && confirm && password !== confirm && <p className="text-red-400 text-xs">Passwords don't match</p>}
+        </div>
+      ) : (
+        <>
+          <div className="py-3 border-b border-purple-900/20 flex items-center gap-3">
+            <p className="text-sm text-slate-300">
+              Authentication <span className="text-green-400">enabled</span>
+              {status.username && <> for <span className="text-white font-medium">{status.username}</span></>}
+              {status.bypassed && <span className="text-slate-500"> — you're on the LAN bypass</span>}
+            </p>
+            <div className="ml-auto flex items-center gap-2">
+              <input type="password" placeholder="Password" value={disablePw} onChange={e => setDisablePw(e.target.value)}
+                     className="w-36 bg-surface border border-purple-900/40 rounded px-2 py-1 text-xs text-white placeholder:text-slate-600" />
+              <button onClick={() => run(() => authApi.disable(disablePw), "Authentication disabled")} className={subtleBtnCls}>
+                Disable
+              </button>
+            </div>
+          </div>
+
+          <div className="py-3 border-b border-purple-900/20">
+            <p className="text-white text-sm font-medium mb-2">Change Password</p>
+            <div className="flex gap-2">
+              <input type="password" placeholder="Current" value={curPw} onChange={e => setCurPw(e.target.value)} className={inputCls} />
+              <input type="password" placeholder="New (min 8 chars)" value={newPw} onChange={e => setNewPw(e.target.value)} className={inputCls} />
+              <button
+                disabled={!curPw || newPw.length < 8}
+                onClick={() => run(async () => { await authApi.changePassword(curPw, newPw); setCurPw(""); setNewPw(""); }, "Password changed")}
+                className={btnCls}
+              >
+                Change
+              </button>
+            </div>
+          </div>
+
+          <div className="py-3 border-b border-purple-900/20">
+            <p className="text-white text-sm font-medium mb-1">Two-Factor Authentication (TOTP)</p>
+            {status.totp_enabled ? (
+              <div className="flex items-center gap-2">
+                <p className="text-green-400 text-xs">Enabled — codes required at login</p>
+                <input type="password" placeholder="Password" value={disablePw} onChange={e => setDisablePw(e.target.value)}
+                       className="w-36 ml-auto bg-surface border border-purple-900/40 rounded px-2 py-1 text-xs text-white placeholder:text-slate-600" />
+                <button onClick={() => run(() => authApi.totpDisable(disablePw), "TOTP disabled")} className={subtleBtnCls}>
+                  Disable TOTP
+                </button>
+              </div>
+            ) : totpSetup ? (
+              <div className="space-y-2">
+                <p className="text-slate-400 text-xs">
+                  Add this secret to Google Authenticator (or any TOTP app), then confirm with a code:
+                </p>
+                <p className="font-mono text-sm text-brand-light break-all bg-surface rounded px-3 py-2">{totpSetup.secret}</p>
+                <p className="font-mono text-xs text-slate-500 break-all">{totpSetup.otpauth_uri}</p>
+                <div className="flex gap-2">
+                  <input type="text" inputMode="numeric" placeholder="123456" value={totpCode}
+                         onChange={e => setTotpCode(e.target.value)}
+                         className="w-32 bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600" />
+                  <button
+                    disabled={totpCode.trim().length < 6}
+                    onClick={() => run(async () => { await authApi.totpEnable(totpCode); setTotpSetup(null); setTotpCode(""); }, "TOTP enabled")}
+                    className={btnCls}
+                  >
+                    Confirm & Enable
+                  </button>
+                  <button onClick={() => setTotpSetup(null)} className={subtleBtnCls}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={async () => {
+                try { setTotpSetup(await authApi.totpSetup()); setMsg(null); }
+                catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+              }} className={subtleBtnCls}>
+                Set Up TOTP
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      <div className="py-4">
+        <label className="flex items-center justify-between cursor-pointer mb-2">
+          <div>
+            <p className="text-white text-sm font-medium">LAN Bypass</p>
+            <p className="text-slate-500 text-xs mt-0.5">Requests from the CIDRs below skip authentication entirely</p>
+          </div>
+          <input type="checkbox" checked={lanBypass} onChange={e => setLanBypass(e.target.checked)} className="accent-purple-500 ml-6" />
+        </label>
+        <textarea
+          rows={4}
+          value={cidrs}
+          onChange={e => setCidrs(e.target.value)}
+          className="w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-xs font-mono text-white"
+        />
+        <button
+          onClick={() => run(() => authApi.updateConfig(lanBypass, cidrs.split("\n").map(s => s.trim()).filter(Boolean)), "LAN settings saved")}
+          className={`${btnCls} mt-2`}
+        >
+          Save LAN Settings
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NotificationsSection() {
+  const { data } = useQuery({ queryKey: ["notification-settings"], queryFn: settingsApi.getNotifications });
+  const [cfg, setCfg] = useState<NotificationSettings | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => { if (data) setCfg(data); }, [data]);
+
+  if (!cfg) return null;
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center gap-2 pt-5 pb-3">
+        <Bell size={14} className="text-brand-light" />
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Notifications (ntfy)</h2>
+        {msg && <span className="text-xs text-slate-300 ml-auto">{msg}</span>}
+      </div>
+
+      <div className="py-4 space-y-3">
+        <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+          <input type="checkbox" checked={cfg.enabled}
+                 onChange={e => setCfg(c => c ? { ...c, enabled: e.target.checked } : c)}
+                 className="accent-purple-500" />
+          Push a summary when a scan finds new suggestions, auto-resolves, or push failures
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-slate-400 mb-1 block">ntfy Server URL</label>
+            <input type="text" placeholder="http://10.1.1.2:8091" value={cfg.ntfy_url}
+                   onChange={e => setCfg(c => c ? { ...c, ntfy_url: e.target.value } : c)}
+                   className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 mb-1 block">Topic</label>
+            <input type="text" value={cfg.topic}
+                   onChange={e => setCfg(c => c ? { ...c, topic: e.target.value } : c)}
+                   className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={async () => {
+              setMsg(null);
+              try { await settingsApi.updateNotifications(cfg); setMsg("Saved"); }
+              catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-dark text-white text-sm transition-colors"
+          >
+            <Save size={13} /> Save
+          </button>
+          <button
+            onClick={async () => {
+              setMsg(null);
+              try {
+                await settingsApi.updateNotifications(cfg); // test uses saved config
+                const r = await settingsApi.testNotification();
+                setMsg(r.message);
+              } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors"
+          >
+            <Send size={13} /> Send Test
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { data, isLoading } = useQuery({ queryKey: ["scoring"], queryFn: settingsApi.getScoring });
   const [weights, setWeights] = useState<ScoringWeights | null>(null);
@@ -374,6 +612,8 @@ export default function SettingsPage() {
       <ImportMatchingSection />
       <CleanupSection />
       <SyncSection />
+      <NotificationsSection />
+      <SecuritySection />
     </div>
   );
 }

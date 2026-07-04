@@ -26,24 +26,35 @@ class ReadarrIntegration(BaseIntegration):
             r.raise_for_status()
             return r.json()
 
-    async def get_queue(self, page_size: int = 100) -> list[dict]:
-        params = {"page": 1, "pageSize": page_size, "includeUnknownAuthorItems": "true"}
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            r = await client.get(f"{self._base()}/queue", headers=self._headers(), params=params)
-            r.raise_for_status()
-            data = r.json()
-            return data.get("records", []) if isinstance(data, dict) else data
+    async def get_queue(self, page_size: int = 100, max_records: int = 500) -> list[dict]:
+        return await self._paged(f"{self._base()}/queue",
+                                 {"includeUnknownAuthorItems": "true"}, page_size, max_records)
 
-    async def get_history(self, event_type: int | None = 1, page_size: int = 100) -> list[dict]:
+    async def get_history(self, event_type: int | None = 1, page_size: int = 100,
+                          max_records: int = 300) -> list[dict]:
         # eventType 1 = grabbed; None = all event types
-        params = {"page": 1, "pageSize": page_size, "sortKey": "date", "sortDirection": "descending"}
+        params = {"sortKey": "date", "sortDirection": "descending"}
         if event_type is not None:
             params["eventType"] = event_type
+        return await self._paged(f"{self._base()}/history", params, page_size, max_records)
+
+    async def _paged(self, url: str, params: dict, page_size: int, max_records: int) -> list[dict]:
+        """Walk paged *arr endpoints until totalRecords or the cap is reached."""
+        records: list[dict] = []
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            r = await client.get(f"{self._base()}/history", headers=self._headers(), params=params)
-            r.raise_for_status()
-            data = r.json()
-            return data.get("records", []) if isinstance(data, dict) else data
+            page = 1
+            while len(records) < max_records:
+                r = await client.get(url, headers=self._headers(),
+                                     params={**params, "page": page, "pageSize": page_size})
+                r.raise_for_status()
+                data = r.json()
+                batch = data.get("records", []) if isinstance(data, dict) else data
+                records.extend(batch)
+                total = data.get("totalRecords") if isinstance(data, dict) else None
+                if not batch or (total is not None and len(records) >= total):
+                    break
+                page += 1
+        return records[:max_records]
 
     async def get_manual_import(self, download_id: str) -> list[dict]:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:

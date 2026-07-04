@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, Trash2, Search } from "lucide-react";
 import { importsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 
 const APP_COLORS: Record<string, string> = {
@@ -62,6 +62,70 @@ function FileDetails({ importId }: { importId: number }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+function MatchOverride({ item, onDone }: { item: FailedImport; onDone: () => void }) {
+  const [query, setQuery] = useState(item.raw_title);
+  const [candidates, setCandidates] = useState<Array<{ id: number; title: string; score: number }> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const search = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await importsApi.candidates(item.id, query);
+      setCandidates(r.candidates);
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const use = async (c: { id: number; title: string }) => {
+    setBusy(true);
+    try {
+      await importsApi.setMatch(item.id, c.id, c.title);
+      onDone();
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="px-4 py-2 border-t border-purple-900/10">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500 uppercase tracking-wider">Change match:</span>
+        <input
+          type="text"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && search()}
+          className="flex-1 max-w-md bg-surface border border-purple-900/40 rounded px-2 py-1 text-xs text-white"
+        />
+        <button onClick={search} disabled={busy}
+                className="flex items-center gap-1 px-2 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-xs transition-colors disabled:opacity-40">
+          <Search size={11} /> Search Library
+        </button>
+        {msg && <span className="text-xs text-red-400">{msg}</span>}
+      </div>
+      {candidates && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {candidates.filter(c => c.score > 0).map(c => (
+            <button key={c.id} onClick={() => use(c)} disabled={busy}
+                    className="px-2 py-1 rounded bg-brand/10 border border-brand/30 text-brand-light text-xs hover:bg-brand/20 transition-colors disabled:opacity-40">
+              {c.title} <span className="opacity-60">{Math.round(c.score * 100)}%</span>
+            </button>
+          ))}
+          {candidates.filter(c => c.score > 0).length === 0 && (
+            <span className="text-xs text-slate-500">No candidates found — try a shorter query.</span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -333,6 +397,7 @@ export default function FailedImports() {
                       <tr key={`${item.id}-files`} className="bg-surface/50">
                         <td colSpan={8} className="border-t border-purple-900/10">
                           <FileDetails importId={item.id} />
+                          {actionable && <MatchOverride item={item} onDone={invalidate} />}
                         </td>
                       </tr>
                     )}

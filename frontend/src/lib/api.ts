@@ -5,7 +5,18 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  if (r.status === 401 && !path.startsWith("/auth/")) {
+    // Session missing/expired — surface the login modal
+    window.dispatchEvent(new Event("powarr:unauthorized"));
+  }
+  if (!r.ok) {
+    let detail = `${r.status} ${r.statusText}`;
+    try {
+      const body = await r.json();
+      if (body?.detail) detail = String(body.detail);
+    } catch { /* keep default */ }
+    throw new Error(detail);
+  }
   if (r.status === 204) return undefined as T;
   return r.json();
 }
@@ -124,6 +135,12 @@ export interface SyncSettings {
   plex_sync_interval_hours: number;
 }
 
+export interface NotificationSettings {
+  enabled: boolean;
+  ntfy_url: string;
+  topic: string;
+}
+
 export const settingsApi = {
   getScoring: () => req<ScoringWeights>("/settings/scoring"),
   updateScoring: (w: ScoringWeights) =>
@@ -140,6 +157,10 @@ export const settingsApi = {
   getSync: () => req<SyncSettings>("/settings/sync"),
   updateSync: (s: SyncSettings) =>
     req<SyncSettings>("/settings/sync", { method: "PUT", body: JSON.stringify(s) }),
+  getNotifications: () => req<NotificationSettings>("/settings/notifications"),
+  updateNotifications: (s: NotificationSettings) =>
+    req<NotificationSettings>("/settings/notifications", { method: "PUT", body: JSON.stringify(s) }),
+  testNotification: () => req<{ ok: boolean; message: string }>("/settings/notifications/test", { method: "POST" }),
 };
 
 // --- Failed imports ---
@@ -198,12 +219,50 @@ export const importsApi = {
     }),
   files: (id: number) =>
     req<{ files: ImportFileDetail[]; message: string | null }>(`/imports/${id}/files`),
+  candidates: (id: number, query?: string) =>
+    req<{ candidates: Array<{ id: number; title: string; score: number }> }>(
+      `/imports/${id}/candidates${query ? `?query=${encodeURIComponent(query)}` : ""}`),
+  setMatch: (id: number, matchedId: number, matchedTitle: string) =>
+    req<{ id: number; matched_id: number; matched_title: string }>(`/imports/${id}/match`, {
+      method: "POST", body: JSON.stringify({ matched_id: matchedId, matched_title: matchedTitle }),
+    }),
 };
 
 // --- System ---
 export const systemApi = {
   health: () => req<{ status: string; db: string }>("/system/health"),
   logs: (lines = 200) => req<{ lines: string[] }>(`/system/logs?lines=${lines}`),
+};
+
+// --- Auth ---
+export interface AuthStatus {
+  enabled: boolean;
+  totp_enabled: boolean;
+  authenticated: boolean;
+  bypassed: boolean;
+  lan_bypass: boolean;
+  lan_cidrs: string[];
+  username: string | null;
+}
+
+export const authApi = {
+  status: () => req<AuthStatus>("/auth/status"),
+  login: (username: string, password: string, totp?: string) =>
+    req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ username, password, totp }) }),
+  logout: () => req<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  setup: (username: string, password: string) =>
+    req<{ ok: boolean; enabled: boolean }>("/auth/setup", { method: "POST", body: JSON.stringify({ username, password }) }),
+  disable: (password: string) =>
+    req<{ ok: boolean; enabled: boolean }>("/auth/disable", { method: "POST", body: JSON.stringify({ password }) }),
+  changePassword: (current: string, next: string) =>
+    req<{ ok: boolean }>("/auth/change-password", { method: "POST", body: JSON.stringify({ current, new: next }) }),
+  totpSetup: () => req<{ secret: string; otpauth_uri: string }>("/auth/totp/setup", { method: "POST" }),
+  totpEnable: (code: string) =>
+    req<{ ok: boolean; totp_enabled: boolean }>("/auth/totp/enable", { method: "POST", body: JSON.stringify({ code }) }),
+  totpDisable: (password: string) =>
+    req<{ ok: boolean; totp_enabled: boolean }>("/auth/totp/disable", { method: "POST", body: JSON.stringify({ password }) }),
+  updateConfig: (lan_bypass: boolean, lan_cidrs: string[]) =>
+    req<{ ok: boolean }>("/auth/config", { method: "PUT", body: JSON.stringify({ lan_bypass, lan_cidrs }) }),
 };
 
 // --- Ollama (optional local-LLM assist) ---

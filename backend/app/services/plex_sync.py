@@ -62,7 +62,14 @@ async def run_plex_sync(db) -> dict:
         except Exception as e:
             logger.warning(f"Seerr protection refresh failed (non-fatal): {e}")
 
-    return {"synced": upserted, "protected": protected}
+    try:
+        from app.services.arr_link import link_arr_ids
+        linked = await link_arr_ids(db)
+    except Exception as e:
+        logger.warning(f"arr-link failed (non-fatal): {e}")
+        linked = {}
+
+    return {"synced": upserted, "protected": protected, "linked": linked}
 
 
 async def refresh_seerr_protection(db) -> int:

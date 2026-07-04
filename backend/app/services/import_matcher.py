@@ -355,7 +355,33 @@ async def scan_once() -> dict:
     if any(summary[k] for k in ("new_suggestions", "auto_resolved", "closed_external", "resolve_failed")):
         publish({"type": "scan", **{k: summary[k] for k in
                                     ("new_suggestions", "auto_resolved", "closed_external", "resolve_failed")}})
+        await _notify_scan(summary)
     return summary
+
+
+async def _notify_scan(summary: dict) -> None:
+    """Optional ntfy push after a cycle that changed anything. Fails soft."""
+    try:
+        from app.services import notifier
+        db = SessionLocal()
+        try:
+            parts = []
+            if summary["new_suggestions"]:
+                parts.append(f"{summary['new_suggestions']} new suggestion(s)")
+            if summary["auto_resolved"]:
+                parts.append(f"{summary['auto_resolved']} auto-resolved")
+            if summary["resolve_failed"]:
+                parts.append(f"{summary['resolve_failed']} push failure(s)")
+            if not parts:
+                return
+            priority = "high" if summary["resolve_failed"] else "default"
+            await notifier.notify(db, "Powarr: failed-import scan",
+                                  ", ".join(parts) + " — review in Cleanup → Failed Imports",
+                                  priority=priority, tags="arrows_counterclockwise")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.info(f"Scan notification failed (non-fatal): {e}")
 
 
 async def poller_loop():
