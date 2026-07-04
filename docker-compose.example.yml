@@ -1,5 +1,3 @@
-version: "3.8"
-
 # Copy this file to docker-compose.yml and fill in your own values.
 # docker-compose.yml is gitignored because it contains the Postgres password.
 
