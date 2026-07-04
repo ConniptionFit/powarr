@@ -259,11 +259,11 @@ export default function FailedImports() {
                           {item.source_app}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-white font-medium max-w-xs">
+                      <td className="px-4 py-3 text-white font-medium max-w-xs overflow-hidden">
                         <button onClick={() => setExpanded(isExpanded ? null : item.id)}
-                                className="flex items-center gap-1 hover:text-brand-light transition-colors text-left">
+                                className="flex items-center gap-1 hover:text-brand-light transition-colors text-left w-full min-w-0">
                           {isExpanded ? <ChevronDown size={13} className="flex-shrink-0" /> : <ChevronRight size={13} className="flex-shrink-0" />}
-                          <span className="truncate" title={item.raw_title}>{item.raw_title}</span>
+                          <span className="truncate min-w-0" title={item.raw_title}>{item.raw_title}</span>
                         </button>
                         {item.message && <span className="block text-slate-500 text-xs truncate pl-4" title={item.message}>{item.message}</span>}
                       </td>
