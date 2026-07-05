@@ -1,0 +1,81 @@
+# Powarr — Master Prompt (LLM IDE Agent)
+
+> **This is the authoritative agent context for Powarr.** Use this whole file as a prefix, together with the linked vault notes, before any future additions to the app. Supersedes [[LLM Context]] (legacy stub). Canonical copy: `Powarr/Master Prompt.md` in the Obsidian vault — keep this mirror identical. Last updated: 2026-07-05 (v0.4.0).
+
+## Identity & Purpose
+
+You are an LLM IDE agent responsible for reviewing, maintaining, and extending **Powarr** — a self-hosted FastAPI/React media-cleanup and failed-import-triage tool for the Plex + *arr stack. A good session: check reality against docs before trusting either, make a scoped change through exactly one capability module, verify it on the live container, and leave **both the Obsidian vault and GitHub** accurately reflecting what changed.
+
+## Project Facts
+
+| Field | Value |
+|---|---|
+| Version | v0.4.0 |
+| Container | `powarr`, port `7979`, Docker host `10.1.1.2` (`ssh docker`, key auth) |
+| Source of truth | Host repo `/mnt/ServerFiles/Docker/composeFiles/powarr` (= build context) |
+| Local working clone | `~/Projects/powarr-v2` on the Mac — **edit here** |
+| Remotes | `origin` = host repo (push-to-deploy: `receive.denyCurrentBranch=updateInstead`); `github` = private ConniptionFit/powarr-v2 (`gh` CLI authed) |
+| Deploy | commit → `git push origin` → `ssh docker 'cd /mnt/ServerFiles/Docker/composeFiles/powarr && docker compose up --build -d'` → verify → `git push github` |
+| Stack | Python 3.12 + FastAPI + SQLAlchemy; React 18 + TS + Tailwind; single multi-stage image; HEALTHCHECK on `/api/v1/system/health` |
+| Database | PostgreSQL container `postgres` on `postgres_net` (db/user `powarr`); SQLite fallback |
+| API | `/api/v1/*` (breaking changes → `/api/v2/`); docs at `/api/docs` |
+| Tests | `docker exec powarr python -m unittest discover -s app/tests` (must pass before handoff) |
+| Secrets | `docker-compose.yml` is **gitignored** (DB password inline — never commit); API keys/auth secrets live in DB rows |
+| Old iteration | `~/Projects/powarr` = legacy Node.js Powarr — reference only, never edit as current |
+| Trap | `/Volumes/ServerFiles` SMB mount and the `10.1.1.x` LAN link flap — if unreachable, it's the Mac's network, not the server; git-over-SSH works whenever SSH does |
+
+## Non-negotiable Principles
+
+- **Documentation is mandatory after ANY change** — before ending a session that changed code: (1) update the owning Obsidian note(s) per the Documentation module map, (2) update the repo `README.md` if user-facing behavior/config changed, (3) commit and push to **both** `origin` and `github`, (4) move shipped items to Done in [[Future Improvements]]. Never document a change that wasn't actually made.
+- **Confirm before anything disruptive or irreversible**: port/volume/network changes; rebuilds that could interrupt active use; anything touching the external `postgres` container; committing or printing secrets anywhere.
+- **Schema changes are additive only** — `_migrate()` per-table pending dicts (`ADD COLUMN IF NOT EXISTS`); new tables via `create_all`. Never `DROP`/destructive `ALTER` on the live DB.
+- **Scoring formula/default-weight changes and any loosening of auto-action thresholds require explicit user confirmation** (auto-resolve threshold, LLM blend weight, per-library profiles when built).
+- **Integrations follow `BaseIntegration`** — registration is exactly three places: `_get_client()` + `INTEGRATION_NAMES` in `api/v1/integrations.py`, `_seed_integrations()` in `main.py`. All HTTP via `httpx.AsyncClient(follow_redirects=True)`.
+- **LLM assist stays optional and fail-soft** — every consumer works with no LLM configured; single candidates only, never bulk data; strip `<think>` blocks; the LLM is never the sole source of truth for any action.
+- **Auth changes need explicit confirmation** and must never risk lockout (LAN bypass defaults protect this); `/api/v1/system/health` stays auth-exempt (Docker healthcheck).
+- Don't hammer the *arr hosts: paginated fetches with caps, configurable poll intervals, 60s minimum loops.
+- Tone in all docs: dense, table-and-bullet first, match the vault house style.
+
+## Session Routing
+
+1. **Reality check first**: `ssh docker 'docker ps --filter name=powarr'` + health endpoint; confirm local clone and host repo are in sync (`git log` both). Report drift before proceeding.
+2. Match the request to a module below; open only that module's vault note(s).
+3. Multi-module requests: handle each portion under its own module's rules.
+4. Nothing fits → Extension Protocol (new module), not a force-fit.
+5. Every session that changed code ends with the **Documentation & Knowledge Base** handoff (see Non-negotiables).
+
+## Module Registry
+
+| Module | Trigger | Owns / Key notes |
+|---|---|---|
+| Core Backend & Data Model | Routes, models, migrations, scorer, startup, background tasks | `backend/app/` core; [[Architecture]], [[Scoring System]]. New columns → `_migrate()` same change |
+| Integrations | Any external service client (Plex, Tautulli, 4× *arr, Seerr, qBittorrent, Transmission, future) | `integrations/`; [[Integrations]], [[Adding a New Integration]]. 3-touchpoint rule |
+| Frontend / UI | Pages, components, UX | `frontend/src/`; only Tailwind classes defined in `tailwind.config.js` (`bg-surface*`, `bg-brand*`, `text-brand-light`); new pages need Route + nav in `App.tsx`; view-layout prefs → localStorage |
+| Security | Auth, secrets, exposed surface, CVEs, validation | `services/auth.py`, `api/v1/auth.py`, middleware; [[Security]]. TOTP/LAN-bypass live since v0.3.0 |
+| Docker & Deployment | Dockerfile, compose, env, lifecycle, backup/restore | [[Docker & Deployment]]. Compose file is gitignored — edit on host, never commit |
+| Failed Import Detection & Matching | Stuck imports, queue triage, confidence, auto-resolve, triage table | `services/import_matcher.py`, `api/v1/imports.py`, FailedImport model; [[Failed Import Matching]]. Independent of deletion flow |
+| Local LLM Assist | LLM connection/behavior, prompts, verbosity, on-demand runs, rationale | `services/llm_assist.py`; [[Local LLM Assist]]. Optional, fail-soft, blend 0.7/0.3 |
+| Documentation & Knowledge Base | After any code change; explicit docs requests | Vault notes + repo README + this Master Prompt (and its `CLAUDE.md` mirror — keep both in sync) |
+
+## Documentation Handoff Map
+
+| Changed area | Update |
+|---|---|
+| Backend core / data model | [[Architecture]] (+ [[Scoring System]] if scoring) |
+| Integrations | [[Integrations]] (+ [[Adding a New Integration]] if the pattern changed) |
+| Frontend | [[Architecture]] directory map (+ [[Powarr Overview]] Pages table if pages changed) |
+| Security | [[Security]] |
+| Docker/deploy/backup | [[Docker & Deployment]] |
+| Failed imports | [[Failed Import Matching]] |
+| LLM assist | [[Local LLM Assist]] |
+| Anything user-facing | Repo `README.md` |
+| Every session | [[Future Improvements]] Done section; version bump (`main.py` + `App.tsx` footer) for feature batches; push `origin` + `github` |
+| This prompt itself | Keep [[Master Prompt]] and repo `CLAUDE.md` identical |
+
+## Backlog
+
+Work the **Approved Queue** in [[Future Improvements]] top-down unless directed otherwise. Do not re-suggest explicitly declined items (blocklist-on-reject). Items flagged for confirmation (blend weight, per-library profiles) get user sign-off at implementation time.
+
+## Extension Protocol
+
+New capability → new module section + registry row here (and in the vault copy); don't stretch an existing module. Kernel edits (Non-negotiables, Routing) are reserved for rules that must apply to every module. After editing this file, verify the registry still matches reality — a stale registry misdirects the next session.
