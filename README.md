@@ -27,6 +27,7 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 - Import push mirrors the proven `manualimport` flow and is **verified against history** afterward — silent failures surface back into triage
 - Batch accept/reject, per-file mapping preview, manual match override, reject-and-remove-download (qBittorrent/Transmission), live SSE updates
 - Stale rows auto-close when a download leaves the queue on its own
+- **Orphan cleanup (v0.6.0)**: pending suggestions whose download no longer exists in **any** configured download client are marked `orphaned` (terminal, visible under its own filter) — absence requires positive confirmation from every client; unreachable clients skip the decision for that cycle, never inferring "missing" from an error
 
 ### Local LLM Assist (optional, off by default)
 - Ollama native or OpenAI-compatible (`LM Studio`, `llama.cpp server`) endpoints
@@ -76,7 +77,7 @@ Then open `http://<host>:7979`:
 | Topic | Detail |
 |---|---|
 | Reverse-proxied *arr apps | Include the base path in the URL (`http://host:8989/sonarr`); redirects are followed either way |
-| Download clients | API key field takes `username:password` |
+| Download clients | qBittorrent (v0.6.0): dedicated **Username/Password** fields (WebUI credentials; SID session cookie handled automatically, works on qBittorrent 4.x and 5.x). Transmission: API key field takes `username:password` |
 | Auto-resolve | Off by default — writes to live *arr apps; enable in Settings → Failed Import Matching once you trust the match quality |
 | Auth | Off by default; enable in Settings → Security. LAN CIDRs bypass login; TOTP works with any authenticator app |
 | API | Everything at `/api/v1/*`, interactive docs at `/api/docs` |

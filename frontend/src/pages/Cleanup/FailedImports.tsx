@@ -17,6 +17,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   rejected: { label: "Rejected", cls: "bg-red-900/60 text-red-300" },
   closed_external: { label: "Self-resolved", cls: "bg-surface-overlay text-slate-300" },
   resolve_failed: { label: "Push failed", cls: "bg-red-900/60 text-red-300" },
+  orphaned: { label: "Orphaned", cls: "bg-surface-overlay text-slate-300" },
 };
 
 function ConfidenceBadge({ value }: { value: number }) {
@@ -204,7 +205,7 @@ function FileDetails({ importId }: { importId: number }) {
   );
 }
 
-const FILTERS = ["suggested", "resolve_failed", "auto_resolved", "accepted", "rejected", ""] as const;
+const FILTERS = ["suggested", "resolve_failed", "auto_resolved", "accepted", "rejected", "orphaned", ""] as const;
 
 export default function FailedImports() {
   const qc = useQueryClient();
@@ -357,7 +358,7 @@ export default function FailedImports() {
   const filterCount = (f: string): number | null => {
     if (!stats) return null;
     if (f === "") return stats.suggested + stats.auto_resolved + stats.accepted + stats.rejected
-      + stats.closed_external + stats.resolve_failed;
+      + stats.closed_external + stats.resolve_failed + stats.orphaned;
     return (stats as unknown as Record<string, number>)[f] ?? null;
   };
 

@@ -8,6 +8,8 @@ class Integration(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)  # plex | tautulli | sonarr | radarr | lidarr
     url = Column(String, nullable=True)
-    api_key = Column(String, nullable=True)
+    api_key = Column(String, nullable=True)  # deprecated for qbittorrent — use username/password
+    username = Column(String, nullable=True)  # download clients with user/pass auth (qbittorrent)
+    password = Column(String, nullable=True)
     enabled = Column(Boolean, default=False)
     extra_config = Column(Text, nullable=True)  # JSON string for per-integration extras

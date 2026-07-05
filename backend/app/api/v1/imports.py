@@ -15,7 +15,8 @@ from app.services.import_matcher import scan_once, _get_client
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
-STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "closed_external", "resolve_failed")
+STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "closed_external",
+            "resolve_failed", "orphaned")
 
 
 @router.get("", response_model=list[FailedImportOut])
@@ -186,17 +187,14 @@ def _reject(item_id: int, db: Session) -> dict:
 
 async def _remove_from_download_clients(download_id: str, db: Session) -> list[str]:
     """Try each enabled download-client integration until one removes the torrent."""
+    from app.api.v1.integrations import DOWNLOAD_CLIENT_NAMES
+    from app.api.v1.integrations import _get_client as _download_client
     messages = []
-    for name in ("qbittorrent", "transmission"):
+    for name in DOWNLOAD_CLIENT_NAMES:
         row = db.query(Integration).filter_by(name=name, enabled=True).first()
         if not row or not row.url:
             continue
-        if name == "qbittorrent":
-            from app.integrations.qbittorrent import QbittorrentIntegration
-            client = QbittorrentIntegration(row.url, row.api_key)
-        else:
-            from app.integrations.transmission import TransmissionIntegration
-            client = TransmissionIntegration(row.url, row.api_key)
+        client = _download_client(row)
         result = await client.delete_download(download_id)
         messages.append(f"{name}: {result['message']}")
         if result["ok"]:

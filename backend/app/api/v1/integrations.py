@@ -12,6 +12,11 @@ router = APIRouter(prefix="/integrations", tags=["integrations"])
 INTEGRATION_NAMES = ("plex", "tautulli", "sonarr", "radarr", "lidarr",
                      "readarr", "seerr", "qbittorrent", "transmission")
 
+# Integrations that are torrent/download clients — anything needing "which client
+# holds this download?" (orphan cleanup, reject-and-remove) iterates this, never
+# hardcodes client names elsewhere.
+DOWNLOAD_CLIENT_NAMES = ("qbittorrent", "transmission")
+
 
 def _get_client(integration: Integration):
     extra = json.loads(integration.extra_config) if integration.extra_config else {}
@@ -38,7 +43,9 @@ def _get_client(integration: Integration):
         return SeerrIntegration(integration.url, integration.api_key, extra)
     if integration.name == "qbittorrent":
         from app.integrations.qbittorrent import QbittorrentIntegration
-        return QbittorrentIntegration(integration.url, integration.api_key, extra)
+        return QbittorrentIntegration(integration.url, integration.api_key, extra,
+                                      username=integration.username or "",
+                                      password=integration.password or "")
     if integration.name == "transmission":
         from app.integrations.transmission import TransmissionIntegration
         return TransmissionIntegration(integration.url, integration.api_key, extra)
@@ -92,6 +99,8 @@ def list_integrations(db: Session = Depends(get_db)):
             name=row.name,
             url=row.url,
             api_key=row.api_key,
+            username=row.username,
+            password=row.password,
             enabled=row.enabled,
             remove_from_monitored_on_delete=extra.get("remove_from_monitored_on_delete", True),
             delete_from_arr_list=extra.get("delete_from_arr_list", False),
@@ -111,6 +120,10 @@ def update_integration(name: str, body: IntegrationConfigUpdate, db: Session = D
         row.url = body.url
     if body.api_key is not None:
         row.api_key = body.api_key
+    if body.username is not None:
+        row.username = body.username
+    if body.password is not None:
+        row.password = body.password
     if body.enabled is not None:
         row.enabled = body.enabled
 
@@ -124,7 +137,8 @@ def update_integration(name: str, body: IntegrationConfigUpdate, db: Session = D
     db.commit()
     db.refresh(row)
     return IntegrationConfig(
-        name=row.name, url=row.url, api_key=row.api_key, enabled=row.enabled,
+        name=row.name, url=row.url, api_key=row.api_key,
+        username=row.username, password=row.password, enabled=row.enabled,
         remove_from_monitored_on_delete=extra.get("remove_from_monitored_on_delete", True),
         delete_from_arr_list=extra.get("delete_from_arr_list", False),
     )

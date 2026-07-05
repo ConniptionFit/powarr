@@ -44,6 +44,10 @@ def _migrate():
             "verified": "BOOLEAN",
             "heuristic_confidence": "FLOAT",
         },
+        "integrations": {
+            "username": "VARCHAR",
+            "password": "VARCHAR",
+        },
         "deletion_log": {},
     }
     with engine.connect() as conn:

@@ -7,10 +7,13 @@ class BaseIntegration(ABC):
 
     name: str = ""
 
-    def __init__(self, url: str, api_key: str, extra_config: dict | None = None):
+    def __init__(self, url: str, api_key: str, extra_config: dict | None = None,
+                 username: str = "", password: str = ""):
         self.url = url.rstrip("/") if url else ""
         self.api_key = api_key or ""
         self.extra_config = extra_config or {}
+        self.username = username or ""
+        self.password = password or ""
 
     @abstractmethod
     async def test_connection(self) -> dict[str, Any]:

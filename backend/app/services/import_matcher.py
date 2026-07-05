@@ -478,6 +478,63 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     }
 
 
+def decide_orphans(download_ids: set[str], client_results: list[set[str] | None]) -> set[str] | None:
+    """Positive-confirmation orphan decision (pure, unit-tested).
+
+    client_results holds one entry per enabled download client: the lowercased
+    subset of download_ids it reported present, or None if that client didn't
+    answer. Any None — or no clients at all — aborts the decision (returns None):
+    a download is only "orphaned" when every configured client confirmed it's gone.
+    Never infer absence from an error."""
+    if not client_results or any(r is None for r in client_results):
+        return None
+    present: set[str] = set().union(*client_results)
+    return {d for d in download_ids if d.lower() not in present}
+
+
+async def _check_orphans(db, summary: dict) -> None:
+    """Pending rows whose download vanished from every configured download client
+    can never be completed — mark them orphaned (terminal, visible in triage).
+    Runs inside the existing scan cycle: one batched presence query per client."""
+    from app.api.v1.integrations import DOWNLOAD_CLIENT_NAMES
+    from app.api.v1.integrations import _get_client as _download_client
+    rows = db.query(FailedImport).filter(
+        FailedImport.status.in_(("suggested", "resolve_failed")),
+        FailedImport.download_id.isnot(None),
+        FailedImport.download_id != "",
+    ).all()
+    if not rows:
+        return
+    clients = []
+    for name in DOWNLOAD_CLIENT_NAMES:
+        row = db.query(Integration).filter_by(name=name, enabled=True).first()
+        if row and row.url:
+            clients.append((name, _download_client(row)))
+    if not clients:
+        return
+    ids = {r.download_id.lower() for r in rows}
+    results: list[set[str] | None] = []
+    for name, client in clients:
+        found = await client.check_downloads(ids)
+        if found is None:
+            logger.warning(f"Orphan check: {name} unreachable — skipping orphan cleanup this cycle")
+        results.append(found)
+    orphaned = decide_orphans(ids, results)
+    if not orphaned:
+        return
+    now = datetime.utcnow()
+    for row in rows:
+        if row.download_id.lower() in orphaned:
+            row.status = "orphaned"
+            row.resolved_at = now
+            row.message = ((row.message + " | ") if row.message else "") + \
+                "Download no longer exists in any download client"
+            summary["orphaned"] += 1
+            logger.info(f"Orphan check: '{row.raw_title}' ({row.source_app}) gone from "
+                        f"all download clients — marked orphaned")
+    db.commit()
+
+
 def _close_stale_rows(db, app_name: str, queue: list[dict], summary: dict) -> None:
     """Suggested rows whose download left the queue on its own no longer need triage."""
     queue_download_ids = {rec.get("downloadId") for rec in queue if rec.get("downloadId")}
@@ -532,7 +589,8 @@ async def _verify_resolved(db, app_name: str, client, cfg: ImportMatchingSetting
 async def scan_once() -> dict:
     """One detection cycle across all enabled *arr apps. Returns a per-app summary."""
     summary: dict = {"scanned": [], "new_suggestions": 0, "auto_resolved": 0, "skipped_existing": 0,
-                     "below_floor": 0, "in_grace": 0, "closed_external": 0, "verified": 0, "resolve_failed": 0}
+                     "below_floor": 0, "in_grace": 0, "closed_external": 0, "verified": 0,
+                     "resolve_failed": 0, "orphaned": 0}
     db = SessionLocal()
     try:
         cfg, ollama = load_settings(db)
@@ -636,12 +694,15 @@ async def scan_once() -> dict:
                     summary["new_suggestions"] += 1
                 db.add(item)
                 db.commit()
+        await _check_orphans(db, summary)
     finally:
         db.close()
 
-    if any(summary[k] for k in ("new_suggestions", "auto_resolved", "closed_external", "resolve_failed")):
+    if any(summary[k] for k in ("new_suggestions", "auto_resolved", "closed_external",
+                                "resolve_failed", "orphaned")):
         publish({"type": "scan", **{k: summary[k] for k in
-                                    ("new_suggestions", "auto_resolved", "closed_external", "resolve_failed")}})
+                                    ("new_suggestions", "auto_resolved", "closed_external",
+                                     "resolve_failed", "orphaned")}})
         await _notify_scan(summary)
     return summary
 
@@ -659,6 +720,8 @@ async def _notify_scan(summary: dict) -> None:
                 parts.append(f"{summary['auto_resolved']} auto-resolved")
             if summary["resolve_failed"]:
                 parts.append(f"{summary['resolve_failed']} push failure(s)")
+            if summary.get("orphaned"):
+                parts.append(f"{summary['orphaned']} orphaned (download gone)")
             if not parts:
                 return
             priority = "high" if summary["resolve_failed"] else "default"

@@ -64,6 +64,8 @@ class IntegrationConfig(BaseModel):
     name: str
     url: Optional[str] = None
     api_key: Optional[str] = None
+    username: Optional[str] = None  # user/pass download clients (qbittorrent)
+    password: Optional[str] = None
     enabled: bool = False
     remove_from_monitored_on_delete: bool = True
     delete_from_arr_list: bool = False
@@ -74,6 +76,8 @@ class IntegrationConfig(BaseModel):
 class IntegrationConfigUpdate(BaseModel):
     url: Optional[str] = None
     api_key: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
     enabled: Optional[bool] = None
     remove_from_monitored_on_delete: Optional[bool] = None
     delete_from_arr_list: Optional[bool] = None

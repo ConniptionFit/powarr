@@ -204,6 +204,7 @@ export interface ImportStats {
   rejected: number;
   closed_external: number;
   resolve_failed: number;
+  orphaned: number;
   by_service: Record<string, number>;
   auto_resolved_7d: number;
 }
@@ -294,6 +295,8 @@ export interface IntegrationConfig {
   name: string;
   url: string | null;
   api_key: string | null;
+  username: string | null; // user/pass download clients (qBittorrent)
+  password: string | null;
   enabled: boolean;
   remove_from_monitored_on_delete: boolean;
   delete_from_arr_list: boolean;

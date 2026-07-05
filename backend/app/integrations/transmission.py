@@ -37,6 +37,25 @@ class TransmissionIntegration(BaseIntegration):
         except Exception as e:
             return {"ok": False, "message": str(e), "version": None}
 
+    async def check_downloads(self, hashes) -> set[str] | None:
+        """Which of the given torrent hashes exist here (lowercased subset).
+        None = client didn't answer — the caller must NOT infer absence."""
+        wanted = [h.lower() for h in hashes if h]
+        if not wanted:
+            return set()
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                r = await self._rpc(client, {"method": "torrent-get",
+                                             "arguments": {"ids": wanted, "fields": ["hashString"]}})
+                r.raise_for_status()
+                data = r.json()
+                if data.get("result") != "success":
+                    return None
+                return {(t.get("hashString") or "").lower()
+                        for t in data.get("arguments", {}).get("torrents", [])}
+        except Exception:
+            return None
+
     async def delete_download(self, torrent_hash: str, delete_files: bool = True) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:

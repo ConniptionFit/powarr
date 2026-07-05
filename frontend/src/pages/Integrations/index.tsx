@@ -11,7 +11,7 @@ const INTEGRATION_META: Record<string, { label: string; color: string; descripti
   lidarr: { label: "Lidarr", color: "bg-pink-600", description: "Music management" },
   readarr: { label: "Readarr", color: "bg-orange-700", description: "Book management — failed-import matching" },
   seerr: { label: "Seerr", color: "bg-purple-700", description: "Request management — protects requested media from deletion" },
-  qbittorrent: { label: "qBittorrent", color: "bg-sky-700", description: "Download client — API key field takes username:password" },
+  qbittorrent: { label: "qBittorrent", color: "bg-sky-700", description: "Download client — WebUI username & password" },
   transmission: { label: "Transmission", color: "bg-red-800", description: "Download client — API key field takes username:password" },
 };
 
@@ -21,16 +21,21 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
 
   const [url, setUrl] = useState(cfg.url ?? "");
   const [apiKey, setApiKey] = useState(cfg.api_key ?? "");
+  const [username, setUsername] = useState(cfg.username ?? "");
+  const [password, setPassword] = useState(cfg.password ?? "");
   const [enabled, setEnabled] = useState(cfg.enabled);
   const [removeMonitored, setRemoveMonitored] = useState(cfg.remove_from_monitored_on_delete);
   const [deleteFromList, setDeleteFromList] = useState(cfg.delete_from_arr_list);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string; version: string | null } | null>(null);
   const [testing, setTesting] = useState(false);
 
+  const isQbit = cfg.name === "qbittorrent";
+
   const saveMut = useMutation({
     mutationFn: () =>
       integrationsApi.update(cfg.name, {
-        url, api_key: apiKey, enabled,
+        url, enabled,
+        ...(isQbit ? { username, password } : { api_key: apiKey }),
         remove_from_monitored_on_delete: removeMonitored,
         delete_from_arr_list: deleteFromList,
       }),
@@ -99,16 +104,41 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
             className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
           />
         </div>
-        <div>
-          <label className="text-xs text-slate-400 mb-1 block">API Key</label>
-          <input
-            type="password"
-            placeholder="••••••••••••••••"
-            value={apiKey}
-            onChange={e => setApiKey(e.target.value)}
-            className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
-          />
-        </div>
+        {isQbit ? (
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="text-xs text-slate-400 mb-1 block">Username</label>
+              <input
+                type="text"
+                placeholder="WebUI username"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
+              />
+            </div>
+            <div className="flex-1">
+              <label className="text-xs text-slate-400 mb-1 block">Password</label>
+              <input
+                type="password"
+                placeholder="••••••••••••••••"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
+              />
+            </div>
+          </div>
+        ) : (
+          <div>
+            <label className="text-xs text-slate-400 mb-1 block">API Key</label>
+            <input
+              type="password"
+              placeholder="••••••••••••••••"
+              value={apiKey}
+              onChange={e => setApiKey(e.target.value)}
+              className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
+            />
+          </div>
+        )}
 
         {isArr && (
           <div className="pt-2 space-y-2 border-t border-purple-900/20">
@@ -128,7 +158,7 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
       <div className="flex items-center flex-wrap gap-2 mt-4">
         <button
           onClick={handleTest}
-          disabled={testing || !url || !apiKey}
+          disabled={testing || !url || (isQbit ? !username : !apiKey)}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors disabled:opacity-40"
         >
           {testing ? <Loader2 size={13} className="animate-spin" /> : null}
