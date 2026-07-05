@@ -179,8 +179,13 @@ async def review_match(host: str, model: str, release_title: str,
         adjustment = max(-0.3, min(0.3, float(parsed.get("confidence_adjustment") or 0.0)))
     except (TypeError, ValueError):
         adjustment = 0.0
+    agrees = bool(parsed["agrees"])
+    if not agrees:
+        # Small models sometimes disagree yet return a positive adjustment —
+        # a disagreement must never raise confidence.
+        adjustment = min(0.0, adjustment)
     limit = 1500 if verbose else 500
-    return {"agrees": bool(parsed["agrees"]),
+    return {"agrees": agrees,
             "confidence_adjustment": adjustment,
             "rationale": str(parsed.get("reason", ""))[:limit]}
 
