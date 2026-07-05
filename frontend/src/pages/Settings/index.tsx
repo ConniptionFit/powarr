@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, AlertTriangle, Lock, Bell, Send } from "lucide-react";
-import { settingsApi, mediaApi, authApi, type ScoringWeights, type ImportMatchingSettings,
-         type CleanupSettings, type SyncSettings, type NotificationSettings } from "../../lib/api";
+import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play } from "lucide-react";
+import { settingsApi, mediaApi, authApi, importsApi, type ScoringWeights, type ImportMatchingSettings,
+         type CleanupSettings, type SyncSettings, type NotificationSettings, type OllamaSettings } from "../../lib/api";
 
 function WeightRow({ label, field, value, onChange, description }: {
   label: string;
@@ -303,6 +303,193 @@ function SyncSection() {
           />
           <span className="text-slate-500 text-xs">hours</span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Preset prompt suggestions per task. Placeholders are substituted by the backend;
+// the JSON reply-format instruction is appended automatically, so templates stay clean.
+const PROMPT_PRESETS: Record<"match" | "explain", { label: string; text: string }[]> = {
+  match: [
+    {
+      label: "Strict matcher (default style)",
+      text: "You match download release names to media library entries.\nRelease name: {release}\nCandidate library entry: {candidate}\nContext: {context}",
+    },
+    {
+      label: "Lenient — alternate titles & translations",
+      text: "You match download release names to media library entries. Consider alternate titles, translations, romanizations, and common abbreviations as valid matches.\nRelease name: {release}\nCandidate library entry: {candidate}\nContext: {context}",
+    },
+    {
+      label: "Conservative — punish year/edition mismatch",
+      text: "You match download release names to media library entries. Be conservative: lower your confidence sharply when the year, edition, or cut (e.g. Director's Cut, remaster) differs between release and candidate.\nRelease name: {release}\nCandidate library entry: {candidate}\nContext: {context}",
+    },
+  ],
+  explain: [
+    {
+      label: "Balanced reviewer (default style)",
+      text: "You review media-library deletion candidates. Assess whether this item looks like a good deletion candidate and why.\nItem: {item}",
+    },
+    {
+      label: "Storage-focused",
+      text: "You review media-library deletion candidates with a focus on reclaiming disk space. Weigh file size heavily against watch history.\nItem: {item}",
+    },
+    {
+      label: "Sentimental curator",
+      text: "You review media-library deletion candidates but favor keeping classics, critically acclaimed titles, and franchise entries even when unwatched.\nItem: {item}",
+    },
+  ],
+};
+
+function LLMAssistSection() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["ollama-settings"], queryFn: settingsApi.getOllama });
+  const [cfg, setCfg] = useState<OllamaSettings | null>(null);
+  const [task, setTask] = useState<"match" | "explain">("match");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [refining, setRefining] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => { if (data) setCfg(data); }, [data]);
+
+  if (!cfg) return null;
+
+  const promptField = task === "match" ? "match_prompt" : "explain_prompt";
+  const promptValue = cfg[promptField];
+  const setPrompt = (text: string) => setCfg(c => (c ? { ...c, [promptField]: text } : c));
+
+  const save = async () => {
+    setMsg(null);
+    try {
+      await settingsApi.updateOllama(cfg);
+      qc.invalidateQueries({ queryKey: ["ollama-settings"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+
+  const refine = async () => {
+    if (!promptValue.trim()) { setMsg("Write a rough draft in the box first, then I'll clean it up."); return; }
+    setRefining(true);
+    setMsg(null);
+    try {
+      await settingsApi.updateOllama(cfg); // refine runs against saved connection config
+      const r = await settingsApi.refinePrompt(promptValue, task);
+      setPrompt(r.refined);
+      setMsg("Draft cleaned up — review and Save to apply.");
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+    finally { setRefining(false); }
+  };
+
+  const runNow = async () => {
+    setMsg(null);
+    try {
+      const r = await importsApi.llmRun();
+      setMsg(r.message);
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center gap-2 pt-5 pb-3">
+        <Bot size={14} className="text-brand-light" />
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">LLM Assist</h2>
+        <span className="text-xs text-slate-500">connection is configured on the Integrations page</span>
+        <button
+          onClick={save}
+          className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+        >
+          <Save size={13} />
+          {saved ? "Saved!" : "Save"}
+        </button>
+      </div>
+      {msg && <p className="text-xs text-slate-300 pb-2">{msg}</p>}
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Explanation Verbosity</p>
+          <p className="text-slate-500 text-xs mt-0.5">Brief = one-liners; Verbose = detailed multi-sentence explanations in notes, tooltips, and rationales</p>
+        </div>
+        <select
+          value={cfg.verbosity}
+          onChange={e => setCfg(c => c ? { ...c, verbosity: e.target.value } : c)}
+          className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"
+        >
+          <option value="brief">Brief</option>
+          <option value="verbose">Verbose</option>
+        </select>
+      </div>
+
+      <div className="py-4 border-b border-purple-900/20">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <p className="text-white text-sm font-medium">Prompt Templates</p>
+            <p className="text-slate-500 text-xs mt-0.5">
+              Pick a suggestion, write your own, or draft roughly and let the LLM clean it up.
+              Placeholders: {task === "match" ? "{release} {candidate} {context}" : "{item}"} · empty = built-in default
+            </p>
+          </div>
+          <div className="flex items-center rounded-lg overflow-hidden border border-purple-900/40">
+            <button onClick={() => setTask("match")}
+                    className={`px-3 py-1.5 text-sm transition-colors ${task === "match" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
+              Import Matching
+            </button>
+            <button onClick={() => setTask("explain")}
+                    className={`px-3 py-1.5 text-sm transition-colors ${task === "explain" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
+              Deletion Rationale
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 mb-2">
+          <select
+            value=""
+            onChange={e => { if (e.target.value !== "") setPrompt(PROMPT_PRESETS[task][Number(e.target.value)].text); }}
+            className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white"
+          >
+            <option value="">Load a suggestion…</option>
+            {PROMPT_PRESETS[task].map((p, i) => <option key={p.label} value={i}>{p.label}</option>)}
+          </select>
+          <button
+            onClick={refine}
+            disabled={refining}
+            title="Send your rough draft to the LLM and have it rewritten as a clean template"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors disabled:opacity-50"
+          >
+            <Wand2 size={13} className={refining ? "animate-pulse" : ""} />
+            {refining ? "Cleaning up…" : "Clean Up My Draft"}
+          </button>
+          <button
+            onClick={() => setPrompt("")}
+            className="px-3 py-1.5 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors"
+          >
+            Use Default
+          </button>
+        </div>
+
+        <textarea
+          rows={5}
+          value={promptValue}
+          onChange={e => setPrompt(e.target.value)}
+          placeholder={`(using built-in default — type here or load a suggestion to customize the ${task === "match" ? "matching" : "rationale"} prompt)`}
+          className="w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-xs font-mono text-white placeholder:text-slate-600"
+        />
+      </div>
+
+      <div className="py-4 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Run LLM on Unscored Imports</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Score open failed imports that never got an LLM signal (up to 50 per run, sequential). Results stream into the list live.
+          </p>
+        </div>
+        <button
+          onClick={runNow}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors ml-6"
+        >
+          <Play size={14} />
+          Run Now
+        </button>
       </div>
     </div>
   );
@@ -610,6 +797,7 @@ export default function SettingsPage() {
       </div>
 
       <ImportMatchingSection />
+      <LLMAssistSection />
       <CleanupSection />
       <SyncSection />
       <NotificationsSection />

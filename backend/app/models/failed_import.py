@@ -16,7 +16,8 @@ class FailedImport(Base):
     matched_title = Column(String, nullable=True)
     matched_id = Column(Integer, nullable=True)  # series/movie/artist id in the source app
     matched_metadata = Column(Text, nullable=True)  # JSON: candidate details
-    confidence = Column(Float, default=0.0)
+    confidence = Column(Float, default=0.0)  # blended/primary score used for thresholds
+    heuristic_confidence = Column(Float, nullable=True)  # algorithm-only score, pre-LLM-blend
     llm_confidence = Column(Float, nullable=True)
     llm_rationale = Column(String, nullable=True)
     # suggested | auto_resolved | accepted | rejected | closed_external | resolve_failed

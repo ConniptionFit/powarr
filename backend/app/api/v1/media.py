@@ -173,7 +173,9 @@ async def explain_media(item_id: int, db: Session = Depends(get_db)):
     summary = (f"{item.title} ({item.year or 'unknown year'}), {item.media_type}, "
                f"{round((item.file_size or 0) / 1024**3, 1)} GB, watched {item.watch_count}x, "
                f"last watched {item.last_watched_at or 'never'}, deletion score {item.score}/100")
-    rationale = await llm_assist.explain_deletion(ollama.host, ollama.model, summary, ollama.api_style)
+    rationale = await llm_assist.explain_deletion(
+        ollama.host, ollama.model, summary, ollama.api_style,
+        template=ollama.explain_prompt, verbose=ollama.verbosity == "verbose")
     return {"rationale": rationale, "message": None if rationale else "No response from LLM"}
 
 

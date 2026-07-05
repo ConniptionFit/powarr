@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, Trash2, Search } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Sparkles } from "lucide-react";
 import { importsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 
 const APP_COLORS: Record<string, string> = {
@@ -28,41 +28,45 @@ function ConfidenceBadge({ value }: { value: number }) {
   return <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${color}`}>{pct}%</span>;
 }
 
-function FileDetails({ importId }: { importId: number }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["import-files", importId],
-    queryFn: () => importsApi.files(importId),
-    staleTime: 60_000,
-  });
-  if (isLoading) return <p className="text-slate-500 text-xs px-4 py-2">Loading file details…</p>;
-  if (!data || data.files.length === 0)
-    return <p className="text-slate-500 text-xs px-4 py-2">{data?.message ?? "No file details available"}</p>;
-  return (
-    <table className="w-full text-xs">
-      <thead className="text-slate-500 uppercase tracking-wider">
-        <tr>
-          <th className="text-left px-4 py-1.5">File</th>
-          <th className="text-left px-4 py-1.5">Size</th>
-          <th className="text-left px-4 py-1.5">Quality</th>
-          <th className="text-left px-4 py-1.5">Mapped To</th>
-          <th className="text-left px-4 py-1.5">Rejections</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-purple-900/10 text-slate-400">
-        {data.files.map((f, i) => (
-          <tr key={i}>
-            <td className="px-4 py-1.5 max-w-xs truncate" title={f.path ?? ""}>{f.path ?? "—"}</td>
-            <td className="px-4 py-1.5">{f.size ? fmtBytes(f.size) : "—"}</td>
-            <td className="px-4 py-1.5">{f.quality ?? "—"}</td>
-            <td className="px-4 py-1.5">{f.mapped_to ? `${f.mapped_to}${f.detail ? ` (${f.detail})` : ""}` : "unmapped"}</td>
-            <td className="px-4 py-1.5 max-w-xs truncate" title={f.rejections.join("; ")}>
-              {f.rejections.length ? f.rejections.join("; ") : "—"}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
+// --- Column system: visibility + widths persisted per-browser (localStorage) ---
+
+type ColKey = "source" | "release" | "matched" | "match_pct" | "llm_pct" | "llm_notes" | "status" | "detected";
+
+interface ColDef {
+  key: ColKey;
+  label: string;
+  width: number; // default px
+  sortField?: keyof FailedImport;
+}
+
+const COLUMNS: ColDef[] = [
+  { key: "source", label: "Source", width: 90, sortField: "source_app" },
+  { key: "release", label: "Release", width: 340, sortField: "raw_title" },
+  { key: "matched", label: "Matched To", width: 240, sortField: "matched_title" },
+  { key: "match_pct", label: "Match", width: 90, sortField: "heuristic_confidence" },
+  { key: "llm_pct", label: "LLM", width: 90, sortField: "llm_confidence" },
+  { key: "llm_notes", label: "LLM Notes", width: 260, sortField: "llm_rationale" },
+  { key: "status", label: "Status", width: 120, sortField: "status" },
+  { key: "detected", label: "Detected", width: 110, sortField: "created_at" },
+];
+
+const LS_VISIBLE = "powarr.failedImports.visibleCols";
+const LS_WIDTHS = "powarr.failedImports.colWidths";
+
+function loadVisible(): Set<ColKey> {
+  try {
+    const raw = localStorage.getItem(LS_VISIBLE);
+    if (raw) return new Set(JSON.parse(raw) as ColKey[]);
+  } catch { /* fall through */ }
+  return new Set(COLUMNS.map(c => c.key));
+}
+
+function loadWidths(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(LS_WIDTHS);
+    if (raw) return JSON.parse(raw);
+  } catch { /* fall through */ }
+  return {};
 }
 
 function MatchOverride({ item, onDone }: { item: FailedImport; onDone: () => void }) {
@@ -129,6 +133,43 @@ function MatchOverride({ item, onDone }: { item: FailedImport; onDone: () => voi
   );
 }
 
+function FileDetails({ importId }: { importId: number }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["import-files", importId],
+    queryFn: () => importsApi.files(importId),
+    staleTime: 60_000,
+  });
+  if (isLoading) return <p className="text-slate-500 text-xs px-4 py-2">Loading file details…</p>;
+  if (!data || data.files.length === 0)
+    return <p className="text-slate-500 text-xs px-4 py-2">{data?.message ?? "No file details available"}</p>;
+  return (
+    <table className="w-full text-xs">
+      <thead className="text-slate-500 uppercase tracking-wider">
+        <tr>
+          <th className="text-left px-4 py-1.5">File</th>
+          <th className="text-left px-4 py-1.5">Size</th>
+          <th className="text-left px-4 py-1.5">Quality</th>
+          <th className="text-left px-4 py-1.5">Mapped To</th>
+          <th className="text-left px-4 py-1.5">Rejections</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-purple-900/10 text-slate-400">
+        {data.files.map((f, i) => (
+          <tr key={i}>
+            <td className="px-4 py-1.5 max-w-xs truncate" title={f.path ?? ""}>{f.path ?? "—"}</td>
+            <td className="px-4 py-1.5">{f.size ? fmtBytes(f.size) : "—"}</td>
+            <td className="px-4 py-1.5">{f.quality ?? "—"}</td>
+            <td className="px-4 py-1.5">{f.mapped_to ? `${f.mapped_to}${f.detail ? ` (${f.detail})` : ""}` : "unmapped"}</td>
+            <td className="px-4 py-1.5 max-w-xs truncate" title={f.rejections.join("; ")}>
+              {f.rejections.length ? f.rejections.join("; ") : "—"}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 const FILTERS = ["suggested", "resolve_failed", "auto_resolved", "accepted", "rejected", ""] as const;
 
 export default function FailedImports() {
@@ -140,6 +181,42 @@ export default function FailedImports() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [expanded, setExpanded] = useState<number | null>(null);
 
+  // table view state (persisted per-browser)
+  const [visibleCols, setVisibleCols] = useState<Set<ColKey>>(loadVisible);
+  const [widths, setWidths] = useState<Record<string, number>>(loadWidths);
+  const [showColMenu, setShowColMenu] = useState(false);
+  const [sortBy, setSortBy] = useState<keyof FailedImport>("created_at");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem(LS_VISIBLE, JSON.stringify([...visibleCols]));
+  }, [visibleCols]);
+
+  const persistWidths = useCallback((w: Record<string, number>) => {
+    localStorage.setItem(LS_WIDTHS, JSON.stringify(w));
+  }, []);
+
+  const startResize = (key: string, defaultW: number) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizing.current = { key, startX: e.clientX, startW: widths[key] ?? defaultW };
+    const onMove = (ev: MouseEvent) => {
+      if (!resizing.current) return;
+      const delta = ev.clientX - resizing.current.startX;
+      const w = Math.max(60, resizing.current.startW + delta);
+      setWidths(prev => ({ ...prev, [resizing.current!.key]: w }));
+    };
+    const onUp = () => {
+      resizing.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setWidths(prev => { persistWidths(prev); return prev; });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   const { data: items = [], isLoading } = useQuery({
     queryKey: ["imports", statusFilter],
     queryFn: () => importsApi.list(statusFilter || undefined),
@@ -150,18 +227,37 @@ export default function FailedImports() {
     queryFn: importsApi.stats,
   });
 
+  const sortedItems = useMemo(() => {
+    const arr = [...items];
+    arr.sort((a, b) => {
+      const av = a[sortBy], bv = b[sortBy];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      const cmp = typeof av === "number" && typeof bv === "number"
+        ? av - bv
+        : String(av).localeCompare(String(bv));
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return arr;
+  }, [items, sortBy, sortDir]);
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["imports"] });
     qc.invalidateQueries({ queryKey: ["import-stats"] });
     setSelected(new Set());
   };
 
-  // Live updates: the poller publishes an SSE event whenever a scan changes something
+  // Live updates: poller scans + on-demand LLM runs both publish SSE events
   useEffect(() => {
     const es = new EventSource("/api/v1/imports/events");
-    es.onmessage = () => {
+    es.onmessage = ev => {
       qc.invalidateQueries({ queryKey: ["imports"] });
       qc.invalidateQueries({ queryKey: ["import-stats"] });
+      try {
+        const data = JSON.parse(ev.data);
+        if (data.type === "llm_run") setActionMsg(`LLM run finished: ${data.scored} scored, ${data.skipped} skipped`);
+      } catch { /* keepalive */ }
     };
     return () => es.close();
   }, [qc]);
@@ -186,6 +282,12 @@ export default function FailedImports() {
     onError: (e: Error) => setActionMsg(`Batch failed: ${e.message}`),
   });
 
+  const llmRunMut = useMutation({
+    mutationFn: (ids?: number[]) => importsApi.llmRun(ids),
+    onSuccess: r => { setActionMsg(r.message); setSelected(new Set()); },
+    onError: (e: Error) => setActionMsg(`LLM run failed: ${e.message}`),
+  });
+
   const handleScan = async () => {
     setScanning(true);
     setActionMsg(null);
@@ -206,10 +308,15 @@ export default function FailedImports() {
       return next;
     });
   };
-  const allSelectable = items.filter(i => i.status === "suggested" || i.status === "resolve_failed");
+  const allSelectable = sortedItems.filter(i => i.status === "suggested" || i.status === "resolve_failed");
   const toggleSelectAll = () => {
     setSelected(prev => prev.size === allSelectable.length && allSelectable.length > 0
       ? new Set() : new Set(allSelectable.map(i => i.id)));
+  };
+
+  const toggleSort = (field: keyof FailedImport) => {
+    if (sortBy === field) setSortDir(d => d === "desc" ? "asc" : "desc");
+    else { setSortBy(field); setSortDir("desc"); }
   };
 
   const filterLabel = (f: string) => f === "" ? "All" : STATUS_META[f]?.label ?? f;
@@ -220,18 +327,100 @@ export default function FailedImports() {
     return (stats as unknown as Record<string, number>)[f] ?? null;
   };
 
+  const cols = COLUMNS.filter(c => visibleCols.has(c.key));
+  const colW = (c: ColDef) => widths[c.key] ?? c.width;
+  const totalWidth = 40 + cols.reduce((s, c) => s + colW(c), 0) + 130; // checkbox + cols + actions
+
+  const renderCell = (item: FailedImport, key: ColKey, isExpanded: boolean) => {
+    switch (key) {
+      case "source":
+        return <span className={`px-2 py-0.5 rounded text-xs font-bold text-white ${APP_COLORS[item.source_app] ?? "bg-slate-600"}`}>{item.source_app}</span>;
+      case "release":
+        return (
+          <>
+            <button onClick={() => setExpanded(isExpanded ? null : item.id)}
+                    className="flex items-center gap-1 hover:text-brand-light transition-colors text-left w-full min-w-0 text-white font-medium">
+              {isExpanded ? <ChevronDown size={13} className="flex-shrink-0" /> : <ChevronRight size={13} className="flex-shrink-0" />}
+              <span className="truncate min-w-0" title={item.raw_title}>{item.raw_title}</span>
+            </button>
+            {item.message && <span className="block text-slate-500 text-xs truncate pl-4" title={item.message}>{item.message}</span>}
+          </>
+        );
+      case "matched":
+        return <span className="block truncate text-slate-300" title={item.matched_title ?? ""}>{item.matched_title ?? "—"}</span>;
+      case "match_pct":
+        return <ConfidenceBadge value={item.heuristic_confidence ?? item.confidence} />;
+      case "llm_pct":
+        return item.llm_confidence !== null ? (
+          <span title={item.llm_rationale ?? ""}><ConfidenceBadge value={item.llm_confidence} /></span>
+        ) : <span className="text-slate-600 text-xs">—</span>;
+      case "llm_notes":
+        return item.llm_rationale ? (
+          <span className="block truncate text-slate-400 text-xs" title={item.llm_rationale}>{item.llm_rationale}</span>
+        ) : <span className="text-slate-600 text-xs">—</span>;
+      case "status": {
+        const status = STATUS_META[item.status] ?? { label: item.status, cls: "bg-surface-overlay text-slate-300" };
+        return (
+          <>
+            <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${status.cls}`}>{status.label}</span>
+            {item.verified === true && <span className="block text-green-500 text-xs mt-0.5">verified</span>}
+          </>
+        );
+      }
+      case "detected":
+        return <span className="text-slate-400">{fmtDate(item.created_at)}</span>;
+    }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-5">
         <p className="text-slate-400 text-sm">Stuck *arr downloads matched against your library — accept to push the import</p>
-        <button
-          onClick={handleScan}
-          disabled={scanning}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
-        >
-          <RefreshCw size={15} className={scanning ? "animate-spin" : ""} />
-          {scanning ? "Scanning…" : "Scan Now"}
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <button
+              onClick={() => setShowColMenu(s => !s)}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+            >
+              <Columns3 size={15} />
+              Columns
+            </button>
+            {showColMenu && (
+              <div className="absolute right-0 mt-1 z-20 bg-surface-raised border border-purple-900/40 rounded-lg shadow-xl p-3 w-48">
+                {COLUMNS.map(c => (
+                  <label key={c.key} className="flex items-center gap-2 py-1 text-sm text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={visibleCols.has(c.key)}
+                      onChange={() => setVisibleCols(prev => {
+                        const next = new Set(prev);
+                        if (next.has(c.key)) { if (next.size > 1) next.delete(c.key); }
+                        else next.add(c.key);
+                        return next;
+                      })}
+                      className="accent-purple-500"
+                    />
+                    {c.label}
+                  </label>
+                ))}
+                <button
+                  onClick={() => { setWidths({}); persistWidths({}); }}
+                  className="mt-2 w-full px-2 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-400 text-xs transition-colors"
+                >
+                  Reset column widths
+                </button>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={handleScan}
+            disabled={scanning}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={scanning ? "animate-spin" : ""} />
+            {scanning ? "Scanning…" : "Scan Now"}
+          </button>
+        </div>
       </div>
 
       {/* Status filter chips */}
@@ -269,6 +458,14 @@ export default function FailedImports() {
           >
             Reject Selected
           </button>
+          <button
+            onClick={() => llmRunMut.mutate([...selected])}
+            disabled={llmRunMut.isPending}
+            title="Score the selected items with the local LLM"
+            className="flex items-center gap-1.5 px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-xs disabled:opacity-50"
+          >
+            <Bot size={12} /> Run LLM on Selected
+          </button>
           <button onClick={() => setSelected(new Set())} className="text-xs text-slate-400 hover:text-white ml-auto">
             Clear
           </button>
@@ -277,7 +474,7 @@ export default function FailedImports() {
 
       {isLoading ? (
         <p className="text-slate-400">Loading…</p>
-      ) : items.length === 0 ? (
+      ) : sortedItems.length === 0 ? (
         <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-10 text-center">
           <p className="text-slate-400">
             {statusFilter === "suggested"
@@ -286,27 +483,40 @@ export default function FailedImports() {
           </p>
         </div>
       ) : (
-        <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
+          <table className="text-sm" style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
             <thead className="border-b border-purple-900/30 text-slate-400 text-xs uppercase tracking-wider">
               <tr>
-                <th className="px-3 py-3 w-8">
+                <th className="px-3 py-3" style={{ width: 40 }}>
                   <input type="checkbox" className="accent-purple-500"
                          checked={selected.size > 0 && selected.size === allSelectable.length}
                          onChange={toggleSelectAll} />
                 </th>
-                <th className="text-left px-4 py-3">Source</th>
-                <th className="text-left px-4 py-3">Release</th>
-                <th className="text-left px-4 py-3">Matched To</th>
-                <th className="text-left px-4 py-3">Confidence</th>
-                <th className="text-left px-4 py-3">Status</th>
-                <th className="text-left px-4 py-3">Detected</th>
-                <th className="px-4 py-3" />
+                {cols.map(c => (
+                  <th key={c.key} className="text-left px-4 py-3 relative select-none group"
+                      style={{ width: colW(c) }}>
+                    <button
+                      onClick={() => c.sortField && toggleSort(c.sortField)}
+                      className={`flex items-center gap-1 uppercase ${c.sortField ? "cursor-pointer hover:text-white" : "cursor-default"}`}
+                    >
+                      {c.key === "llm_pct" && <Bot size={13} className="text-brand-light" />}
+                      {c.label}
+                      {c.sortField && sortBy === c.sortField && (
+                        sortDir === "desc" ? <ChevronDown size={13} /> : <ChevronUp size={13} />
+                      )}
+                    </button>
+                    <span
+                      onMouseDown={startResize(c.key, c.width)}
+                      className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize opacity-0 group-hover:opacity-100 bg-purple-500/40"
+                      title="Drag to resize"
+                    />
+                  </th>
+                ))}
+                <th className="px-4 py-3" style={{ width: 130 }} />
               </tr>
             </thead>
             <tbody className="divide-y divide-purple-900/20">
-              {items.map((item: FailedImport) => {
-                const status = STATUS_META[item.status] ?? { label: item.status, cls: "bg-surface-overlay text-slate-300" };
+              {sortedItems.map((item: FailedImport) => {
                 const actionable = item.status === "suggested" || item.status === "resolve_failed";
                 const isExpanded = expanded === item.id;
                 return (
@@ -318,37 +528,11 @@ export default function FailedImports() {
                                  checked={selected.has(item.id)} onChange={() => toggleSelect(item.id)} />
                         )}
                       </td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded text-xs font-bold text-white ${APP_COLORS[item.source_app] ?? "bg-slate-600"}`}>
-                          {item.source_app}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-white font-medium max-w-xs overflow-hidden">
-                        <button onClick={() => setExpanded(isExpanded ? null : item.id)}
-                                className="flex items-center gap-1 hover:text-brand-light transition-colors text-left w-full min-w-0">
-                          {isExpanded ? <ChevronDown size={13} className="flex-shrink-0" /> : <ChevronRight size={13} className="flex-shrink-0" />}
-                          <span className="truncate min-w-0" title={item.raw_title}>{item.raw_title}</span>
-                        </button>
-                        {item.message && <span className="block text-slate-500 text-xs truncate pl-4" title={item.message}>{item.message}</span>}
-                      </td>
-                      <td className="px-4 py-3 text-slate-300 max-w-xs">
-                        <span className="block truncate" title={item.matched_title ?? ""}>{item.matched_title ?? "—"}</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <ConfidenceBadge value={item.confidence} />
-                          {item.llm_confidence !== null && (
-                            <span title={`LLM: ${Math.round((item.llm_confidence ?? 0) * 100)}% — ${item.llm_rationale ?? ""}`}>
-                              <Bot size={13} className="text-brand-light" />
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${status.cls}`}>{status.label}</span>
-                        {item.verified === true && <span className="block text-green-500 text-xs mt-0.5">verified</span>}
-                      </td>
-                      <td className="px-4 py-3 text-slate-400">{fmtDate(item.created_at)}</td>
+                      {cols.map(c => (
+                        <td key={c.key} className="px-4 py-3 overflow-hidden" style={{ width: colW(c) }}>
+                          {renderCell(item, c.key, isExpanded)}
+                        </td>
+                      ))}
                       <td className="px-4 py-3">
                         {actionable && (
                           <div className="flex items-center gap-1.5 justify-end">
@@ -387,6 +571,14 @@ export default function FailedImports() {
                                 >
                                   <Trash2 size={15} />
                                 </button>
+                                <button
+                                  onClick={() => llmRunMut.mutate([item.id])}
+                                  disabled={llmRunMut.isPending}
+                                  title="Score this item with the local LLM"
+                                  className="p-1.5 rounded hover:bg-indigo-900/40 text-slate-400 hover:text-indigo-300 transition-colors disabled:opacity-30"
+                                >
+                                  <Sparkles size={15} />
+                                </button>
                               </>
                             )}
                           </div>
@@ -395,7 +587,7 @@ export default function FailedImports() {
                     </tr>
                     {isExpanded && (
                       <tr key={`${item.id}-files`} className="bg-surface/50">
-                        <td colSpan={8} className="border-t border-purple-900/10">
+                        <td colSpan={cols.length + 2} className="border-t border-purple-900/10">
                           <FileDetails importId={item.id} />
                           {actionable && <MatchOverride item={item} onDone={invalidate} />}
                         </td>

@@ -74,6 +74,31 @@ async def trigger_scan():
     return await scan_once()
 
 
+@router.post("/llm-run")
+async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """On-demand LLM scoring. {"ids": [...]} for checked rows; omit ids to process
+    the backlog of open rows without an LLM score. Runs in the background —
+    an SSE "llm_run" event fires when it finishes."""
+    from app.models.app_setting import AppSetting
+    from app.services.import_matcher import llm_rescore, llm_run_active
+    ids = payload.get("ids") or None
+    if llm_run_active():
+        raise HTTPException(status_code=409, detail="An LLM run is already in progress")
+    cfg = db.query(AppSetting).filter_by(key="ollama").first()
+    if not cfg or not cfg.value or not json.loads(cfg.value).get("enabled"):
+        raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
+    if ids:
+        count = db.query(FailedImport).filter(FailedImport.id.in_(ids)).count()
+    else:
+        count = db.query(FailedImport).filter(
+            FailedImport.status.in_(("suggested", "resolve_failed")),
+            FailedImport.llm_confidence.is_(None),
+        ).count()
+    asyncio.get_event_loop().create_task(llm_rescore(ids))
+    return {"started": min(count, 50), "total_eligible": count,
+            "message": f"LLM run started on {min(count, 50)} item(s) — results stream in live"}
+
+
 @router.post("/batch")
 async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db)):
     """Accept or reject several suggestions at once: {"ids": [...], "action": "accept"|"reject"}."""

@@ -2,7 +2,11 @@
 never an exception that blocks the caller. Only individual candidates are sent, never bulk data.
 
 Supports two API styles: "ollama" (native /api/tags + /api/generate) and "openai"
-(OpenAI-compatible /v1/models + /v1/chat/completions — LM Studio, llama.cpp server, etc.)."""
+(OpenAI-compatible /v1/models + /v1/chat/completions — LM Studio, llama.cpp server, etc.).
+
+Prompts are templated: users may override the defaults in Settings → LLM Assist.
+Placeholders — match: {release} {candidate} {context}; explain: {item}. The JSON
+reply instruction is always appended for match prompts so custom templates still parse."""
 import json
 import logging
 import re
@@ -14,6 +18,20 @@ logger = logging.getLogger("powarr")
 
 TAGS_TIMEOUT = 5
 GENERATE_TIMEOUT = 20
+GENERATE_TIMEOUT_VERBOSE = 45
+
+DEFAULT_MATCH_PROMPT = (
+    "You match download release names to media library entries.\n"
+    "Release name: {release}\n"
+    "Candidate library entry: {candidate}\n"
+    "Context: {context}"
+)
+
+DEFAULT_EXPLAIN_PROMPT = (
+    "You review media-library deletion candidates. Assess whether this item looks "
+    "like a good deletion candidate and why.\n"
+    "Item: {item}"
+)
 
 
 def _base_url(host: str) -> str:
@@ -23,6 +41,27 @@ def _base_url(host: str) -> str:
     if not host.startswith(("http://", "https://")):
         host = f"http://{host}"
     return host
+
+
+def build_match_prompt(template: str, release: str, candidate: str, context: str,
+                       verbose: bool = False) -> str:
+    tpl = (template or "").strip() or DEFAULT_MATCH_PROMPT
+    prompt = (tpl.replace("{release}", release)
+                 .replace("{candidate}", candidate)
+                 .replace("{context}", context))
+    reason_spec = ("a detailed 2-3 sentence explanation citing the specific factors"
+                   if verbose else "<short reason>")
+    prompt += ('\nReply with ONLY a JSON object: '
+               f'{{"confidence": <0.0-1.0>, "reason": "{reason_spec}"}}')
+    return prompt
+
+
+def build_explain_prompt(template: str, item_summary: str, verbose: bool = False) -> str:
+    tpl = (template or "").strip() or DEFAULT_EXPLAIN_PROMPT
+    prompt = tpl.replace("{item}", item_summary)
+    prompt += ("\nAnswer in 3-4 sentences citing the concrete factors."
+               if verbose else "\nAnswer in ONE short sentence.")
+    return prompt
 
 
 async def list_models(host: str, api_style: str = "ollama") -> dict[str, Any]:
@@ -54,19 +93,21 @@ async def test_connection(host: str, model: str = "", api_style: str = "ollama")
 
 
 async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama",
-                    json_format: bool = True) -> Optional[str]:
+                    json_format: bool = True, verbose: bool = False) -> Optional[str]:
     """Single short completion. Returns raw text or None on any failure."""
     base = _base_url(host)
     if not base or not model:
         return None
+    timeout = GENERATE_TIMEOUT_VERBOSE if verbose else GENERATE_TIMEOUT
+    max_tokens = 400 if verbose else 160
     try:
-        async with httpx.AsyncClient(timeout=GENERATE_TIMEOUT, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             if api_style == "openai":
                 body: dict[str, Any] = {
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.0,
-                    "max_tokens": 160,
+                    "max_tokens": max_tokens,
                 }
                 if json_format:
                     body["response_format"] = {"type": "json_object"}
@@ -77,7 +118,7 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
                 "model": model,
                 "prompt": prompt,
                 "stream": False,
-                "options": {"temperature": 0.0, "num_predict": 160},
+                "options": {"temperature": 0.0, "num_predict": max_tokens},
             }
             if json_format:
                 body["format"] = "json"
@@ -104,17 +145,12 @@ def _parse_json(raw: str) -> Optional[dict]:
 
 async def score_candidate(host: str, model: str, release_title: str,
                           candidate_title: str, context: str = "",
-                          api_style: str = "ollama") -> Optional[dict[str, Any]]:
+                          api_style: str = "ollama", template: str = "",
+                          verbose: bool = False) -> Optional[dict[str, Any]]:
     """Ask the local LLM how confident it is that a release belongs to a candidate.
     Returns {"confidence": float 0-1, "rationale": str} or None (= no assist available)."""
-    prompt = (
-        "You match download release names to media library entries.\n"
-        f"Release name: {release_title}\n"
-        f"Candidate library entry: {candidate_title}\n"
-        f"{f'Context: {context}' if context else ''}\n"
-        'Reply with ONLY a JSON object: {"confidence": <0.0-1.0>, "reason": "<short reason>"}'
-    )
-    raw = await _generate(host, model, prompt, api_style)
+    prompt = build_match_prompt(template, release_title, candidate_title, context, verbose)
+    raw = await _generate(host, model, prompt, api_style, verbose=verbose)
     if raw is None:
         return None
     parsed = _parse_json(raw)
@@ -124,19 +160,34 @@ async def score_candidate(host: str, model: str, release_title: str,
         confidence = max(0.0, min(1.0, float(parsed.get("confidence"))))
     except (TypeError, ValueError):
         return None
-    return {"confidence": confidence, "rationale": str(parsed.get("reason", ""))[:500]}
+    limit = 1500 if verbose else 500
+    return {"confidence": confidence, "rationale": str(parsed.get("reason", ""))[:limit]}
 
 
 async def explain_deletion(host: str, model: str, item_summary: str,
-                           api_style: str = "ollama") -> Optional[str]:
-    """One-line rationale for why an item is (or isn't) a good deletion candidate.
-    Returns the sentence or None (= no assist available)."""
-    prompt = (
-        "You review media-library deletion candidates. In ONE short sentence, say whether "
-        "this item looks like a good deletion candidate and why.\n"
-        f"Item: {item_summary}"
-    )
-    raw = await _generate(host, model, prompt, api_style, json_format=False)
+                           api_style: str = "ollama", template: str = "",
+                           verbose: bool = False) -> Optional[str]:
+    """Deletion-candidate rationale. Returns the text or None (= no assist available)."""
+    prompt = build_explain_prompt(template, item_summary, verbose)
+    raw = await _generate(host, model, prompt, api_style, json_format=False, verbose=verbose)
     if not raw:
         return None
-    return raw.strip().split("\n")[0][:300]
+    text = raw.strip()
+    return (text if verbose else text.split("\n")[0])[:1500 if verbose else 300]
+
+
+async def refine_prompt(host: str, model: str, draft: str, task: str,
+                        api_style: str = "ollama") -> Optional[str]:
+    """Clean up a user's rough prompt draft into a solid template. Fails soft."""
+    placeholders = "{release}, {candidate}, {context}" if task == "match" else "{item}"
+    prompt = (
+        "You improve prompt templates for a media-management tool.\n"
+        f"Task the template is for: {'matching download release names to library entries' if task == 'match' else 'explaining whether a media item is a good deletion candidate'}.\n"
+        f"Rewrite the rough draft below into a clear, effective prompt template. "
+        f"Keep it concise. You MUST preserve these placeholders exactly: {placeholders}. "
+        "Do not add a reply-format instruction (the app appends one). "
+        "Reply with ONLY the improved template text.\n\n"
+        f"Rough draft:\n{draft}"
+    )
+    raw = await _generate(host, model, prompt, api_style, json_format=False, verbose=True)
+    return raw.strip() if raw else None

@@ -34,6 +34,9 @@ class OllamaSettings(BaseModel):
     host: str = ""  # ip:port or http(s)://host:port
     model: str = ""
     api_style: str = "ollama"  # ollama | openai (LM Studio, llama.cpp server, etc.)
+    verbosity: str = "brief"  # brief | verbose — length of LLM explanations
+    match_prompt: str = ""  # custom template for import matching; "" = built-in default
+    explain_prompt: str = ""  # custom template for deletion rationale; "" = built-in default
 
 
 class CleanupSettings(BaseModel):

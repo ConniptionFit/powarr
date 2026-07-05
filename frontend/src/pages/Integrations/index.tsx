@@ -194,8 +194,16 @@ function OllamaCard() {
   const models = modelsResp?.models ?? [];
   const dropdownValue = useOther || (model !== "" && models.length > 0 && !models.includes(model)) ? OTHER : model;
 
+  // Spread the loaded config so behavior settings (verbosity, prompt templates —
+  // managed in Settings → LLM Assist) survive connection-side saves.
+  const buildPayload = () => ({
+    verbosity: "brief", match_prompt: "", explain_prompt: "",
+    ...(cfg ?? {}),
+    enabled, host, model, api_style: apiStyle,
+  });
+
   const saveMut = useMutation({
-    mutationFn: () => settingsApi.updateOllama({ enabled, host, model, api_style: apiStyle }),
+    mutationFn: () => settingsApi.updateOllama(buildPayload()),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["ollama-settings"] });
       if (host) refetchModels();
@@ -206,7 +214,7 @@ function OllamaCard() {
     setTesting(true);
     setTestResult(null);
     try {
-      await settingsApi.updateOllama({ enabled, host, model, api_style: apiStyle }); // test runs against saved config
+      await settingsApi.updateOllama(buildPayload()); // test runs against saved config
       const r = await ollamaApi.test();
       setTestResult(r);
     } catch (e: unknown) {

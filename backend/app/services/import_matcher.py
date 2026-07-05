@@ -174,13 +174,15 @@ async def _match_record(app_name: str, rec: dict, history: list[dict],
                 matched_title = best.get(title_key, "")
                 confidence = 0.75 * best_score  # fuzzy-only match caps below auto-resolve range
 
+    heuristic_confidence = round(min(1.0, confidence), 3)
     llm_confidence = None
     llm_rationale = None
     if matched_title and ollama.enabled and ollama.host and ollama.model:
         llm = await llm_assist.score_candidate(
             ollama.host, ollama.model, raw_title, matched_title,
             context=f"Source app: {app_name}. Queue error: {_queue_messages(rec)[:200]}",
-            api_style=ollama.api_style)
+            api_style=ollama.api_style, template=ollama.match_prompt,
+            verbose=ollama.verbosity == "verbose")
         if llm:
             llm_confidence = llm["confidence"]
             llm_rationale = llm["rationale"]
@@ -190,6 +192,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict],
         "matched_id": matched_id,
         "matched_title": matched_title,
         "confidence": round(min(1.0, confidence), 3),
+        "heuristic_confidence": heuristic_confidence,
         "llm_confidence": llm_confidence,
         "llm_rationale": llm_rationale,
     }
@@ -328,6 +331,7 @@ async def scan_once() -> dict:
                     matched_title=match["matched_title"],
                     matched_id=match["matched_id"],
                     confidence=match["confidence"],
+                    heuristic_confidence=match["heuristic_confidence"],
                     llm_confidence=match["llm_confidence"],
                     llm_rationale=match["llm_rationale"],
                     status="suggested",
@@ -382,6 +386,63 @@ async def _notify_scan(summary: dict) -> None:
             db.close()
     except Exception as e:
         logger.info(f"Scan notification failed (non-fatal): {e}")
+
+
+_llm_run_active = False
+
+
+def llm_run_active() -> bool:
+    return _llm_run_active
+
+
+async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
+    """On-demand LLM scoring of failed-import rows — either the given ids, or the
+    backlog of open rows that never got an LLM signal. Sequential (one call at a
+    time) to be gentle on the LLM host. Publishes an SSE event when done."""
+    global _llm_run_active
+    if _llm_run_active:
+        return {"scored": 0, "skipped": 0, "message": "An LLM run is already in progress"}
+    _llm_run_active = True
+    scored = skipped = 0
+    try:
+        db = SessionLocal()
+        try:
+            _, ollama = load_settings(db)
+            if not (ollama.enabled and ollama.host and ollama.model):
+                return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled"}
+            q = db.query(FailedImport)
+            if ids:
+                q = q.filter(FailedImport.id.in_(ids))
+            else:
+                q = q.filter(FailedImport.status.in_(("suggested", "resolve_failed")),
+                             FailedImport.llm_confidence.is_(None))
+            rows = q.order_by(FailedImport.created_at.desc()).limit(limit).all()
+            verbose = ollama.verbosity == "verbose"
+            for row in rows:
+                if not row.matched_title:
+                    skipped += 1
+                    continue
+                llm = await llm_assist.score_candidate(
+                    ollama.host, ollama.model, row.raw_title, row.matched_title,
+                    context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
+                    api_style=ollama.api_style, template=ollama.match_prompt, verbose=verbose)
+                if not llm:
+                    skipped += 1
+                    continue
+                if row.heuristic_confidence is None:
+                    row.heuristic_confidence = row.confidence
+                row.llm_confidence = llm["confidence"]
+                row.llm_rationale = llm["rationale"]
+                row.confidence = round(min(1.0, 0.7 * row.heuristic_confidence + 0.3 * llm["confidence"]), 3)
+                db.commit()
+                scored += 1
+        finally:
+            db.close()
+    finally:
+        _llm_run_active = False
+    logger.info(f"LLM rescore: {scored} scored, {skipped} skipped")
+    publish({"type": "llm_run", "scored": scored, "skipped": skipped})
+    return {"scored": scored, "skipped": skipped, "message": f"{scored} scored, {skipped} skipped"}
 
 
 async def poller_loop():

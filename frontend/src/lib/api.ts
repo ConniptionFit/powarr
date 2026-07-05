@@ -123,6 +123,9 @@ export interface OllamaSettings {
   host: string;
   model: string;
   api_style: string;
+  verbosity: string; // brief | verbose
+  match_prompt: string;
+  explain_prompt: string;
 }
 
 export interface CleanupSettings {
@@ -161,6 +164,10 @@ export const settingsApi = {
   updateNotifications: (s: NotificationSettings) =>
     req<NotificationSettings>("/settings/notifications", { method: "PUT", body: JSON.stringify(s) }),
   testNotification: () => req<{ ok: boolean; message: string }>("/settings/notifications/test", { method: "POST" }),
+  refinePrompt: (draft: string, task: "match" | "explain") =>
+    req<{ refined: string }>("/settings/ollama/refine-prompt", {
+      method: "POST", body: JSON.stringify({ draft, task }),
+    }),
 };
 
 // --- Failed imports ---
@@ -173,6 +180,7 @@ export interface FailedImport {
   matched_title: string | null;
   matched_id: number | null;
   confidence: number;
+  heuristic_confidence: number | null;
   llm_confidence: number | null;
   llm_rationale: string | null;
   status: string;
@@ -225,6 +233,10 @@ export const importsApi = {
   setMatch: (id: number, matchedId: number, matchedTitle: string) =>
     req<{ id: number; matched_id: number; matched_title: string }>(`/imports/${id}/match`, {
       method: "POST", body: JSON.stringify({ matched_id: matchedId, matched_title: matchedTitle }),
+    }),
+  llmRun: (ids?: number[]) =>
+    req<{ started: number; total_eligible: number; message: string }>("/imports/llm-run", {
+      method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
     }),
 };
 

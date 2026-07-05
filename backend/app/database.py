@@ -42,6 +42,7 @@ def _migrate():
         },
         "failed_imports": {
             "verified": "BOOLEAN",
+            "heuristic_confidence": "FLOAT",
         },
         "deletion_log": {},
     }
