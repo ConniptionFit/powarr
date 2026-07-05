@@ -130,7 +130,17 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
         return None
 
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think(text: str) -> str:
+    """Reasoning models (e.g. lfm2.5, deepseek-r1) emit <think>...</think> blocks —
+    strip them so chain-of-thought never leaks into stored output or JSON parsing."""
+    return _THINK_RE.sub("", text or "").strip()
+
+
 def _parse_json(raw: str) -> Optional[dict]:
+    raw = _strip_think(raw)
     try:
         return json.loads(raw)
     except Exception:
@@ -172,7 +182,9 @@ async def explain_deletion(host: str, model: str, item_summary: str,
     raw = await _generate(host, model, prompt, api_style, json_format=False, verbose=verbose)
     if not raw:
         return None
-    text = raw.strip()
+    text = _strip_think(raw)
+    if not text:
+        return None
     return (text if verbose else text.split("\n")[0])[:1500 if verbose else 300]
 
 
@@ -190,4 +202,5 @@ async def refine_prompt(host: str, model: str, draft: str, task: str,
         f"Rough draft:\n{draft}"
     )
     raw = await _generate(host, model, prompt, api_style, json_format=False, verbose=True)
-    return raw.strip() if raw else None
+    refined = _strip_think(raw) if raw else ""
+    return refined or None
