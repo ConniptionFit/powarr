@@ -80,6 +80,29 @@ function loadWidths(): Record<string, number> {
   return {};
 }
 
+// Long note cells (Match Notes, LLM Notes) wrap at the user's chosen column width
+// and the row grows to fit — clamped at this many characters with a Show more toggle.
+const NOTE_CHAR_LIMIT = 220;
+
+function ClampedText({ text, limit = NOTE_CHAR_LIMIT }: { text: string; limit?: number }) {
+  const [open, setOpen] = useState(false);
+  const needsClamp = text.length > limit;
+  const shown = open || !needsClamp ? text : text.slice(0, limit).trimEnd() + "…";
+  return (
+    <span className="block whitespace-normal break-words text-slate-400 text-xs leading-relaxed">
+      {shown}
+      {needsClamp && (
+        <button
+          onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
+          className="ml-1.5 text-brand-light hover:text-white text-[11px] underline underline-offset-2"
+        >
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </span>
+  );
+}
+
 function MatchOverride({ item, onDone }: { item: FailedImport; onDone: () => void }) {
   const [query, setQuery] = useState(item.raw_title);
   const [candidates, setCandidates] = useState<Array<{ id: number; title: string; score: number }> | null>(null);
@@ -373,7 +396,7 @@ export default function FailedImports() {
         );
       case "match_notes":
         return item.match_rationale ? (
-          <span className="block truncate text-slate-400 text-xs" title={item.match_rationale}>{item.match_rationale}</span>
+          <ClampedText text={item.match_rationale} />
         ) : <span className="text-slate-600 text-xs">—</span>;
       case "llm_pct":
         return item.llm_confidence !== null ? (
@@ -381,7 +404,7 @@ export default function FailedImports() {
         ) : <span className="text-slate-600 text-xs">—</span>;
       case "llm_notes":
         return item.llm_rationale ? (
-          <span className="block truncate text-slate-400 text-xs" title={item.llm_rationale}>{item.llm_rationale}</span>
+          <ClampedText text={item.llm_rationale} />
         ) : <span className="text-slate-600 text-xs">—</span>;
       case "status": {
         const status = STATUS_META[item.status] ?? { label: item.status, cls: "bg-surface-overlay text-slate-300" };
