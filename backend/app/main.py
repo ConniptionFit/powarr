@@ -117,4 +117,7 @@ if STATIC_DIR.exists():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
-        return FileResponse(str(STATIC_DIR / "index.html"))
+        # no-cache: browsers must revalidate index.html so new deploys' hashed
+        # bundles are picked up immediately (assets themselves are content-hashed)
+        return FileResponse(str(STATIC_DIR / "index.html"),
+                            headers={"Cache-Control": "no-cache"})
