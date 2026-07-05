@@ -38,3 +38,12 @@ class FailedImport(Base):
             return json.loads(self.raw_metadata or "{}").get("match_rationale")
         except (ValueError, TypeError):
             return None
+
+    @property
+    def pack(self) -> str | None:
+        """Season-pack label ("S03", "S01-S03", "complete series") when the release
+        was detected as a pack — also lives in raw_metadata."""
+        try:
+            return json.loads(self.raw_metadata or "{}").get("pack")
+        except (ValueError, TypeError):
+            return None

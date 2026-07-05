@@ -353,6 +353,12 @@ export default function FailedImports() {
                     className="flex items-center gap-1 hover:text-brand-light transition-colors text-left w-full min-w-0 text-white font-medium">
               {isExpanded ? <ChevronDown size={13} className="flex-shrink-0" /> : <ChevronRight size={13} className="flex-shrink-0" />}
               <span className="truncate min-w-0" title={item.raw_title}>{item.raw_title}</span>
+              {item.pack && (
+                <span className="flex-shrink-0 px-1.5 py-0.5 rounded bg-brand/20 text-brand-light text-[10px] font-bold uppercase tracking-wide"
+                      title={`Season pack (${item.pack}) — accepting imports every mappable file`}>
+                  {item.pack === "complete series" ? "Complete" : `Pack ${item.pack}`}
+                </span>
+              )}
             </button>
             {item.message && <span className="block text-slate-500 text-xs truncate pl-4" title={item.message}>{item.message}</span>}
           </>

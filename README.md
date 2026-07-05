@@ -21,6 +21,7 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 - Background poller detects stuck queue items (`importPending`/`importFailed`/`importBlocked`, warnings, optionally stalled)
 - Confidence scoring: *arr's own mapping > grab-history downloadId match > fuzzy title match; auto-resolve above a threshold (off by default), triage UI between the floor and threshold
 - **Multi-variable episode matching (v0.5.0, Sonarr)**: episode title (heaviest factor, configurable weight), season/episode numbers, and **anime absolute episode numbers** (`seriesType: anime`) with stale-data guards and S/E fallback; title-only matches are capped below auto-resolve
+- **Season-pack detection (v0.5.1, Sonarr)**: releases named `S03` / `Season 3` / `S01-S03` / `Complete` are recognized as packs, corroborated against the sibling queue records and the actual files in the download (manual-import preview vs the season's aired episode list) — full coverage earns full confidence and the rationale suggests an **entire-season import** (a `Pack S03` badge marks the row; accepting imports every mappable file)
 - Every match decision carries a deterministic per-variable **Match Notes** rationale (works with no LLM configured) — shown as a column and on the Match % tooltip
 - Weights, title-only cap, and the anime toggle live in Settings → Failed Import Matching
 - Import push mirrors the proven `manualimport` flow and is **verified against history** afterward — silent failures surface back into triage

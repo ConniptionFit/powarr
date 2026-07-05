@@ -71,6 +71,15 @@ class SonarrIntegration(BaseIntegration):
                 page += 1
         return records[:max_records]
 
+    async def get_episodes(self, series_id: int) -> list[dict]:
+        """All episodes of a series (single lightweight call) — used by the
+        season-pack matcher to check coverage against a season's episode count."""
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/episode", headers=self._headers(),
+                                 params={"seriesId": series_id})
+            r.raise_for_status()
+            return r.json()
+
     async def get_manual_import(self, download_id: str) -> list[dict]:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
             r = await client.get(f"{self._base()}/manualimport", headers=self._headers(),

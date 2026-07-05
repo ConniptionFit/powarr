@@ -23,6 +23,9 @@ STUCK_STATES = {"importPending", "importFailed", "importBlocked"}
 OPEN_STATUSES = ("suggested", "auto_resolved", "accepted", "rejected")
 
 _SEASON_EP_RE = re.compile(r"[sS](\d{1,2})[eE](\d{1,3})")
+_SEASON_RANGE_RE = re.compile(r"\b[sS](\d{1,2})\s*-\s*[sS]?(\d{1,2})\b")
+_SEASON_ONLY_RE = re.compile(r"\b(?:[sS]|[sS]eason[ ._-])(\d{1,2})\b")
+_COMPLETE_RE = re.compile(r"\b(complete|collection|full[ ._-]?series)\b", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 _JUNK_RE = re.compile(
     r"\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|web[- ]?dl|webrip|bluray|blu-ray|"
@@ -96,14 +99,29 @@ def title_similarity(release_title: str, library_title: str) -> float:
 
 def _parse_release_numbers(title: str) -> dict:
     """Best-effort numeric extraction from a release name.
-    Returns {"season", "episode", "absolute"} (each int or None). The absolute
-    candidate is the last standalone 2-4 digit number once S/E markers, years and
-    quality junk are stripped — the common anime style ("Show - 1047 [Group]")."""
+    Returns {"season", "episode", "absolute", "pack_seasons", "complete"}.
+    The absolute candidate is the last standalone 2-4 digit number once S/E markers,
+    years and quality junk are stripped — the common anime style ("Show - 1047 [Group]").
+    A release with a season marker but no episode (S03, Season 3, S01-S03) or a
+    complete-series marker is a pack: pack_seasons holds the covered seasons
+    (None + complete=True = whole show)."""
     t = title or ""
     season = episode = None
+    pack_seasons = None
+    complete = bool(_COMPLETE_RE.search(t))
     m = _SEASON_EP_RE.search(t)
     if m:
         season, episode = int(m.group(1)), int(m.group(2))
+    else:
+        mr = _SEASON_RANGE_RE.search(t)
+        if mr:
+            lo, hi = sorted((int(mr.group(1)), int(mr.group(2))))
+            if hi - lo <= 50:
+                pack_seasons = set(range(lo, hi + 1))
+        else:
+            ms = _SEASON_ONLY_RE.search(t)
+            if ms:
+                pack_seasons = {int(ms.group(1))}
     cleaned = re.sub(r"[._\-\[\]()+]", " ", t)
     cleaned = _SEASON_EP_RE.sub(" ", cleaned)
     cleaned = _JUNK_RE.sub(" ", cleaned)
@@ -111,7 +129,8 @@ def _parse_release_numbers(title: str) -> dict:
     cleaned = re.sub(r"\b[eE][pP]?(?=\d)", " ", cleaned)  # "E1047" / "Ep47" → bare number
     nums = re.findall(r"\b(\d{2,4})\b", cleaned)
     absolute = int(nums[-1]) if nums else None
-    return {"season": season, "episode": episode, "absolute": absolute}
+    return {"season": season, "episode": episode, "absolute": absolute,
+            "pack_seasons": pack_seasons, "complete": complete}
 
 
 def _se_label(season, episode) -> str:
@@ -132,6 +151,99 @@ def _numeric_se_score(parsed: dict, cand_season, cand_ep) -> tuple[float | None,
         return 0.25, [f"episode number matched but season mismatch "
                       f"(S{parsed['season']:02d} vs S{cand_season:02d}) — hard penalty"]
     return 1.0, [f"season/episode {_se_label(cand_season, cand_ep)} matched"]
+
+
+def score_pack_match(title_sim: float, target_seasons: set | None, complete: bool,
+                     sibling_seasons: list[int], mapped_episodes: int | None,
+                     total_episodes: int | None,
+                     cfg: ImportMatchingSettings) -> tuple[float, bool, list[str], str]:
+    """Pack-level score for a season/complete-series download (Sonarr).
+
+    Numeric corroboration comes from the sibling queue records sharing the
+    downloadId (season consistency) and, when available, file/episode coverage
+    (manual-import preview vs the season's aired episode list). Full coverage
+    earns full numeric credit and the rationale suggests an entire-season
+    (or entire-series) import. Returns (score, has_numeric, parts, pack_label)."""
+    if target_seasons:
+        lo, hi = min(target_seasons), max(target_seasons)
+        label = f"S{lo:02d}" if lo == hi else f"S{lo:02d}-S{hi:02d}"
+    else:
+        label = "complete series"
+    suggestion = "entire-series import" if (complete and not target_seasons) else "entire-season import"
+    parts = [f"season pack detected ({label})"]
+
+    numeric: float | None = None
+    if sibling_seasons and target_seasons and any(s not in target_seasons for s in sibling_seasons):
+        outside = sorted({s for s in sibling_seasons if s not in target_seasons})
+        numeric = 0.25
+        parts.append(f"queue maps episodes outside {label} (season(s) "
+                     f"{', '.join(str(s) for s in outside)}) — hard penalty")
+    elif mapped_episodes is not None and total_episodes:
+        ratio = mapped_episodes / total_episodes
+        if ratio >= 0.9:
+            numeric = 1.0
+            parts.append(f"{mapped_episodes}/{total_episodes} episodes of {label} present in the "
+                         f"download — {suggestion} suggested (accepting imports them all)")
+        elif ratio >= 0.5:
+            numeric = 0.75
+            parts.append(f"partial pack coverage ({mapped_episodes}/{total_episodes} episodes of {label})")
+        else:
+            numeric = 0.5
+            parts.append(f"sparse pack coverage ({mapped_episodes}/{total_episodes} episodes of {label})")
+    elif sibling_seasons:
+        numeric = 0.75
+        parts.append(f"{len(sibling_seasons)} queue record(s) map into {label} (full coverage unverified)")
+    else:
+        parts.append("no queue/episode data to corroborate the pack — title-only match")
+
+    if numeric is None:
+        return round(title_sim, 3), False, parts, label
+    total_w = cfg.title_weight + cfg.number_weight
+    score = (cfg.title_weight * title_sim + cfg.number_weight * numeric) / (total_w or 1.0)
+    return round(score, 3), True, parts, label
+
+
+async def _pack_coverage(client, download_id: str | None, series_id: int,
+                         target_seasons: set | None) -> tuple[int | None, int | None]:
+    """(mapped_episodes, total_episodes) for a pack — every step fails soft.
+    total = aired episodes in the target seasons (whole show minus specials when
+    complete); mapped = distinct in-scope episodes the manual-import preview maps
+    the download's files to (the "all episodes present in the dir" check)."""
+    try:
+        eps = await client.get_episodes(series_id)
+    except Exception as e:
+        logger.info(f"Pack coverage: episode fetch failed (non-fatal): {e}")
+        return None, None
+    now = datetime.utcnow()
+
+    def _aired(e: dict) -> bool:
+        ad = e.get("airDateUtc")
+        if not ad:
+            return False
+        try:
+            return datetime.fromisoformat(str(ad).replace("Z", "+00:00")).replace(tzinfo=None) <= now
+        except ValueError:
+            return False
+
+    in_scope = [e for e in eps if _aired(e) and (
+        e.get("seasonNumber") in target_seasons if target_seasons
+        else (e.get("seasonNumber") or 0) > 0)]
+    total = len(in_scope) or None
+    scope_ids = {e.get("id") for e in in_scope}
+
+    mapped = None
+    if download_id and total:
+        try:
+            files = await client.get_manual_import(download_id)
+            mapped_ids = set()
+            for f in files:
+                for e in f.get("episodes") or []:
+                    if e.get("id") in scope_ids:
+                        mapped_ids.add(e["id"])
+            mapped = len(mapped_ids)
+        except Exception as e:
+            logger.info(f"Pack coverage: manual-import preview failed (non-fatal): {e}")
+    return mapped, total
 
 
 def score_episode_match(raw_title: str, episode: dict, series_type: str,
@@ -246,10 +358,12 @@ APP_FIELDS = {
 
 
 async def _match_record(app_name: str, rec: dict, history: list[dict], library: list[dict],
-                        cfg: ImportMatchingSettings, ollama: OllamaSettings) -> dict:
+                        cfg: ImportMatchingSettings, ollama: OllamaSettings,
+                        queue: list[dict] | None = None, client=None) -> dict:
     """Produce {matched_id, matched_title, confidence, heuristic_confidence,
-    match_rationale, llm_confidence, llm_rationale}. The rationale is a deterministic
-    per-variable readout of the scorer's own comparisons — never an LLM output."""
+    match_rationale, pack, llm_confidence, llm_rationale}. The rationale is a
+    deterministic per-variable readout of the scorer's own comparisons — never an
+    LLM output. queue/client enable pack corroboration (Sonarr season packs)."""
     id_key, _, title_key = APP_FIELDS[app_name]
     raw_title = rec.get("title") or ""
     lib_by_id = {item["id"]: item for item in library}
@@ -294,8 +408,36 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     if not matched_id:
         parts.append("no library match found")
 
-    # Episode-level refinement — Sonarr only, when the queue record carries episode data
-    if app_name == "sonarr" and matched_id and rec.get("episode"):
+    # Episode/pack-level refinement — Sonarr only
+    pack_label = None
+    parsed = _parse_release_numbers(raw_title)
+    is_pack = (app_name == "sonarr" and matched_id and parsed["episode"] is None
+               and (parsed["pack_seasons"] or parsed["complete"]))
+    if is_pack:
+        # Season/complete pack: corroborate via sibling queue records sharing the
+        # downloadId (free) and file/episode coverage (one-time API calls per new row)
+        download_id = rec.get("downloadId")
+        siblings = ([r for r in queue if download_id and r.get("downloadId") == download_id]
+                    if queue else [rec])
+        sibling_seasons = [s for s in ((r.get("episode") or {}).get("seasonNumber")
+                                       for r in siblings) if s is not None]
+        mapped = total = None
+        if client is not None:
+            mapped, total = await _pack_coverage(client, download_id, matched_id,
+                                                 parsed["pack_seasons"])
+        if mapped is None and total and sibling_seasons:
+            mapped = len([s for s in sibling_seasons
+                          if not parsed["pack_seasons"] or s in parsed["pack_seasons"]])
+        title_sim = title_similarity(raw_title, matched_title)
+        pack_score, has_numeric, pack_parts, pack_label = score_pack_match(
+            title_sim, parsed["pack_seasons"], parsed["complete"],
+            sibling_seasons, mapped, total, cfg)
+        parts.extend(pack_parts)
+        confidence = 0.5 * confidence + 0.5 * pack_score
+        if not has_numeric and confidence > cfg.title_only_cap:
+            confidence = cfg.title_only_cap
+            parts.append(f"no numeric corroboration — confidence capped at {cfg.title_only_cap:.2f}")
+    elif app_name == "sonarr" and matched_id and rec.get("episode"):
         series_type = (lib_by_id.get(matched_id) or rec.get("series") or {}).get("seriesType") or ""
         ep_score, has_numeric, ep_parts = score_episode_match(raw_title, rec["episode"], series_type, cfg)
         parts.extend(ep_parts)
@@ -309,10 +451,14 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     llm_confidence = None
     llm_rationale = None
     if matched_title and ollama.enabled and ollama.host and ollama.model:
+        llm_context = f"Source app: {app_name}. Queue error: {_queue_messages(rec)[:200]}"
+        if pack_label:
+            llm_context += (f" This download is a season pack ({pack_label}) — "
+                            "accepting it imports every mappable file, not one episode.")
         llm = await llm_assist.review_match(
             ollama.host, ollama.model, raw_title, matched_title,
             det_summary=f"{match_rationale} (heuristic confidence {heuristic_confidence})",
-            context=f"Source app: {app_name}. Queue error: {_queue_messages(rec)[:200]}",
+            context=llm_context,
             api_style=ollama.api_style, template=ollama.match_prompt,
             verbose=ollama.verbosity == "verbose")
         if llm:
@@ -326,6 +472,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         "confidence": round(min(1.0, confidence), 3),
         "heuristic_confidence": heuristic_confidence,
         "match_rationale": match_rationale,
+        "pack": pack_label,
         "llm_confidence": llm_confidence,
         "llm_rationale": llm_rationale,
     }
@@ -440,7 +587,8 @@ async def scan_once() -> dict:
                     summary["skipped_existing"] += 1
                     continue
 
-                match = await _match_record(app_name, rec, history, library, cfg, ollama)
+                match = await _match_record(app_name, rec, history, library, cfg, ollama,
+                                            queue=queue, client=client)
                 if match["confidence"] < cfg.low_confidence_floor:
                     logger.info(
                         f"Import scan: '{rec.get('title')}' ({app_name}) below confidence floor "
@@ -461,6 +609,7 @@ async def scan_once() -> dict:
                         "protocol": rec.get("protocol"),
                         "messages": _queue_messages(rec),
                         "match_rationale": match["match_rationale"],
+                        "pack": match["pack"],
                     }),
                     matched_title=match["matched_title"],
                     matched_id=match["matched_id"],

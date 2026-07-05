@@ -4,7 +4,8 @@ import unittest
 
 from app.schemas.settings import ImportMatchingSettings
 from app.services.import_matcher import (_normalize, title_similarity, _is_stuck, _within_grace,
-                                         _parse_release_numbers, score_episode_match)
+                                         _parse_release_numbers, score_episode_match,
+                                         score_pack_match)
 
 CFG = ImportMatchingSettings()  # defaults: title 0.6 / number 0.4, anime numbering on
 
@@ -86,6 +87,73 @@ class TestParseReleaseNumbers(unittest.TestCase):
     def test_both_se_and_absolute(self):
         p = _parse_release_numbers("Anime Show S02E10 - 1047 [1080p]")
         self.assertEqual((p["season"], p["episode"], p["absolute"]), (2, 10, 1047))
+
+
+class TestPackParsing(unittest.TestCase):
+    def test_season_only_pack(self):
+        p = _parse_release_numbers("Hey.Arnold!.1996.S05.PMP.WEB-DL.540p.AAC.2.0.H.264-tokar86a")
+        self.assertEqual(p["pack_seasons"], {5})
+        self.assertIsNone(p["episode"])
+        self.assertFalse(p["complete"])
+
+    def test_season_word_pack(self):
+        self.assertEqual(_parse_release_numbers("Show Name Season 3 1080p")["pack_seasons"], {3})
+
+    def test_season_range_pack(self):
+        self.assertEqual(_parse_release_numbers("Show.Name.S01-S03.1080p.WEB-DL")["pack_seasons"],
+                         {1, 2, 3})
+
+    def test_complete_series_pack(self):
+        p = _parse_release_numbers("Show Name COMPLETE 1080p BluRay")
+        self.assertTrue(p["complete"])
+        self.assertIsNone(p["pack_seasons"])
+
+    def test_single_episode_is_not_pack(self):
+        p = _parse_release_numbers("Show.Name.S03E05.1080p")
+        self.assertIsNone(p["pack_seasons"])
+        self.assertEqual((p["season"], p["episode"]), (3, 5))
+
+
+class TestScorePackMatch(unittest.TestCase):
+    def test_full_coverage_suggests_entire_season_import(self):
+        score, has_num, parts, label = score_pack_match(
+            0.85, {5}, False, [5] * 20, mapped_episodes=20, total_episodes=20, cfg=CFG)
+        self.assertEqual(label, "S05")
+        self.assertTrue(has_num)
+        self.assertGreaterEqual(score, 0.9)
+        self.assertTrue(any("entire-season import suggested" in p for p in parts))
+
+    def test_complete_series_wording(self):
+        score, has_num, parts, label = score_pack_match(
+            0.9, None, True, [1, 1, 2, 2], mapped_episodes=48, total_episodes=48, cfg=CFG)
+        self.assertEqual(label, "complete series")
+        self.assertTrue(any("entire-series import suggested" in p for p in parts))
+
+    def test_partial_coverage_downgraded(self):
+        score, has_num, parts, label = score_pack_match(
+            0.85, {5}, False, [5] * 12, mapped_episodes=12, total_episodes=20, cfg=CFG)
+        self.assertTrue(has_num)
+        self.assertLess(score, 0.9)
+        self.assertTrue(any("partial pack coverage" in p for p in parts))
+
+    def test_siblings_outside_season_hard_penalty(self):
+        score, has_num, parts, label = score_pack_match(
+            0.9, {5}, False, [5, 5, 4], mapped_episodes=None, total_episodes=None, cfg=CFG)
+        self.assertTrue(has_num)
+        self.assertLess(score, 0.7)
+        self.assertTrue(any("outside S05" in p for p in parts))
+
+    def test_no_corroboration_is_title_only(self):
+        score, has_num, parts, label = score_pack_match(
+            0.95, {5}, False, [], mapped_episodes=None, total_episodes=None, cfg=CFG)
+        self.assertFalse(has_num)
+        self.assertTrue(any("title-only" in p for p in parts))
+
+    def test_siblings_without_coverage_partial_credit(self):
+        score, has_num, parts, label = score_pack_match(
+            0.85, {5}, False, [5] * 8, mapped_episodes=None, total_episodes=None, cfg=CFG)
+        self.assertTrue(has_num)
+        self.assertTrue(any("full coverage unverified" in p for p in parts))
 
 
 class TestScoreEpisodeMatch(unittest.TestCase):

@@ -186,6 +186,7 @@ export interface FailedImport {
   confidence: number;
   heuristic_confidence: number | null;
   match_rationale: string | null;
+  pack: string | null; // season-pack label ("S03", "S01-S03", "complete series")
   llm_confidence: number | null;
   llm_rationale: string | null;
   status: string;

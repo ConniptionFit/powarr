@@ -14,6 +14,7 @@ class FailedImportOut(BaseModel):
     confidence: float
     heuristic_confidence: Optional[float] = None
     match_rationale: Optional[str] = None  # deterministic per-variable scorer readout
+    pack: Optional[str] = None  # season-pack label ("S03", "S01-S03", "complete series")
     llm_confidence: Optional[float] = None
     llm_rationale: Optional[str] = None
     status: str
