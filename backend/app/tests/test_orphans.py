@@ -35,27 +35,30 @@ class TestDecideOrphans(unittest.TestCase):
 
 
 class TestQbitLoginParsing(unittest.TestCase):
-    """_login must accept both response shapes seen in the wild:
-    v4.x: 200 + "Ok."/"Fails." body; v5.x: 204 empty on success, 401 on bad creds."""
+    """_login must accept every response shape seen in the wild:
+    v4.x: 200 + "Ok."/"Fails." body with an "SID" cookie;
+    v5.x: 204 empty on success, 401 on bad creds;
+    5.2+ renamed the cookie "SID" → "QBT_SID_<port>", so success is judged by
+    "any session cookie was set", never by a hardcoded cookie name."""
 
-    def _login_outcome(self, status_code: int, body: str, sid: str | None) -> bool:
+    def _login_outcome(self, status_code: int, body: str, cookies: dict) -> bool:
         # Mirrors the decision expression in QbittorrentIntegration._login
-        return status_code < 400 and "fails" not in body.strip().lower() and bool(sid)
+        return status_code < 400 and "fails" not in body.strip().lower() and bool(cookies)
 
     def test_v5_success_204_empty(self):
-        self.assertTrue(self._login_outcome(204, "", "abc"))
+        self.assertTrue(self._login_outcome(204, "", {"QBT_SID_8080": "x"}))
 
     def test_v4_success_200_ok(self):
-        self.assertTrue(self._login_outcome(200, "Ok.", "abc"))
+        self.assertTrue(self._login_outcome(200, "Ok.", {"SID": "x"}))
 
     def test_v4_bad_creds_200_fails(self):
-        self.assertFalse(self._login_outcome(200, "Fails.", None))
+        self.assertFalse(self._login_outcome(200, "Fails.", {}))
 
     def test_v5_bad_creds_401(self):
-        self.assertFalse(self._login_outcome(401, "Unauthorized", None))
+        self.assertFalse(self._login_outcome(401, "Unauthorized", {}))
 
     def test_no_cookie_is_failure(self):
-        self.assertFalse(self._login_outcome(200, "Ok.", None))
+        self.assertFalse(self._login_outcome(200, "Ok.", {}))
 
 
 if __name__ == "__main__":

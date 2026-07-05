@@ -3,11 +3,13 @@ import httpx
 
 from app.integrations.base import BaseIntegration
 
-# SID session cookies cached per (url, username) so short-lived integration
+# Session cookies cached per (url, username) so short-lived integration
 # instances reuse the login instead of hitting /auth/login on every call.
-# qBittorrent expires sessions server-side and answers 403 — _request treats
-# that as the signal to re-login once and retry.
-_sid_cache: dict[tuple[str, str], str] = {}
+# Cached as a name→value dict, NOT a hardcoded name: qBittorrent ≤5.1 calls the
+# cookie "SID", 5.2+ calls it "QBT_SID_<port>". qBittorrent expires sessions
+# server-side and answers 403 — _request treats that as the signal to re-login
+# once and retry.
+_session_cache: dict[tuple[str, str], dict[str, str]] = {}
 
 
 class QbittorrentIntegration(BaseIntegration):
@@ -29,9 +31,8 @@ class QbittorrentIntegration(BaseIntegration):
 
     def _client(self) -> httpx.AsyncClient:
         client = httpx.AsyncClient(timeout=15, follow_redirects=True)
-        sid = _sid_cache.get(self._cache_key())
-        if sid:
-            client.cookies.set("SID", sid)
+        for name, value in _session_cache.get(self._cache_key(), {}).items():
+            client.cookies.set(name, value)
         return client
 
     async def _login(self, client: httpx.AsyncClient) -> tuple[bool, str]:
@@ -39,28 +40,28 @@ class QbittorrentIntegration(BaseIntegration):
         r = await client.post(f"{self.url}/api/v2/auth/login",
                               data={"username": user, "password": password})
         # v4.x answers 200 "Ok."/"Fails.", v5.x answers 204 on success and 401
-        # on bad credentials — the reliable success signal is the SID cookie.
+        # on bad credentials — the reliable success signal is the session cookie.
         body = r.text.strip().lower()
-        if r.status_code < 400 and "fails" not in body and client.cookies.get("SID"):
-            _sid_cache[self._cache_key()] = client.cookies.get("SID")
+        if r.status_code < 400 and "fails" not in body and dict(client.cookies):
+            _session_cache[self._cache_key()] = dict(client.cookies)
             return True, "ok"
         if r.status_code == 401 or "fails" in body:
             return False, "qBittorrent login failed — check username/password"
         if r.status_code == 403:
             return False, "qBittorrent refused the login (IP temporarily banned after failed attempts?)"
-        return False, f"qBittorrent login failed: HTTP {r.status_code}"
+        return False, f"qBittorrent login failed: HTTP {r.status_code} and no session cookie"
 
     async def _request(self, client: httpx.AsyncClient, method: str, path: str,
                        **kwargs) -> httpx.Response:
-        """Authenticated request: login lazily, re-login once on 403 (expired SID)."""
-        if not client.cookies.get("SID"):
+        """Authenticated request: login lazily, re-login once on 403 (expired session)."""
+        if not dict(client.cookies):
             ok, msg = await self._login(client)
             if not ok:
                 raise RuntimeError(msg)
         r = await client.request(method, f"{self.url}{path}", **kwargs)
         if r.status_code == 403:
-            _sid_cache.pop(self._cache_key(), None)
-            client.cookies.delete("SID")
+            _session_cache.pop(self._cache_key(), None)
+            client.cookies = httpx.Cookies()
             ok, msg = await self._login(client)
             if not ok:
                 raise RuntimeError(msg)
