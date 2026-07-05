@@ -27,6 +27,11 @@ class ImportMatchingSettings(BaseModel):
     radarr_enabled: bool = True
     lidarr_enabled: bool = True
     readarr_enabled: bool = True
+    # Episode-level match weighting (v0.5.0) — read by the scorer AND the LLM prompt scaffold
+    title_weight: float = 0.6  # episode-title similarity: heaviest single factor, non-overriding
+    number_weight: float = 0.4  # season/episode (or anime absolute) numeric corroboration
+    title_only_cap: float = 0.85  # ceiling when no numeric corroboration exists — keeps title-only below auto-resolve
+    anime_absolute_numbering: bool = True  # seriesType=anime → absoluteEpisodeNumber is the primary numeric signal
 
 
 class OllamaSettings(BaseModel):

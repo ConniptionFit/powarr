@@ -13,6 +13,7 @@ class FailedImportOut(BaseModel):
     matched_id: Optional[int] = None
     confidence: float
     heuristic_confidence: Optional[float] = None
+    match_rationale: Optional[str] = None  # deterministic per-variable scorer readout
     llm_confidence: Optional[float] = None
     llm_rationale: Optional[str] = None
     status: str

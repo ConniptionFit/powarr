@@ -131,6 +131,10 @@ function ImportMatchingSection() {
       {numRow("Grace Period", "Skip queue items younger than this — the *arr app often retries on its own", "grace_period_minutes", { min: 0, max: 1440, step: 5, unit: "min" })}
       {numRow("Verify Timeout", "Pushed imports unconfirmed in history after this are marked failed", "verify_timeout_minutes", { min: 5, max: 1440, step: 5, unit: "min" })}
       {toggleRow("Include Stalled Downloads", "Also flag downloads stalled with no connections, not just import failures", "include_stalled")}
+      {numRow("Episode Title Weight", "Weight of episode-title similarity in the episode-level score (heaviest factor, non-overriding)", "title_weight", { min: 0, max: 1, step: 0.05 })}
+      {numRow("Episode Number Weight", "Weight of season/episode (or anime absolute) number corroboration", "number_weight", { min: 0, max: 1, step: 0.05 })}
+      {numRow("Title-Only Cap", "Confidence ceiling when no episode number corroborates a title match — keeps title-only matches below auto-resolve", "title_only_cap", { min: 0, max: 1, step: 0.01 })}
+      {toggleRow("Anime Absolute Numbering", "For Sonarr anime series, match by absolute episode number (with season/episode fallback and stale-data guards)", "anime_absolute_numbering")}
 
       <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
         <div>

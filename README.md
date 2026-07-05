@@ -20,13 +20,16 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 ### Failed Import Matching
 - Background poller detects stuck queue items (`importPending`/`importFailed`/`importBlocked`, warnings, optionally stalled)
 - Confidence scoring: *arr's own mapping > grab-history downloadId match > fuzzy title match; auto-resolve above a threshold (off by default), triage UI between the floor and threshold
+- **Multi-variable episode matching (v0.5.0, Sonarr)**: episode title (heaviest factor, configurable weight), season/episode numbers, and **anime absolute episode numbers** (`seriesType: anime`) with stale-data guards and S/E fallback; title-only matches are capped below auto-resolve
+- Every match decision carries a deterministic per-variable **Match Notes** rationale (works with no LLM configured) — shown as a column and on the Match % tooltip
+- Weights, title-only cap, and the anime toggle live in Settings → Failed Import Matching
 - Import push mirrors the proven `manualimport` flow and is **verified against history** afterward — silent failures surface back into triage
 - Batch accept/reject, per-file mapping preview, manual match override, reject-and-remove-download (qBittorrent/Transmission), live SSE updates
 - Stale rows auto-close when a download leaves the queue on its own
 
 ### Local LLM Assist (optional, off by default)
 - Ollama native or OpenAI-compatible (`LM Studio`, `llama.cpp server`) endpoints
-- Blended into match confidence (never the sole signal); one-line deletion rationales on demand
+- Single structured review call per match: the LLM sees the deterministic scorer's per-variable results and returns `{agrees, confidence_adjustment, rationale}` — blended into confidence (never the sole signal); one-line deletion rationales on demand
 - Fails soft everywhere — no LLM, no problem
 
 ### Platform

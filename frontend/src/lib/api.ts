@@ -116,6 +116,10 @@ export interface ImportMatchingSettings {
   radarr_enabled: boolean;
   lidarr_enabled: boolean;
   readarr_enabled: boolean;
+  title_weight: number;
+  number_weight: number;
+  title_only_cap: number;
+  anime_absolute_numbering: boolean;
 }
 
 export interface OllamaSettings {
@@ -181,6 +185,7 @@ export interface FailedImport {
   matched_id: number | null;
   confidence: number;
   heuristic_confidence: number | null;
+  match_rationale: string | null;
   llm_confidence: number | null;
   llm_rationale: string | null;
   status: string;

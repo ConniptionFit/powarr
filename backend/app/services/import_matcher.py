@@ -94,6 +94,113 @@ def title_similarity(release_title: str, library_title: str) -> float:
     return min(1.0, ratio)
 
 
+def _parse_release_numbers(title: str) -> dict:
+    """Best-effort numeric extraction from a release name.
+    Returns {"season", "episode", "absolute"} (each int or None). The absolute
+    candidate is the last standalone 2-4 digit number once S/E markers, years and
+    quality junk are stripped — the common anime style ("Show - 1047 [Group]")."""
+    t = title or ""
+    season = episode = None
+    m = _SEASON_EP_RE.search(t)
+    if m:
+        season, episode = int(m.group(1)), int(m.group(2))
+    cleaned = re.sub(r"[._\-\[\]()+]", " ", t)
+    cleaned = _SEASON_EP_RE.sub(" ", cleaned)
+    cleaned = _JUNK_RE.sub(" ", cleaned)
+    cleaned = _YEAR_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"\b[eE][pP]?(?=\d)", " ", cleaned)  # "E1047" / "Ep47" → bare number
+    nums = re.findall(r"\b(\d{2,4})\b", cleaned)
+    absolute = int(nums[-1]) if nums else None
+    return {"season": season, "episode": episode, "absolute": absolute}
+
+
+def _se_label(season, episode) -> str:
+    s = f"S{season:02d}" if season is not None else "S??"
+    e = f"E{episode:02d}" if episode is not None else "E??"
+    return s + e
+
+
+def _numeric_se_score(parsed: dict, cand_season, cand_ep) -> tuple[float | None, list[str]]:
+    """Standard season/episode comparison. None = nothing to compare (no corroboration)."""
+    if parsed["episode"] is None or cand_ep is None:
+        return None, ["no season/episode number parsed from release — title-only match"]
+    if parsed["episode"] != cand_ep:
+        return 0.0, [f"episode number mismatch ({_se_label(parsed['season'], parsed['episode'])} "
+                     f"vs {_se_label(cand_season, cand_ep)})"]
+    if parsed["season"] is not None and cand_season is not None and parsed["season"] != cand_season:
+        # Hard penalty, not automatically disqualifying
+        return 0.25, [f"episode number matched but season mismatch "
+                      f"(S{parsed['season']:02d} vs S{cand_season:02d}) — hard penalty"]
+    return 1.0, [f"season/episode {_se_label(cand_season, cand_ep)} matched"]
+
+
+def score_episode_match(raw_title: str, episode: dict, series_type: str,
+                        cfg: ImportMatchingSettings) -> tuple[float, bool, list[str]]:
+    """Episode-level multi-variable score for a Sonarr queue record.
+
+    Independently evaluates episode-title similarity (heaviest factor, non-overriding)
+    and numeric corroboration — S/E for standard series, absoluteEpisodeNumber for
+    anime (with fallback to S/E when the absolute mapping is unpopulated, and a
+    sanity guard against stale Sonarr absolute numbers). Returns
+    (score 0-1, has_numeric_corroboration, human-readable per-variable parts)."""
+    parts: list[str] = []
+    parsed = _parse_release_numbers(raw_title)
+
+    ep_title = episode.get("title") or ""
+    title_sim = title_similarity(raw_title, ep_title) if ep_title else 0.0
+    if ep_title:
+        parts.append(f"episode title similarity {round(title_sim * 100)}% vs “{ep_title}”")
+
+    cand_season = episode.get("seasonNumber")
+    cand_ep = episode.get("episodeNumber")
+    cand_abs = episode.get("absoluteEpisodeNumber")
+    is_anime = series_type == "anime" and cfg.anime_absolute_numbering
+
+    numeric: float | None = None
+    numeric_parts: list[str] = []
+    if is_anime and cand_abs is not None and parsed["absolute"] is not None:
+        # Guard: Sonarr absolute numbers can be stale for long-running anime —
+        # past season 1 a true absolute number should exceed the relative episode number.
+        implausible = (cand_season or 0) > 1 and cand_ep is not None and cand_abs <= cand_ep
+        if parsed["absolute"] == cand_abs:
+            if implausible:
+                numeric = 0.5
+                numeric_parts.append(
+                    f"absolute episode #{cand_abs} matched but looks implausible "
+                    f"(≤ episode {cand_ep} past season 1 — possibly stale Sonarr data) — down-weighted")
+            else:
+                numeric = 1.0
+                numeric_parts.append(f"absolute episode #{cand_abs} matched (anime numbering)")
+                if parsed["season"] is not None and cand_season is not None and parsed["season"] != cand_season:
+                    numeric_parts.append(
+                        f"season/episode mismatch ({_se_label(parsed['season'], parsed['episode'])} vs "
+                        f"{_se_label(cand_season, cand_ep)}) explained by anime absolute numbering")
+        else:
+            # Absolute contradicts — an S/E match can still rescue it
+            se_score, se_parts = _numeric_se_score(parsed, cand_season, cand_ep)
+            if se_score == 1.0:
+                numeric = 1.0
+                numeric_parts.append(
+                    f"absolute number mismatch (#{parsed['absolute']} vs #{cand_abs}) but " + se_parts[0])
+            else:
+                numeric = 0.0
+                numeric_parts.append(f"absolute episode number mismatch (#{parsed['absolute']} vs #{cand_abs})")
+    elif is_anime and cand_abs is None:
+        # Absence of an absolute mapping ≠ mismatch — Sonarr simply hasn't populated it
+        numeric, numeric_parts = _numeric_se_score(parsed, cand_season, cand_ep)
+        if numeric is not None:
+            numeric_parts.append("no absolute-number mapping in Sonarr — fell back to season/episode")
+    else:
+        numeric, numeric_parts = _numeric_se_score(parsed, cand_season, cand_ep)
+
+    parts.extend(numeric_parts)
+    if numeric is None:
+        return round(title_sim, 3), False, parts
+    total = cfg.title_weight + cfg.number_weight
+    score = (cfg.title_weight * title_sim + cfg.number_weight * numeric) / (total or 1.0)
+    return round(score, 3), True, parts
+
+
 def _is_stuck(rec: dict, include_stalled: bool = False) -> bool:
     if rec.get("trackedDownloadState") in STUCK_STATES:
         return True
@@ -138,9 +245,11 @@ APP_FIELDS = {
 }
 
 
-async def _match_record(app_name: str, rec: dict, history: list[dict],
-                        library: list[dict], ollama: OllamaSettings) -> dict:
-    """Produce {matched_id, matched_title, confidence, llm_confidence, llm_rationale}."""
+async def _match_record(app_name: str, rec: dict, history: list[dict], library: list[dict],
+                        cfg: ImportMatchingSettings, ollama: OllamaSettings) -> dict:
+    """Produce {matched_id, matched_title, confidence, heuristic_confidence,
+    match_rationale, llm_confidence, llm_rationale}. The rationale is a deterministic
+    per-variable readout of the scorer's own comparisons — never an LLM output."""
     id_key, _, title_key = APP_FIELDS[app_name]
     raw_title = rec.get("title") or ""
     lib_by_id = {item["id"]: item for item in library}
@@ -148,12 +257,16 @@ async def _match_record(app_name: str, rec: dict, history: list[dict],
     matched_id = None
     matched_title = None
     confidence = 0.0
+    parts: list[str] = []
 
     # 1. Queue record already mapped by the *arr app itself — strongest signal
     if rec.get(id_key) and rec[id_key] in lib_by_id:
         matched_id = rec[id_key]
         matched_title = lib_by_id[matched_id].get(title_key, "")
-        confidence = 0.55 + 0.45 * title_similarity(raw_title, matched_title)
+        sim = title_similarity(raw_title, matched_title)
+        confidence = 0.55 + 0.45 * sim
+        parts.append(f"{app_name} queue already maps this download to the library entry "
+                     f"(series/media title similarity {round(sim * 100)}%)")
     else:
         # 2. Grab history with the same downloadId tells us what this download was grabbed for
         download_id = rec.get("downloadId")
@@ -161,7 +274,10 @@ async def _match_record(app_name: str, rec: dict, history: list[dict],
         if hist and hist.get(id_key) and hist[id_key] in lib_by_id:
             matched_id = hist[id_key]
             matched_title = lib_by_id[matched_id].get(title_key, "")
-            confidence = 0.45 + 0.45 * title_similarity(raw_title, matched_title)
+            sim = title_similarity(raw_title, matched_title)
+            confidence = 0.45 + 0.45 * sim
+            parts.append(f"grab history links this downloadId to the library entry "
+                         f"(title similarity {round(sim * 100)}%)")
         else:
             # 3. Fuzzy title match against the library
             best, best_score = None, 0.0
@@ -173,19 +289,35 @@ async def _match_record(app_name: str, rec: dict, history: list[dict],
                 matched_id = best["id"]
                 matched_title = best.get(title_key, "")
                 confidence = 0.75 * best_score  # fuzzy-only match caps below auto-resolve range
+                parts.append(f"fuzzy library title match only ({round(best_score * 100)}% similarity)")
+
+    if not matched_id:
+        parts.append("no library match found")
+
+    # Episode-level refinement — Sonarr only, when the queue record carries episode data
+    if app_name == "sonarr" and matched_id and rec.get("episode"):
+        series_type = (lib_by_id.get(matched_id) or rec.get("series") or {}).get("seriesType") or ""
+        ep_score, has_numeric, ep_parts = score_episode_match(raw_title, rec["episode"], series_type, cfg)
+        parts.extend(ep_parts)
+        confidence = 0.5 * confidence + 0.5 * ep_score
+        if not has_numeric and confidence > cfg.title_only_cap:
+            confidence = cfg.title_only_cap
+            parts.append(f"no numeric corroboration — confidence capped at {cfg.title_only_cap:.2f}")
 
     heuristic_confidence = round(min(1.0, confidence), 3)
+    match_rationale = "; ".join(parts)
     llm_confidence = None
     llm_rationale = None
     if matched_title and ollama.enabled and ollama.host and ollama.model:
-        llm = await llm_assist.score_candidate(
+        llm = await llm_assist.review_match(
             ollama.host, ollama.model, raw_title, matched_title,
+            det_summary=f"{match_rationale} (heuristic confidence {heuristic_confidence})",
             context=f"Source app: {app_name}. Queue error: {_queue_messages(rec)[:200]}",
             api_style=ollama.api_style, template=ollama.match_prompt,
             verbose=ollama.verbosity == "verbose")
         if llm:
-            llm_confidence = llm["confidence"]
-            llm_rationale = llm["rationale"]
+            llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
+            llm_rationale = f"[{'agrees' if llm['agrees'] else 'disagrees'}] {llm['rationale']}"
             confidence = 0.7 * confidence + 0.3 * llm_confidence
 
     return {
@@ -193,6 +325,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict],
         "matched_title": matched_title,
         "confidence": round(min(1.0, confidence), 3),
         "heuristic_confidence": heuristic_confidence,
+        "match_rationale": match_rationale,
         "llm_confidence": llm_confidence,
         "llm_rationale": llm_rationale,
     }
@@ -307,7 +440,7 @@ async def scan_once() -> dict:
                     summary["skipped_existing"] += 1
                     continue
 
-                match = await _match_record(app_name, rec, history, library, ollama)
+                match = await _match_record(app_name, rec, history, library, cfg, ollama)
                 if match["confidence"] < cfg.low_confidence_floor:
                     logger.info(
                         f"Import scan: '{rec.get('title')}' ({app_name}) below confidence floor "
@@ -327,6 +460,7 @@ async def scan_once() -> dict:
                         "outputPath": rec.get("outputPath"),
                         "protocol": rec.get("protocol"),
                         "messages": _queue_messages(rec),
+                        "match_rationale": match["match_rationale"],
                     }),
                     matched_title=match["matched_title"],
                     matched_id=match["matched_id"],
@@ -422,18 +556,22 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
                 if not row.matched_title:
                     skipped += 1
                     continue
-                llm = await llm_assist.score_candidate(
+                if row.heuristic_confidence is None:
+                    row.heuristic_confidence = row.confidence
+                det_summary = (row.match_rationale or "series/title heuristics only") + \
+                    f" (heuristic confidence {row.heuristic_confidence})"
+                llm = await llm_assist.review_match(
                     ollama.host, ollama.model, row.raw_title, row.matched_title,
+                    det_summary=det_summary,
                     context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
                     api_style=ollama.api_style, template=ollama.match_prompt, verbose=verbose)
                 if not llm:
                     skipped += 1
                     continue
-                if row.heuristic_confidence is None:
-                    row.heuristic_confidence = row.confidence
-                row.llm_confidence = llm["confidence"]
-                row.llm_rationale = llm["rationale"]
-                row.confidence = round(min(1.0, 0.7 * row.heuristic_confidence + 0.3 * llm["confidence"]), 3)
+                row.llm_confidence = round(
+                    max(0.0, min(1.0, row.heuristic_confidence + llm["confidence_adjustment"])), 3)
+                row.llm_rationale = f"[{'agrees' if llm['agrees'] else 'disagrees'}] {llm['rationale']}"
+                row.confidence = round(min(1.0, 0.7 * row.heuristic_confidence + 0.3 * row.llm_confidence), 3)
                 db.commit()
                 scored += 1
         finally:

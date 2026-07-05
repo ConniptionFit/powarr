@@ -37,8 +37,13 @@ class SonarrIntegration(BaseIntegration):
             return r.status_code in (200, 204)
 
     async def get_queue(self, page_size: int = 100, max_records: int = 500) -> list[dict]:
+        # includeSeries/includeEpisode inline the series (seriesType) and episode
+        # (title, season/episode/absoluteEpisodeNumber) objects on each record —
+        # the episode-level matcher reads them; no extra API calls per cycle.
         return await self._paged(f"{self._base()}/queue",
-                                 {"includeUnknownSeriesItems": "true"}, page_size, max_records)
+                                 {"includeUnknownSeriesItems": "true",
+                                  "includeSeries": "true",
+                                  "includeEpisode": "true"}, page_size, max_records)
 
     async def get_history(self, event_type: int | None = 1, page_size: int = 100,
                           max_records: int = 300) -> list[dict]:

@@ -43,16 +43,21 @@ def _base_url(host: str) -> str:
     return host
 
 
-def build_match_prompt(template: str, release: str, candidate: str, context: str,
-                       verbose: bool = False) -> str:
+def build_review_prompt(template: str, release: str, candidate: str, context: str,
+                        det_summary: str, verbose: bool = False) -> str:
+    """Static scaffold around the (optionally user-templated) match prompt. The
+    deterministic scorer's per-variable results are always injected verbatim —
+    the LLM reviews the deterministic decision, it never replaces it."""
     tpl = (template or "").strip() or DEFAULT_MATCH_PROMPT
     prompt = (tpl.replace("{release}", release)
                  .replace("{candidate}", candidate)
                  .replace("{context}", context))
+    prompt += ("\nDeterministic scorer result (computed from title/season/episode/"
+               f"absolute-number comparisons): {det_summary}")
     reason_spec = ("a detailed 2-3 sentence explanation citing the specific factors"
                    if verbose else "<short reason>")
-    prompt += ('\nReply with ONLY a JSON object: '
-               f'{{"confidence": <0.0-1.0>, "reason": "{reason_spec}"}}')
+    prompt += ('\nDo you agree with this match? Reply with ONLY a JSON object: '
+               f'{{"agrees": true|false, "confidence_adjustment": <-0.3 to 0.3>, "reason": "{reason_spec}"}}')
     return prompt
 
 
@@ -153,25 +158,31 @@ def _parse_json(raw: str) -> Optional[dict]:
             return None
 
 
-async def score_candidate(host: str, model: str, release_title: str,
-                          candidate_title: str, context: str = "",
-                          api_style: str = "ollama", template: str = "",
-                          verbose: bool = False) -> Optional[dict[str, Any]]:
-    """Ask the local LLM how confident it is that a release belongs to a candidate.
-    Returns {"confidence": float 0-1, "rationale": str} or None (= no assist available)."""
-    prompt = build_match_prompt(template, release_title, candidate_title, context, verbose)
+async def review_match(host: str, model: str, release_title: str,
+                       candidate_title: str, det_summary: str, context: str = "",
+                       api_style: str = "ollama", template: str = "",
+                       verbose: bool = False) -> Optional[dict[str, Any]]:
+    """Single structured LLM review of a deterministic match decision (one call —
+    no separate match/explain prompts). Returns
+    {"agrees": bool, "confidence_adjustment": float ±0.3, "rationale": str}
+    or None (= no assist available). Supplements the deterministic rationale,
+    never replaces it."""
+    prompt = build_review_prompt(template, release_title, candidate_title, context,
+                                 det_summary, verbose)
     raw = await _generate(host, model, prompt, api_style, verbose=verbose)
     if raw is None:
         return None
     parsed = _parse_json(raw)
-    if not parsed:
+    if not parsed or "agrees" not in parsed:
         return None
     try:
-        confidence = max(0.0, min(1.0, float(parsed.get("confidence"))))
+        adjustment = max(-0.3, min(0.3, float(parsed.get("confidence_adjustment") or 0.0)))
     except (TypeError, ValueError):
-        return None
+        adjustment = 0.0
     limit = 1500 if verbose else 500
-    return {"confidence": confidence, "rationale": str(parsed.get("reason", ""))[:limit]}
+    return {"agrees": bool(parsed["agrees"]),
+            "confidence_adjustment": adjustment,
+            "rationale": str(parsed.get("reason", ""))[:limit]}
 
 
 async def explain_deletion(host: str, model: str, item_summary: str,

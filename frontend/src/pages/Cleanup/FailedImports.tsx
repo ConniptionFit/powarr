@@ -30,7 +30,7 @@ function ConfidenceBadge({ value }: { value: number }) {
 
 // --- Column system: visibility + widths persisted per-browser (localStorage) ---
 
-type ColKey = "source" | "release" | "matched" | "match_pct" | "llm_pct" | "llm_notes" | "status" | "detected";
+type ColKey = "source" | "release" | "matched" | "match_pct" | "match_notes" | "llm_pct" | "llm_notes" | "status" | "detected";
 
 interface ColDef {
   key: ColKey;
@@ -44,6 +44,7 @@ const COLUMNS: ColDef[] = [
   { key: "release", label: "Release", width: 340, sortField: "raw_title" },
   { key: "matched", label: "Matched To", width: 240, sortField: "matched_title" },
   { key: "match_pct", label: "Match", width: 90, sortField: "heuristic_confidence" },
+  { key: "match_notes", label: "Match Notes", width: 260, sortField: "match_rationale" },
   { key: "llm_pct", label: "LLM", width: 90, sortField: "llm_confidence" },
   { key: "llm_notes", label: "LLM Notes", width: 260, sortField: "llm_rationale" },
   { key: "status", label: "Status", width: 120, sortField: "status" },
@@ -52,11 +53,21 @@ const COLUMNS: ColDef[] = [
 
 const LS_VISIBLE = "powarr.failedImports.visibleCols";
 const LS_WIDTHS = "powarr.failedImports.colWidths";
+const LS_MATCH_NOTES_SEEN = "powarr.failedImports.matchNotesIntroduced"; // v0.5.0 one-time column surfacing
 
 function loadVisible(): Set<ColKey> {
   try {
     const raw = localStorage.getItem(LS_VISIBLE);
-    if (raw) return new Set(JSON.parse(raw) as ColKey[]);
+    if (raw) {
+      const set = new Set(JSON.parse(raw) as ColKey[]);
+      // Layouts saved before v0.5.0 predate the Match Notes column — show it once;
+      // hiding it again afterwards sticks.
+      if (!localStorage.getItem(LS_MATCH_NOTES_SEEN)) {
+        set.add("match_notes");
+        localStorage.setItem(LS_MATCH_NOTES_SEEN, "1");
+      }
+      return set;
+    }
   } catch { /* fall through */ }
   return new Set(COLUMNS.map(c => c.key));
 }
@@ -349,7 +360,15 @@ export default function FailedImports() {
       case "matched":
         return <span className="block truncate text-slate-300" title={item.matched_title ?? ""}>{item.matched_title ?? "—"}</span>;
       case "match_pct":
-        return <ConfidenceBadge value={item.heuristic_confidence ?? item.confidence} />;
+        return (
+          <span title={item.match_rationale ?? ""}>
+            <ConfidenceBadge value={item.heuristic_confidence ?? item.confidence} />
+          </span>
+        );
+      case "match_notes":
+        return item.match_rationale ? (
+          <span className="block truncate text-slate-400 text-xs" title={item.match_rationale}>{item.match_rationale}</span>
+        ) : <span className="text-slate-600 text-xs">—</span>;
       case "llm_pct":
         return item.llm_confidence !== null ? (
           <span title={item.llm_rationale ?? ""}><ConfidenceBadge value={item.llm_confidence} /></span>

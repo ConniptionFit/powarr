@@ -1,3 +1,5 @@
+import json
+
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean
 from datetime import datetime
 
@@ -27,3 +29,12 @@ class FailedImport(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
+
+    @property
+    def match_rationale(self) -> str | None:
+        """Deterministic per-variable scorer readout, stored inside raw_metadata
+        (additive-only schema rule — no dedicated column)."""
+        try:
+            return json.loads(self.raw_metadata or "{}").get("match_rationale")
+        except (ValueError, TypeError):
+            return None
