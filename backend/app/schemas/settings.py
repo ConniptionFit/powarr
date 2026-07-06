@@ -32,6 +32,9 @@ class ImportMatchingSettings(BaseModel):
     number_weight: float = 0.4  # season/episode (or anime absolute) numeric corroboration
     title_only_cap: float = 0.85  # ceiling when no numeric corroboration exists — keeps title-only below auto-resolve
     anime_absolute_numbering: bool = True  # seriesType=anime → absoluteEpisodeNumber is the primary numeric signal
+    # Orphan handling (v0.6.1) — confirmed-missing rows prompt for confirmation by default;
+    # this skips the prompt and marks them orphaned immediately (same positive-confirmation gate)
+    orphan_auto_purge: bool = False
 
 
 class OllamaSettings(BaseModel):

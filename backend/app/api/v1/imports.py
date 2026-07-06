@@ -16,7 +16,7 @@ from app.services.import_matcher import scan_once, _get_client
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "closed_external",
-            "resolve_failed", "orphaned")
+            "resolve_failed", "orphan_pending", "orphaned")
 
 
 @router.get("", response_model=list[FailedImportOut])
@@ -105,13 +105,15 @@ async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db))
     """Accept or reject several suggestions at once: {"ids": [...], "action": "accept"|"reject"}."""
     ids = payload.get("ids") or []
     action = payload.get("action")
-    if action not in ("accept", "reject") or not ids:
-        raise HTTPException(status_code=400, detail="Body must be {ids: [...], action: accept|reject}")
+    if action not in ("accept", "reject", "confirm_orphan") or not ids:
+        raise HTTPException(status_code=400, detail="Body must be {ids: [...], action: accept|reject|confirm_orphan}")
     results = []
     for item_id in ids:
         try:
             if action == "accept":
                 results.append(await _accept(item_id, db))
+            elif action == "confirm_orphan":
+                results.append(_confirm_orphan(item_id, db))
             else:
                 results.append(_reject(item_id, db))
         except HTTPException as e:
@@ -185,6 +187,20 @@ def _reject(item_id: int, db: Session) -> dict:
     return {"id": item.id, "status": item.status}
 
 
+def _confirm_orphan(item_id: int, db: Session) -> dict:
+    """User sign-off on a confirmed-missing download: orphan_pending → orphaned."""
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    if item.status != "orphan_pending":
+        raise HTTPException(status_code=400, detail="Item is not awaiting orphan confirmation")
+    item.status = "orphaned"
+    item.resolved_at = datetime.utcnow()
+    item.message = ((item.message + " | ") if item.message else "") + "Orphan confirmed by user"
+    db.commit()
+    return {"id": item.id, "status": item.status}
+
+
 async def _remove_from_download_clients(download_id: str, db: Session) -> list[str]:
     """Try each enabled download-client integration until one removes the torrent."""
     from app.api.v1.integrations import DOWNLOAD_CLIENT_NAMES
@@ -253,6 +269,27 @@ def set_match(item_id: int, body: dict = Body(...), db: Session = Depends(get_db
 @router.post("/{item_id}/accept")
 async def accept_import(item_id: int, db: Session = Depends(get_db)):
     return await _accept(item_id, db)
+
+
+@router.post("/{item_id}/confirm-orphan")
+def confirm_orphan(item_id: int, db: Session = Depends(get_db)):
+    return _confirm_orphan(item_id, db)
+
+
+@router.post("/{item_id}/keep")
+def keep_import(item_id: int, db: Session = Depends(get_db)):
+    """Dismiss the orphan verdict: put the row back in triage. If the download is
+    truly gone, the next scan cycle will re-flag it."""
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    if item.status != "orphan_pending":
+        raise HTTPException(status_code=400, detail="Item is not awaiting orphan confirmation")
+    item.status = "suggested"
+    item.resolved_at = None
+    item.message = ((item.message + " | ") if item.message else "") + "Orphan dismissed — kept in triage"
+    db.commit()
+    return {"id": item.id, "status": item.status}
 
 
 @router.post("/{item_id}/reject")

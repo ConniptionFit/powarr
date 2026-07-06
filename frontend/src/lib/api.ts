@@ -120,6 +120,7 @@ export interface ImportMatchingSettings {
   number_weight: number;
   title_only_cap: number;
   anime_absolute_numbering: boolean;
+  orphan_auto_purge: boolean;
 }
 
 export interface OllamaSettings {
@@ -204,6 +205,7 @@ export interface ImportStats {
   rejected: number;
   closed_external: number;
   resolve_failed: number;
+  orphan_pending: number;
   orphaned: number;
   by_service: Record<string, number>;
   auto_resolved_7d: number;
@@ -228,10 +230,14 @@ export const importsApi = {
   reject: (id: number, removeDownload = false) =>
     req<{ id: number; status: string; download_client?: string[] }>(
       `/imports/${id}/reject?remove_download=${removeDownload}`, { method: "POST" }),
-  batch: (ids: number[], action: "accept" | "reject") =>
+  batch: (ids: number[], action: "accept" | "reject" | "confirm_orphan") =>
     req<{ results: Array<Record<string, unknown>> }>("/imports/batch", {
       method: "POST", body: JSON.stringify({ ids, action }),
     }),
+  confirmOrphan: (id: number) =>
+    req<{ id: number; status: string }>(`/imports/${id}/confirm-orphan`, { method: "POST" }),
+  keep: (id: number) =>
+    req<{ id: number; status: string }>(`/imports/${id}/keep`, { method: "POST" }),
   files: (id: number) =>
     req<{ files: ImportFileDetail[]; message: string | null }>(`/imports/${id}/files`),
   candidates: (id: number, query?: string) =>

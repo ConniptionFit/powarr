@@ -6,6 +6,7 @@ an optional local-LLM signal (never the sole source of truth)."""
 import asyncio
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
@@ -20,7 +21,7 @@ from app.services import llm_assist
 logger = logging.getLogger("powarr")
 
 STUCK_STATES = {"importPending", "importFailed", "importBlocked"}
-OPEN_STATUSES = ("suggested", "auto_resolved", "accepted", "rejected")
+OPEN_STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "orphan_pending")
 
 _SEASON_EP_RE = re.compile(r"[sS](\d{1,2})[eE](\d{1,3})")
 _SEASON_RANGE_RE = re.compile(r"\b[sS](\d{1,2})\s*-\s*[sS]?(\d{1,2})\b")
@@ -492,9 +493,48 @@ def decide_orphans(download_ids: set[str], client_results: list[set[str] | None]
     return {d for d in download_ids if d.lower() not in present}
 
 
-async def _check_orphans(db, summary: dict) -> None:
+def orphan_fs_state(output_path: str | None) -> str:
+    """Filesystem leg of the orphan presence check (pure, unit-tested).
+
+    "present"  — the queue record's output path still exists on disk (the file
+                 landed even though the torrent is gone) → not an orphan.
+    "absent"   — the path is confirmed gone.
+    "unknown"  — no output path was recorded; nothing to check.
+    "error"    — the path couldn't be stat'ed (permissions, mount trouble) —
+                 same rule as an unreachable client: never read an error as "gone".
+    An unmounted media path stats as FileNotFoundError → "absent", which just
+    falls back to the client-only decision (v0.6.0 behavior)."""
+    if not output_path:
+        return "unknown"
+    try:
+        os.stat(output_path)
+        return "present"
+    except (FileNotFoundError, NotADirectoryError):
+        return "absent"
+    except OSError:
+        return "error"
+
+
+def decide_orphan_status(fs_state: str, auto_purge: bool) -> str | None:
+    """Second gate after decide_orphans (pure, unit-tested): fold in the
+    filesystem check and the auto-purge toggle. None = leave the row alone."""
+    if fs_state in ("present", "error"):
+        return None
+    return "orphaned" if auto_purge else "orphan_pending"
+
+
+def _row_output_path(row) -> str | None:
+    try:
+        return json.loads(row.raw_metadata or "{}").get("outputPath")
+    except (ValueError, TypeError):
+        return None
+
+
+async def _check_orphans(db, cfg: ImportMatchingSettings, summary: dict) -> None:
     """Pending rows whose download vanished from every configured download client
-    can never be completed — mark them orphaned (terminal, visible in triage).
+    (and whose output path isn't on disk) can never be completed. Default: mark
+    them orphan_pending and let the user confirm in triage; with orphan_auto_purge
+    on they go straight to orphaned (terminal).
     Runs inside the existing scan cycle: one batched presence query per client."""
     from app.api.v1.integrations import DOWNLOAD_CLIENT_NAMES
     from app.api.v1.integrations import _get_client as _download_client
@@ -524,14 +564,32 @@ async def _check_orphans(db, summary: dict) -> None:
         return
     now = datetime.utcnow()
     for row in rows:
-        if row.download_id.lower() in orphaned:
-            row.status = "orphaned"
+        if row.download_id.lower() not in orphaned:
+            continue
+        fs = orphan_fs_state(_row_output_path(row))
+        new_status = decide_orphan_status(fs, cfg.orphan_auto_purge)
+        if new_status is None:
+            if fs == "present":
+                logger.info(f"Orphan check: '{row.raw_title}' ({row.source_app}) gone from all "
+                            f"download clients but its output path still exists on disk — not orphaned")
+            else:
+                logger.warning(f"Orphan check: couldn't stat output path for '{row.raw_title}' "
+                               f"({row.source_app}) — skipping the orphan decision this cycle")
+            continue
+        row.status = new_status
+        if new_status == "orphaned":
             row.resolved_at = now
             row.message = ((row.message + " | ") if row.message else "") + \
                 "Download no longer exists in any download client"
             summary["orphaned"] += 1
             logger.info(f"Orphan check: '{row.raw_title}' ({row.source_app}) gone from "
-                        f"all download clients — marked orphaned")
+                        f"all download clients — marked orphaned (auto-purge on)")
+        else:
+            row.message = ((row.message + " | ") if row.message else "") + \
+                "Download no longer exists in any download client — confirm to mark orphaned"
+            summary["orphan_pending"] += 1
+            logger.info(f"Orphan check: '{row.raw_title}' ({row.source_app}) gone from "
+                        f"all download clients — awaiting orphan confirmation")
     db.commit()
 
 
@@ -590,7 +648,7 @@ async def scan_once() -> dict:
     """One detection cycle across all enabled *arr apps. Returns a per-app summary."""
     summary: dict = {"scanned": [], "new_suggestions": 0, "auto_resolved": 0, "skipped_existing": 0,
                      "below_floor": 0, "in_grace": 0, "closed_external": 0, "verified": 0,
-                     "resolve_failed": 0, "orphaned": 0}
+                     "resolve_failed": 0, "orphaned": 0, "orphan_pending": 0}
     db = SessionLocal()
     try:
         cfg, ollama = load_settings(db)
@@ -694,15 +752,15 @@ async def scan_once() -> dict:
                     summary["new_suggestions"] += 1
                 db.add(item)
                 db.commit()
-        await _check_orphans(db, summary)
+        await _check_orphans(db, cfg, summary)
     finally:
         db.close()
 
     if any(summary[k] for k in ("new_suggestions", "auto_resolved", "closed_external",
-                                "resolve_failed", "orphaned")):
+                                "resolve_failed", "orphaned", "orphan_pending")):
         publish({"type": "scan", **{k: summary[k] for k in
                                     ("new_suggestions", "auto_resolved", "closed_external",
-                                     "resolve_failed", "orphaned")}})
+                                     "resolve_failed", "orphaned", "orphan_pending")}})
         await _notify_scan(summary)
     return summary
 
@@ -722,6 +780,8 @@ async def _notify_scan(summary: dict) -> None:
                 parts.append(f"{summary['resolve_failed']} push failure(s)")
             if summary.get("orphaned"):
                 parts.append(f"{summary['orphaned']} orphaned (download gone)")
+            if summary.get("orphan_pending"):
+                parts.append(f"{summary['orphan_pending']} confirmed missing — awaiting orphan confirmation")
             if not parts:
                 return
             priority = "high" if summary["resolve_failed"] else "default"

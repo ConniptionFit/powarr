@@ -17,6 +17,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   rejected: { label: "Rejected", cls: "bg-red-900/60 text-red-300" },
   closed_external: { label: "Self-resolved", cls: "bg-surface-overlay text-slate-300" },
   resolve_failed: { label: "Push failed", cls: "bg-red-900/60 text-red-300" },
+  orphan_pending: { label: "Confirm orphan", cls: "bg-orange-900/60 text-orange-300" },
   orphaned: { label: "Orphaned", cls: "bg-surface-overlay text-slate-300" },
 };
 
@@ -205,7 +206,7 @@ function FileDetails({ importId }: { importId: number }) {
   );
 }
 
-const FILTERS = ["suggested", "resolve_failed", "auto_resolved", "accepted", "rejected", "orphaned", ""] as const;
+const FILTERS = ["suggested", "resolve_failed", "orphan_pending", "auto_resolved", "accepted", "rejected", "orphaned", ""] as const;
 
 export default function FailedImports() {
   const qc = useQueryClient();
@@ -312,9 +313,21 @@ export default function FailedImports() {
   });
 
   const batchMut = useMutation({
-    mutationFn: ({ ids, action }: { ids: number[]; action: "accept" | "reject" }) => importsApi.batch(ids, action),
+    mutationFn: ({ ids, action }: { ids: number[]; action: "accept" | "reject" | "confirm_orphan" }) => importsApi.batch(ids, action),
     onSuccess: r => { setActionMsg(`Batch done: ${r.results.length} item(s) processed`); invalidate(); },
     onError: (e: Error) => setActionMsg(`Batch failed: ${e.message}`),
+  });
+
+  const confirmOrphanMut = useMutation({
+    mutationFn: (id: number) => importsApi.confirmOrphan(id),
+    onSuccess: () => invalidate(),
+    onError: (e: Error) => setActionMsg(`Confirm failed: ${e.message}`),
+  });
+
+  const keepMut = useMutation({
+    mutationFn: (id: number) => importsApi.keep(id),
+    onSuccess: () => { setActionMsg("Kept in triage — the next scan re-checks it"); invalidate(); },
+    onError: (e: Error) => setActionMsg(`Keep failed: ${e.message}`),
   });
 
   const llmRunMut = useMutation({
@@ -343,7 +356,12 @@ export default function FailedImports() {
       return next;
     });
   };
-  const allSelectable = sortedItems.filter(i => i.status === "suggested" || i.status === "resolve_failed");
+  const allSelectable = sortedItems.filter(i =>
+    i.status === "suggested" || i.status === "resolve_failed" || i.status === "orphan_pending");
+  // Orphan-pending rows take confirm/keep, not accept/reject — the batch bar
+  // switches wholesale when the selection is entirely orphan-pending.
+  const selectedOrphanCount = sortedItems.filter(i => selected.has(i.id) && i.status === "orphan_pending").length;
+  const orphanBatch = selected.size > 0 && selectedOrphanCount === selected.size;
   const toggleSelectAll = () => {
     setSelected(prev => prev.size === allSelectable.length && allSelectable.length > 0
       ? new Set() : new Set(allSelectable.map(i => i.id)));
@@ -358,7 +376,7 @@ export default function FailedImports() {
   const filterCount = (f: string): number | null => {
     if (!stats) return null;
     if (f === "") return stats.suggested + stats.auto_resolved + stats.accepted + stats.rejected
-      + stats.closed_external + stats.resolve_failed + stats.orphaned;
+      + stats.closed_external + stats.resolve_failed + stats.orphan_pending + stats.orphaned;
     return (stats as unknown as Record<string, number>)[f] ?? null;
   };
 
@@ -493,28 +511,41 @@ export default function FailedImports() {
       {selected.size > 0 && (
         <div className="flex items-center gap-3 mb-4 px-4 py-2.5 bg-brand/10 border border-brand/30 rounded-lg">
           <span className="text-sm text-brand-light">{selected.size} selected</span>
-          <button
-            onClick={() => batchMut.mutate({ ids: [...selected], action: "accept" })}
-            disabled={batchMut.isPending}
-            className="px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-xs disabled:opacity-50"
-          >
-            Accept Selected
-          </button>
-          <button
-            onClick={() => batchMut.mutate({ ids: [...selected], action: "reject" })}
-            disabled={batchMut.isPending}
-            className="px-3 py-1 bg-red-700 hover:bg-red-600 text-white rounded text-xs disabled:opacity-50"
-          >
-            Reject Selected
-          </button>
-          <button
-            onClick={() => llmRunMut.mutate([...selected])}
-            disabled={llmRunMut.isPending}
-            title="Score the selected items with the local LLM"
-            className="flex items-center gap-1.5 px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-xs disabled:opacity-50"
-          >
-            <Bot size={12} /> Run LLM on Selected
-          </button>
+          {orphanBatch ? (
+            <button
+              onClick={() => batchMut.mutate({ ids: [...selected], action: "confirm_orphan" })}
+              disabled={batchMut.isPending}
+              title="Confirm these downloads are gone — mark them orphaned"
+              className="px-3 py-1 bg-orange-700 hover:bg-orange-600 text-white rounded text-xs disabled:opacity-50"
+            >
+              Confirm Orphans Selected
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => batchMut.mutate({ ids: [...selected], action: "accept" })}
+                disabled={batchMut.isPending}
+                className="px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-xs disabled:opacity-50"
+              >
+                Accept Selected
+              </button>
+              <button
+                onClick={() => batchMut.mutate({ ids: [...selected], action: "reject" })}
+                disabled={batchMut.isPending}
+                className="px-3 py-1 bg-red-700 hover:bg-red-600 text-white rounded text-xs disabled:opacity-50"
+              >
+                Reject Selected
+              </button>
+              <button
+                onClick={() => llmRunMut.mutate([...selected])}
+                disabled={llmRunMut.isPending}
+                title="Score the selected items with the local LLM"
+                className="flex items-center gap-1.5 px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-xs disabled:opacity-50"
+              >
+                <Bot size={12} /> Run LLM on Selected
+              </button>
+            </>
+          )}
           <button onClick={() => setSelected(new Set())} className="text-xs text-slate-400 hover:text-white ml-auto">
             Clear
           </button>
@@ -567,12 +598,13 @@ export default function FailedImports() {
             <tbody className="divide-y divide-purple-900/20">
               {sortedItems.map((item: FailedImport) => {
                 const actionable = item.status === "suggested" || item.status === "resolve_failed";
+                const orphanPending = item.status === "orphan_pending";
                 const isExpanded = expanded === item.id;
                 return (
                   <>
                     <tr key={item.id} className="hover:bg-white/5 transition-colors">
                       <td className="px-3 py-3">
-                        {actionable && (
+                        {(actionable || orphanPending) && (
                           <input type="checkbox" className="accent-purple-500"
                                  checked={selected.has(item.id)} onChange={() => toggleSelect(item.id)} />
                         )}
@@ -583,6 +615,26 @@ export default function FailedImports() {
                         </td>
                       ))}
                       <td className="px-4 py-3">
+                        {orphanPending && (
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <button
+                              onClick={() => confirmOrphanMut.mutate(item.id)}
+                              disabled={confirmOrphanMut.isPending}
+                              title="Confirm — the download is gone from every client and disk; mark orphaned"
+                              className="px-2 py-1 bg-orange-700 hover:bg-orange-600 text-white rounded text-xs disabled:opacity-50"
+                            >
+                              Confirm Orphan
+                            </button>
+                            <button
+                              onClick={() => keepMut.mutate(item.id)}
+                              disabled={keepMut.isPending}
+                              title="Not an orphan — put it back in triage (the next scan re-checks it)"
+                              className="px-2 py-1 bg-surface-overlay hover:bg-white/10 text-slate-300 rounded text-xs disabled:opacity-50"
+                            >
+                              Keep
+                            </button>
+                          </div>
+                        )}
                         {actionable && (
                           <div className="flex items-center gap-1.5 justify-end">
                             {confirmAccept === item.id ? (

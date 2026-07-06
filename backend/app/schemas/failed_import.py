@@ -34,6 +34,7 @@ class ImportStats(BaseModel):
     rejected: int = 0
     closed_external: int = 0
     resolve_failed: int = 0
+    orphan_pending: int = 0
     orphaned: int = 0
     by_service: dict[str, int] = {}  # suggested count per source app
     auto_resolved_7d: int = 0

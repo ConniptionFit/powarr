@@ -1,9 +1,12 @@
 """Unit tests for orphaned failed-import cleanup — the positive-confirmation
-decision rule and the qBittorrent login-response interpretation it depends on.
+decision rule (download clients + filesystem legs, and the prompt/auto-purge
+gate) and the qBittorrent login-response interpretation it depends on.
 Run inside the container: python -m unittest discover -s app/tests -v"""
+import os
+import tempfile
 import unittest
 
-from app.services.import_matcher import decide_orphans
+from app.services.import_matcher import decide_orphans, decide_orphan_status, orphan_fs_state
 
 
 class TestDecideOrphans(unittest.TestCase):
@@ -32,6 +35,47 @@ class TestDecideOrphans(unittest.TestCase):
 
     def test_empty_ids(self):
         self.assertEqual(decide_orphans(set(), [set()]), set())
+
+
+class TestOrphanFsState(unittest.TestCase):
+    """Filesystem leg of the presence check: present rescues the row, an
+    un-stat-able path aborts (same rule as an unreachable client)."""
+
+    def test_no_path_recorded_is_unknown(self):
+        self.assertEqual(orphan_fs_state(None), "unknown")
+        self.assertEqual(orphan_fs_state(""), "unknown")
+
+    def test_existing_path_is_present(self):
+        with tempfile.NamedTemporaryFile() as f:
+            self.assertEqual(orphan_fs_state(f.name), "present")
+
+    def test_missing_path_is_absent(self):
+        self.assertEqual(orphan_fs_state("/no/such/path/anywhere.mkv"), "absent")
+
+    def test_path_component_is_a_file_is_absent(self):
+        # ENOTDIR — a parent component is a regular file → the path can't exist
+        with tempfile.NamedTemporaryFile() as f:
+            self.assertEqual(orphan_fs_state(os.path.join(f.name, "child.mkv")), "absent")
+
+
+class TestDecideOrphanStatus(unittest.TestCase):
+    """Prompt vs auto-purge gate, applied only after every client confirmed absence."""
+
+    def test_default_prompts_for_confirmation(self):
+        self.assertEqual(decide_orphan_status("absent", auto_purge=False), "orphan_pending")
+        self.assertEqual(decide_orphan_status("unknown", auto_purge=False), "orphan_pending")
+
+    def test_auto_purge_goes_straight_to_orphaned(self):
+        self.assertEqual(decide_orphan_status("absent", auto_purge=True), "orphaned")
+        self.assertEqual(decide_orphan_status("unknown", auto_purge=True), "orphaned")
+
+    def test_file_on_disk_is_never_orphaned(self):
+        self.assertIsNone(decide_orphan_status("present", auto_purge=False))
+        self.assertIsNone(decide_orphan_status("present", auto_purge=True))
+
+    def test_fs_error_aborts_even_with_auto_purge(self):
+        self.assertIsNone(decide_orphan_status("error", auto_purge=False))
+        self.assertIsNone(decide_orphan_status("error", auto_purge=True))
 
 
 class TestQbitLoginParsing(unittest.TestCase):

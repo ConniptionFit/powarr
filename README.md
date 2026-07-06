@@ -27,7 +27,7 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 - Import push mirrors the proven `manualimport` flow and is **verified against history** afterward — silent failures surface back into triage
 - Batch accept/reject, per-file mapping preview, manual match override, reject-and-remove-download (qBittorrent/Transmission), live SSE updates
 - Stale rows auto-close when a download leaves the queue on its own
-- **Orphan cleanup (v0.6.0)**: pending suggestions whose download no longer exists in **any** configured download client are marked `orphaned` (terminal, visible under its own filter) — absence requires positive confirmation from every client; unreachable clients skip the decision for that cycle, never inferring "missing" from an error
+- **Orphan cleanup (v0.6.0, prompt-first since v0.6.1)**: pending suggestions whose download no longer exists in **any** configured download client — and whose recorded output path isn't on disk — are flagged for confirmation (`Confirm orphan` filter) with per-row **Confirm Orphan / Keep** buttons and batch confirm; confirming marks them `orphaned` (terminal). An **Auto-Purge Confirmed-Missing** toggle (Settings → Failed Import Matching, off by default) skips the prompt and marks them orphaned immediately. Absence requires positive confirmation from every client; unreachable clients — or an output path that can't be checked — skip the decision for that cycle, never inferring "missing" from an error
 
 ### Local LLM Assist (optional, off by default)
 - Ollama native or OpenAI-compatible (`LM Studio`, `llama.cpp server`) endpoints
