@@ -208,6 +208,60 @@ async def explain_media(item_id: int, force: bool = Query(False), db: Session = 
             "cached": False, "generated_at": item.llm_rationale_at}
 
 
+@router.get("/{item_id}/explain/stream")
+async def explain_media_stream(item_id: int, db: Session = Depends(get_db)):
+    """SSE variant of explain: streams rationale tokens as they generate (verbose
+    can take 45-60s — this makes the wait visible), then persists the full result
+    to the same cache the POST endpoint uses. Events: {"delta": ...}* then
+    {"done": true, "rationale": ..., "message": ...}. The POST endpoint remains
+    the non-streaming/cached path."""
+    import json as _json
+    from fastapi.responses import StreamingResponse
+    from app.database import SessionLocal
+    from app.schemas.settings import OllamaSettings
+    from app.services import llm_assist, media_llm
+    if not db.query(MediaItem.id).filter_by(id=item_id).first():
+        raise HTTPException(status_code=404, detail="Media item not found")
+    ollama = _get_setting(db, "ollama", OllamaSettings)
+    if not (ollama.enabled and ollama.host and ollama.model):
+        raise HTTPException(status_code=400, detail="LLM assist not configured")
+    if not llm_assist.acquire_slot():
+        raise HTTPException(status_code=409, detail="Another LLM task is already running")
+
+    async def stream():
+        # Own session: the request-scoped one may close before streaming finishes.
+        sdb = SessionLocal()
+        try:
+            item = sdb.query(MediaItem).filter_by(id=item_id).first()
+            full = ""
+            if ollama.verbosity == "minimal":
+                # One-word verdict — nothing to stream; reuse the plain path.
+                full = await media_llm.generate_and_store(item, ollama, sdb) or ""
+                if full:
+                    yield f"data: {_json.dumps({'delta': full})}\n\n"
+            else:
+                async for chunk in llm_assist.explain_deletion_stream(
+                        ollama.host, ollama.model, media_llm.item_summary(item),
+                        ollama.api_style, template=ollama.explain_prompt,
+                        verbosity=ollama.verbosity, model_size=ollama.model_size,
+                        keep_alive_minutes=ollama.keep_alive_minutes):
+                    full += chunk
+                    yield f"data: {_json.dumps({'delta': chunk})}\n\n"
+                full = full.strip()
+                if full:
+                    item.llm_rationale = full
+                    item.llm_rationale_at = datetime.utcnow()
+                    item.llm_rationale_key = media_llm.rationale_key(ollama, item)
+                    sdb.commit()
+            yield f"data: {_json.dumps({'done': True, 'rationale': full or None, 'message': None if full else 'No response from LLM'})}\n\n"
+        finally:
+            llm_assist.release_slot()
+            sdb.close()
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @router.delete("/{item_id}")
 async def delete_media(item_id: int, db: Session = Depends(get_db)):
     item = db.query(MediaItem).filter_by(id=item_id).first()

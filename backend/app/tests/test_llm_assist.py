@@ -225,6 +225,62 @@ class TestReviewMinimalSalvage(unittest.TestCase):
         self.assertIsNone(_stubbed_review("<think>I agree but never finish", verbosity="brief"))
 
 
+class TestStreamVisible(unittest.TestCase):
+    def test_plain_text_passes_through(self):
+        self.assertEqual(llm_assist._stream_visible("a good candidate"), "a good candidate")
+
+    def test_open_think_suppressed_until_closed(self):
+        self.assertEqual(llm_assist._stream_visible("<think>hmm"), "")
+        self.assertEqual(llm_assist._stream_visible("<think>hmm</think>DELETE"), "DELETE")
+
+    def test_partial_tag_held_back(self):
+        # "<thi" could become "<think>" on the next chunk — must not be emitted.
+        self.assertEqual(llm_assist._stream_visible("answer <thi"), "answer ")
+        self.assertEqual(llm_assist._stream_visible("answer <"), "answer ")
+        # A "<" that turns out to be ordinary text is released once disambiguated.
+        self.assertEqual(llm_assist._stream_visible("answer <b>"), "answer <b>")
+
+    def test_monotonic_growth_across_chunks(self):
+        acc = ""
+        emitted = ""
+        for chunk in ["Keep it: ", "<thi", "nk>secret", "</th", "ink>", " watched 5x"]:
+            acc += chunk
+            vis = llm_assist._stream_visible(acc)
+            self.assertTrue(vis.startswith(emitted))  # never retracts shown text
+            emitted = vis
+        self.assertEqual(emitted, "Keep it:  watched 5x")
+
+
+class TestExplainStream(unittest.TestCase):
+    def _run(self, chunks, **kwargs):
+        import asyncio
+
+        async def fake_stream(*a, **k):
+            for c in chunks:
+                yield c
+
+        async def collect():
+            out = []
+            with patch.object(llm_assist, "_generate_stream", new=fake_stream):
+                async for piece in llm_assist.explain_deletion_stream("h", "m", "item", **kwargs):
+                    out.append(piece)
+            return out
+
+        return asyncio.run(collect())
+
+    def test_streams_visible_text_only(self):
+        pieces = self._run(["<think>reasoning ", "here</think>", "Solid delete", " candidate"],
+                           verbosity="verbose")
+        self.assertEqual("".join(pieces), "Solid delete candidate")
+
+    def test_brief_stops_at_first_line(self):
+        pieces = self._run(["One short sentence.\nSecond line never shows"])
+        self.assertEqual("".join(pieces), "One short sentence.")
+
+    def test_all_think_streams_nothing(self):
+        self.assertEqual(self._run(["<think>never closes, never answers"]), [])
+
+
 class TestRationaleKey(unittest.TestCase):
     """media_llm.rationale_key — the cache must miss when the prompt config or the
     item's scoring-relevant fields change, and hit otherwise."""

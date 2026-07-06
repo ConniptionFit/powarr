@@ -220,6 +220,21 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
 
 
 _THINK_RE = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL | re.IGNORECASE)
+# A partial "<think>" tag prefix at the very end of accumulated stream text —
+# held back until enough bytes arrive to know whether it's a real tag.
+_PARTIAL_THINK_RE = re.compile(r"<(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$", re.IGNORECASE)
+
+
+def _stream_visible(acc: str) -> str:
+    """The safely-displayable prefix of accumulated streaming text: complete and
+    unclosed <think> blocks removed, plus any trailing partial '<think' tag held
+    back (it may become a full tag on the next chunk). Monotonic in acc, so a
+    streamer can emit only the delta beyond what it already sent."""
+    vis = _THINK_RE.sub("", acc)
+    m = _PARTIAL_THINK_RE.search(vis)
+    if m:
+        vis = vis[:m.start()]
+    return vis
 
 
 def _strip_think(text: str) -> str:
@@ -229,6 +244,91 @@ def _strip_think(text: str) -> str:
     </think>, everything from <think> on is chain-of-thought and must go (the reply
     then fails soft to None rather than leaking)."""
     return _THINK_RE.sub("", text or "").strip()
+
+
+async def _generate_stream(host: str, model: str, prompt: str, api_style: str = "ollama",
+                           verbose: bool = False, model_size: str = "medium",
+                           keep_alive_minutes: int = 10):
+    """Streaming counterpart of _generate: an async generator of raw text chunks.
+    Fail-soft like everything else — any error just ends the stream."""
+    base = _base_url(host)
+    if not base or not model:
+        return
+    max_tokens, timeout = _limits(model_size, verbose)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            if api_style == "openai":
+                body: dict[str, Any] = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0,
+                    "max_tokens": max_tokens,
+                    "stream": True,
+                }
+                async with client.stream("POST", f"{base}/v1/chat/completions", json=body) as r:
+                    r.raise_for_status()
+                    async for line in r.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        delta = (json.loads(data).get("choices") or [{}])[0].get("delta", {}).get("content")
+                        if delta:
+                            yield delta
+                return
+            body = {
+                "model": model,
+                "prompt": prompt,
+                "stream": True,
+                "options": {"temperature": 0.0, "num_predict": max_tokens},
+            }
+            if keep_alive_minutes and keep_alive_minutes > 0:
+                body["keep_alive"] = f"{int(keep_alive_minutes)}m"
+            async with client.stream("POST", f"{base}/api/generate", json=body) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line.strip():
+                        continue
+                    obj = json.loads(line)
+                    if obj.get("response"):
+                        yield obj["response"]
+                    if obj.get("done"):
+                        break
+    except Exception as e:
+        logger.info(f"LLM stream unavailable: {e}")
+
+
+async def explain_deletion_stream(host: str, model: str, item_summary: str,
+                                  api_style: str = "ollama", template: str = "",
+                                  verbosity: str = "brief", model_size: str = "medium",
+                                  keep_alive_minutes: int = 10):
+    """Streaming deletion rationale: yields displayable (think-stripped) text
+    chunks, honoring the same caps as explain_deletion — brief stops at the first
+    line / 300 chars, verbose at 1500. Minimal isn't streamed (a one-word verdict
+    has nothing to stream) — callers use explain_deletion for it."""
+    verbose = verbosity == "verbose"
+    limit = 1500 if verbose else 300
+    prompt = build_explain_prompt(template, item_summary, verbosity)
+    emitted = 0
+    acc = ""
+    async for chunk in _generate_stream(host, model, prompt, api_style, verbose=verbose,
+                                        model_size=model_size,
+                                        keep_alive_minutes=keep_alive_minutes):
+        acc += chunk
+        vis = _stream_visible(acc).lstrip()
+        done = False
+        if not verbose and "\n" in vis:
+            vis = vis.split("\n")[0]
+            done = True
+        if len(vis) >= limit:
+            vis = vis[:limit]
+            done = True
+        if len(vis) > emitted:
+            yield vis[emitted:]
+            emitted = len(vis)
+        if done:
+            return
 
 
 # Fixed steps for confidence_style="classified" — the model only classifies,

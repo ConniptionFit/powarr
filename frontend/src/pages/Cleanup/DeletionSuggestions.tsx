@@ -69,6 +69,7 @@ export default function DeletionSuggestions() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null); // id or "show:title"
   const [explainBusy, setExplainBusy] = useState<number | null>(null);
   const [explainMsg, setExplainMsg] = useState<Record<number, string>>({});
+  const [streamText, setStreamText] = useState<Record<number, string>>({});
 
   const fetchType = mediaType || undefined;
   const params: Record<string, string | number | boolean> = {
@@ -114,19 +115,47 @@ export default function DeletionSuggestions() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["media"] }),
   });
 
-  const explain = async (item: MediaItem, force: boolean) => {
+  // Streams rationale tokens over SSE so long verbose generations are visible as
+  // they happen; falls back to the plain POST when the stream can't start
+  // (busy 409, not configured, proxy without SSE support).
+  const explain = (item: MediaItem) => {
     setExplainBusy(item.id);
     setExplainMsg(m => ({ ...m, [item.id]: "" }));
-    try {
-      const r = await mediaApi.explain(item.id, force);
-      if (r.rationale) qc.invalidateQueries({ queryKey: ["media"] });
-      else setExplainMsg(m => ({ ...m, [item.id]: r.message ?? "No response from LLM" }));
-    } catch (e: unknown) {
-      setExplainMsg(m => ({ ...m, [item.id]: `Explain failed: ${e instanceof Error ? e.message : String(e)}` }));
-    } finally {
+    setStreamText(s => ({ ...s, [item.id]: "" }));
+    let gotDelta = false;
+    const es = new EventSource(`/api/v1/media/${item.id}/explain/stream`);
+    const finish = () => { es.close(); setExplainBusy(null); };
+    es.onmessage = ev => {
+      try {
+        const d = JSON.parse(ev.data);
+        if (d.delta) { gotDelta = true; setStreamText(s => ({ ...s, [item.id]: (s[item.id] ?? "") + d.delta })); }
+        if (d.done) {
+          if (!d.rationale) setExplainMsg(m => ({ ...m, [item.id]: d.message ?? "No response from LLM" }));
+          qc.invalidateQueries({ queryKey: ["media"] });
+          finish();
+        }
+      } catch { /* keepalive */ }
+    };
+    es.onerror = async () => {
+      es.close();
+      if (gotDelta) { qc.invalidateQueries({ queryKey: ["media"] }); setExplainBusy(null); return; }
+      try {
+        const r = await mediaApi.explain(item.id, !!item.llm_rationale);
+        if (r.rationale) qc.invalidateQueries({ queryKey: ["media"] });
+        else setExplainMsg(m => ({ ...m, [item.id]: r.message ?? "No response from LLM" }));
+      } catch (e: unknown) {
+        setExplainMsg(m => ({ ...m, [item.id]: `Explain failed: ${e instanceof Error ? e.message : String(e)}` }));
+      }
       setExplainBusy(null);
-    }
+    };
   };
+
+  // Once fresh list data lands, cached rationales are current — drop finished
+  // stream buffers so the stored text (with its date stamp) takes over.
+  useEffect(() => {
+    if (explainBusy === null) setStreamText({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawItems]);
 
   // A finished batch LLM run publishes over the same SSE channel the import
   // scanner uses — refresh so freshly cached rationales appear without a reload.
@@ -300,7 +329,7 @@ export default function DeletionSuggestions() {
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2 justify-end">
                             <button
-                              onClick={() => explain(item, !!item.llm_rationale)}
+                              onClick={() => explain(item)}
                               disabled={explainBusy !== null}
                               title={item.llm_rationale
                                 ? "Regenerate the LLM rationale (cached result shown below)"
@@ -325,16 +354,22 @@ export default function DeletionSuggestions() {
                           </div>
                         </td>
                       </tr>
-                      {(item.llm_rationale || explainMsg[item.id] || explainBusy === item.id) && (
+                      {(item.llm_rationale || explainMsg[item.id] || explainBusy === item.id || streamText[item.id]) && (
                         <tr className="bg-black/10">
                           <td colSpan={7} className="px-4 pb-3 pt-1">
                             <div className="flex items-start gap-2">
                               <Bot size={13} className="text-brand-light mt-0.5 shrink-0" />
                               <div className="min-w-0">
-                                {explainBusy === item.id && (
+                                {explainBusy === item.id && !streamText[item.id] && (
                                   <span className="text-slate-500 text-xs italic">Asking the LLM…</span>
                                 )}
-                                {explainBusy !== item.id && item.llm_rationale && (
+                                {streamText[item.id] && (
+                                  <span className="block whitespace-normal break-words text-slate-400 text-xs leading-relaxed">
+                                    {streamText[item.id]}
+                                    {explainBusy === item.id && <span className="text-brand-light animate-pulse">▍</span>}
+                                  </span>
+                                )}
+                                {explainBusy !== item.id && !streamText[item.id] && item.llm_rationale && (
                                   <>
                                     <ClampedText text={item.llm_rationale} />
                                     {item.llm_rationale_at && (
