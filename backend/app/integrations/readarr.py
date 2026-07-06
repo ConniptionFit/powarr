@@ -69,8 +69,10 @@ class ReadarrIntegration(BaseIntegration):
         the bare POST /manualimport route is the reprocess endpoint and never imports."""
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                # downloadId only + filter already-imported files — never widen the scan
+                # beyond the download (see the Sonarr seriesId incident, 2026-07-05)
                 r = await client.get(f"{self._base()}/manualimport", headers=self._headers(),
-                                     params={"downloadId": download_id, "filterExistingFiles": "false"})
+                                     params={"downloadId": download_id, "filterExistingFiles": "true"})
                 r.raise_for_status()
                 files = []
                 for f in r.json():

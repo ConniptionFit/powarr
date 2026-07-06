@@ -103,7 +103,9 @@ class RadarrIntegration(BaseIntegration):
         the bare POST /manualimport route is the reprocess endpoint and never imports."""
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-                params = {"downloadId": download_id, "filterExistingFiles": "false"}
+                # downloadId only + filter already-imported files — never widen the scan
+                # beyond the download (see the Sonarr seriesId incident, 2026-07-05)
+                params = {"downloadId": download_id, "filterExistingFiles": "true"}
                 r = await client.get(f"{self._base()}/manualimport", headers=self._headers(), params=params)
                 r.raise_for_status()
                 files = build_manual_import_files(r.json(), movie_id, download_id)

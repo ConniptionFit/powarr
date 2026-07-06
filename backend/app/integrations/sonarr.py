@@ -122,14 +122,29 @@ class SonarrIntegration(BaseIntegration):
         it never imports, and 404s when a candidate lacks a flat seriesId."""
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-                params = {"downloadId": download_id, "filterExistingFiles": "false"}
-                if series_id:
-                    params["seriesId"] = series_id
+                # downloadId ONLY, and filter already-imported files. NEVER add seriesId
+                # here: Sonarr's manualimport GET switches to scanning the SERIES' OWN
+                # LIBRARY FILES when seriesId is present, and importing those back onto
+                # themselves mass-deletes the library (2026-07-05 One Piece incident).
+                # series_id is applied later, as a mapping fallback per file entry.
+                params = {"downloadId": download_id, "filterExistingFiles": "true"}
                 r = await client.get(f"{self._base()}/manualimport", headers=self._headers(), params=params)
                 r.raise_for_status()
                 files = build_manual_import_files(r.json(), series_id, download_id)
                 if not files:
                     return {"ok": False, "message": "No importable files resolved for this download", "imported": 0}
+                # Hard guard: never import files that already live inside the series'
+                # own library folder — that means the scan scope is wrong and importing
+                # would churn/delete the library itself
+                if series_id:
+                    sr = await client.get(f"{self._base()}/series/{series_id}", headers=self._headers())
+                    series_path = (sr.json().get("path") or "").rstrip("/") if sr.status_code == 200 else ""
+                    if series_path:
+                        inside = sum(1 for f in files if f["path"].startswith(series_path + "/"))
+                        if inside:
+                            return {"ok": False, "imported": 0,
+                                    "message": f"Refusing import: {inside} candidate file(s) are inside the "
+                                               f"series library folder ({series_path}) — scan scope looks wrong"}
                 pr = await client.post(f"{self._base()}/command", headers=self._headers(),
                                        json={"name": "ManualImport", "files": files, "importMode": "move"})
                 if pr.status_code in (200, 201, 202):
