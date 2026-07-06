@@ -1,6 +1,6 @@
 # Powarr — Master Prompt (LLM IDE Agent)
 
-> **This is the authoritative agent context for Powarr.** Use this whole file as a prefix, together with the linked vault notes, before any future additions to the app. Supersedes [[LLM Context]] (legacy stub). Canonical copy: `Powarr/Master Prompt.md` in the Obsidian vault — keep this mirror identical. Last updated: 2026-07-05 (v0.6.2).
+> **This is the authoritative agent context for Powarr.** Use this whole file as a prefix, together with the linked vault notes, before any future additions to the app. Supersedes [[LLM Context]] (legacy stub). Canonical copy: `Powarr/Master Prompt.md` in the Obsidian vault — keep this mirror identical. Last updated: 2026-07-05 (v0.6.3).
 
 ## Identity & Purpose
 
@@ -10,7 +10,7 @@ You are an LLM IDE agent responsible for reviewing, maintaining, and extending *
 
 | Field | Value |
 |---|---|
-| Version | v0.6.2 |
+| Version | v0.6.3 |
 | Container | `powarr`, port `7979`, Docker host `10.1.1.2` (`ssh docker`, key auth) |
 | Source of truth | Host repo `/mnt/ServerFiles/Docker/composeFiles/powarr` (= build context) |
 | Local working clone | `~/Projects/powarr-v2` on the Mac — **edit here** |
@@ -52,7 +52,7 @@ You are an LLM IDE agent responsible for reviewing, maintaining, and extending *
 | Frontend / UI | Pages, components, UX | `frontend/src/`; only Tailwind classes defined in `tailwind.config.js` (`bg-surface*`, `bg-brand*`, `text-brand-light`); new pages need Route + nav in `App.tsx`; view-layout prefs → localStorage |
 | Security | Auth, secrets, exposed surface, CVEs, validation | `services/auth.py`, `api/v1/auth.py`, middleware; [[Security]]. TOTP/LAN-bypass live since v0.3.0 |
 | Docker & Deployment | Dockerfile, compose, env, lifecycle, backup/restore | [[Docker & Deployment]]. Compose file is gitignored — edit on host, never commit |
-| Failed Import Detection & Matching | Stuck imports, queue triage, confidence, auto-resolve, triage table, episode/anime/pack matching | `services/import_matcher.py`, `api/v1/imports.py`, FailedImport model; [[Failed Import Matching]]. Independent of deletion flow. Multi-variable episode scorer + deterministic rationale (v0.5.0), season-pack coverage (v0.5.1), orphan cleanup w/ positive-confirmation rule (v0.6.0), prompt-first orphan confirmation + filesystem presence leg + auto-purge toggle (v0.6.1), import push via ManualImport command — never POST /manualimport (v0.6.2) |
+| Failed Import Detection & Matching | Stuck imports, queue triage, confidence, auto-resolve, triage table, episode/anime/pack matching | `services/import_matcher.py`, `api/v1/imports.py`, FailedImport model; [[Failed Import Matching]]. Independent of deletion flow. Multi-variable episode scorer + deterministic rationale (v0.5.0), season-pack coverage (v0.5.1), orphan cleanup w/ positive-confirmation rule (v0.6.0), prompt-first orphan confirmation + filesystem presence leg + auto-purge toggle (v0.6.1), import push via ManualImport command — never POST /manualimport, never seriesId on the manualimport GET, library-folder guard (v0.6.2/v0.6.3, see incident in [[Future Improvements]]) |
 | Local LLM Assist | LLM connection/behavior, prompts, verbosity, on-demand runs, rationale | `services/llm_assist.py`; [[Local LLM Assist]]. Optional, fail-soft, blend 0.7/0.3. Single structured review call (`review_match`) since v0.5.0 |
 | Documentation & Knowledge Base | After any code change; explicit docs requests | Vault notes + repo README + this Master Prompt (and its `CLAUDE.md` mirror — keep both in sync) |
 
