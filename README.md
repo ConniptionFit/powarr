@@ -32,6 +32,7 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 ### Local LLM Assist (optional, off by default)
 - Ollama native or OpenAI-compatible (`LM Studio`, `llama.cpp server`) endpoints
 - Single structured review call per match: the LLM sees the deterministic scorer's per-variable results and returns `{agrees, confidence_adjustment, rationale}` — blended into confidence (never the sole signal); one-line deletion rationales on demand
+- **Built for weak hardware (v0.7.0)**: a **Model Size Profile** (small/medium/large) scales reply-length caps and timeouts to the model; Ollama **keep-alive** keeps the model loaded between sequential batch calls; every prompt-injected value is hard-capped so a pathological release name or queue message can't blow a small context window; one LLM task runs at a time app-wide (batch runs and per-item explain share a single-flight guard)
 - Fails soft everywhere — no LLM, no problem
 
 ### Platform

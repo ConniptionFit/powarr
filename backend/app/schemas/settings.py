@@ -43,6 +43,8 @@ class OllamaSettings(BaseModel):
     model: str = ""
     api_style: str = "ollama"  # ollama | openai (LM Studio, llama.cpp server, etc.)
     verbosity: str = "brief"  # brief | verbose — length of LLM explanations
+    model_size: str = "medium"  # small | medium | large — scales token caps/timeouts to the model
+    keep_alive_minutes: int = 10  # ollama keep_alive between calls; 0 = ollama default (unload)
     match_prompt: str = ""  # custom template for import matching; "" = built-in default
     explain_prompt: str = ""  # custom template for deletion rationale; "" = built-in default
 

@@ -425,6 +425,37 @@ function LLMAssistSection() {
         </select>
       </div>
 
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Model Size Profile</p>
+          <p className="text-slate-500 text-xs mt-0.5">Scales reply length and timeouts to the model. Small (1-3B) gets tight caps — small models ramble past what they can produce coherently</p>
+        </div>
+        <select
+          value={cfg.model_size}
+          onChange={e => setCfg(c => c ? { ...c, model_size: e.target.value } : c)}
+          className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"
+        >
+          <option value="small">Small (1-3B)</option>
+          <option value="medium">Medium (7-14B)</option>
+          <option value="large">Large (30B+)</option>
+        </select>
+      </div>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Keep Model Loaded (minutes)</p>
+          <p className="text-slate-500 text-xs mt-0.5">Ollama only: keep the model in memory between sequential calls so batch runs don't reload it every time. 0 = Ollama's default unload behavior</p>
+        </div>
+        <input
+          type="number"
+          min={0}
+          max={120}
+          value={cfg.keep_alive_minutes}
+          onChange={e => setCfg(c => c ? { ...c, keep_alive_minutes: Math.max(0, Number(e.target.value) || 0) } : c)}
+          className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6 w-24"
+        />
+      </div>
+
       <div className="py-4 border-b border-purple-900/20">
         <div className="flex items-center justify-between mb-2">
           <div>

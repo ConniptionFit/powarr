@@ -170,12 +170,20 @@ async def explain_media(item_id: int, db: Session = Depends(get_db)):
     if not (ollama.enabled and ollama.host and ollama.model):
         return {"rationale": None, "message": "LLM assist not configured"}
     from app.services import llm_assist
-    summary = (f"{item.title} ({item.year or 'unknown year'}), {item.media_type}, "
-               f"{round((item.file_size or 0) / 1024**3, 1)} GB, watched {item.watch_count}x, "
-               f"last watched {item.last_watched_at or 'never'}, deletion score {item.score}/100")
-    rationale = await llm_assist.explain_deletion(
-        ollama.host, ollama.model, summary, ollama.api_style,
-        template=ollama.explain_prompt, verbose=ollama.verbosity == "verbose")
+    if not llm_assist.acquire_slot():
+        # Same single-flight contract as the batch import run — one LLM task at a
+        # time, shared slot, so rapid clicks/tabs can't pile up parallel generations.
+        raise HTTPException(status_code=409, detail="Another LLM task is already running")
+    try:
+        summary = (f"{item.title} ({item.year or 'unknown year'}), {item.media_type}, "
+                   f"{round((item.file_size or 0) / 1024**3, 1)} GB, watched {item.watch_count}x, "
+                   f"last watched {item.last_watched_at or 'never'}, deletion score {item.score}/100")
+        rationale = await llm_assist.explain_deletion(
+            ollama.host, ollama.model, summary, ollama.api_style,
+            template=ollama.explain_prompt, verbose=ollama.verbosity == "verbose",
+            model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes)
+    finally:
+        llm_assist.release_slot()
     return {"rationale": rationale, "message": None if rationale else "No response from LLM"}
 
 

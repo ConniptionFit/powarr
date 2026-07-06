@@ -461,7 +461,8 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             det_summary=f"{match_rationale} (heuristic confidence {heuristic_confidence})",
             context=llm_context,
             api_style=ollama.api_style, template=ollama.match_prompt,
-            verbose=ollama.verbosity == "verbose")
+            verbose=ollama.verbosity == "verbose", model_size=ollama.model_size,
+            keep_alive_minutes=ollama.keep_alive_minutes)
         if llm:
             llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
             llm_rationale = f"[{'agrees' if llm['agrees'] else 'disagrees'}] {llm['rationale']}"
@@ -794,21 +795,18 @@ async def _notify_scan(summary: dict) -> None:
         logger.info(f"Scan notification failed (non-fatal): {e}")
 
 
-_llm_run_active = False
-
-
 def llm_run_active() -> bool:
-    return _llm_run_active
+    # Delegates to the shared single-flight slot in llm_assist, so a batch run and
+    # the Cleanup page's per-item explain can never hit the LLM host concurrently.
+    return llm_assist.slot_active()
 
 
 async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
     """On-demand LLM scoring of failed-import rows — either the given ids, or the
     backlog of open rows that never got an LLM signal. Sequential (one call at a
     time) to be gentle on the LLM host. Publishes an SSE event when done."""
-    global _llm_run_active
-    if _llm_run_active:
+    if not llm_assist.acquire_slot():
         return {"scored": 0, "skipped": 0, "message": "An LLM run is already in progress"}
-    _llm_run_active = True
     scored = skipped = 0
     try:
         db = SessionLocal()
@@ -836,7 +834,8 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
                     ollama.host, ollama.model, row.raw_title, row.matched_title,
                     det_summary=det_summary,
                     context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
-                    api_style=ollama.api_style, template=ollama.match_prompt, verbose=verbose)
+                    api_style=ollama.api_style, template=ollama.match_prompt, verbose=verbose,
+                    model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes)
                 if not llm:
                     skipped += 1
                     continue
@@ -849,7 +848,7 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
         finally:
             db.close()
     finally:
-        _llm_run_active = False
+        llm_assist.release_slot()
     logger.info(f"LLM rescore: {scored} scored, {skipped} skipped")
     publish({"type": "llm_run", "scored": scored, "skipped": skipped})
     return {"scored": scored, "skipped": skipped, "message": f"{scored} scored, {skipped} skipped"}

@@ -227,7 +227,8 @@ function OllamaCard() {
   // Spread the loaded config so behavior settings (verbosity, prompt templates —
   // managed in Settings → LLM Assist) survive connection-side saves.
   const buildPayload = () => ({
-    verbosity: "brief", match_prompt: "", explain_prompt: "",
+    verbosity: "brief", model_size: "medium", keep_alive_minutes: 10,
+    match_prompt: "", explain_prompt: "",
     ...(cfg ?? {}),
     enabled, host, model, api_style: apiStyle,
   });
