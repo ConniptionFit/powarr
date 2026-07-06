@@ -135,6 +135,28 @@ async def list_models(host: str, api_style: str = "ollama") -> dict[str, Any]:
         return {"ok": False, "models": [], "message": f"LLM host unreachable: {e}"}
 
 
+async def get_model_context_length(host: str, model: str,
+                                    api_style: str = "ollama") -> Optional[int]:
+    """The model's real context window, from Ollama's /api/show model_info (the
+    field name varies by family, e.g. "llama.context_length"). No standard way to
+    query this for openai-style servers — returns None there, and fails soft to
+    None on any error or unrecognized payload."""
+    base = _base_url(host)
+    if not base or not model or api_style == "openai":
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=TAGS_TIMEOUT, follow_redirects=True) as client:
+            r = await client.post(f"{base}/api/show", json={"model": model, "name": model})
+            r.raise_for_status()
+            info = r.json().get("model_info") or {}
+            for key, value in info.items():
+                if key.endswith(".context_length") and isinstance(value, (int, float)):
+                    return int(value)
+    except Exception as e:
+        logger.info(f"Context-length lookup unavailable: {e}")
+    return None
+
+
 async def test_connection(host: str, model: str = "", api_style: str = "ollama") -> dict[str, Any]:
     result = await list_models(host, api_style)
     if not result["ok"]:

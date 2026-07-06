@@ -185,6 +185,11 @@ export const settingsApi = {
     req<{ refined: string }>("/settings/ollama/refine-prompt", {
       method: "POST", body: JSON.stringify({ draft, task }),
     }),
+  ollamaContextLength: () =>
+    req<{ context_length: number | null; model: string | null }>("/settings/ollama/context-length"),
+  ollamaPreview: (task: "match" | "explain", useRealData: boolean) =>
+    req<{ output: string | null; latency_ms: number; json_valid: boolean | null; message: string }>(
+      "/settings/ollama/preview", { method: "POST", body: JSON.stringify({ task, use_real_data: useRealData }) }),
 };
 
 // --- Failed imports ---

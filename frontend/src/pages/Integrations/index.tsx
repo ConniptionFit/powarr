@@ -200,6 +200,25 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
 
 const OTHER = "__other__";
 
+// Known-good small models with pre-tuned profiles (mirrors PROMPT_PRESETS'
+// pattern). Selecting one fills the model and applies the profile in one click —
+// the model still has to be pulled on the Ollama host (warned if absent).
+const MODEL_PRESETS: Array<{ label: string; model: string;
+  profile: { model_size: string; verbosity: string; reply_format: string; confidence_style: string } }> = [
+  { label: "qwen2.5:3b — solid small all-rounder", model: "qwen2.5:3b",
+    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
+  { label: "llama3.2:3b — good instruction-following", model: "llama3.2:3b",
+    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
+  { label: "llama3.2:1b — tiniest workable", model: "llama3.2:1b",
+    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
+  { label: "phi3.5 — small but chatty", model: "phi3.5",
+    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
+  { label: "qwen2.5:7b — reliable JSON at 7B", model: "qwen2.5:7b",
+    profile: { model_size: "medium", verbosity: "brief", reply_format: "json", confidence_style: "numeric" } },
+  { label: "mistral:7b — reliable JSON at 7B", model: "mistral",
+    profile: { model_size: "medium", verbosity: "brief", reply_format: "json", confidence_style: "numeric" } },
+];
+
 function OllamaCard() {
   const qc = useQueryClient();
   const { data: cfg } = useQuery({ queryKey: ["ollama-settings"], queryFn: settingsApi.getOllama });
@@ -211,6 +230,10 @@ function OllamaCard() {
   const [useOther, setUseOther] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [presetProfile, setPresetProfile] = useState<Record<string, string> | null>(null);
+  const [presetWarning, setPresetWarning] = useState<string | null>(null);
+  const [benching, setBenching] = useState(false);
+  const [benchResult, setBenchResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (cfg) { setEnabled(cfg.enabled); setHost(cfg.host); setModel(cfg.model); setApiStyle(cfg.api_style || "ollama"); }
@@ -231,8 +254,33 @@ function OllamaCard() {
     reply_format: "json", confidence_style: "numeric", batch_delay_ms: 0,
     match_prompt: "", explain_prompt: "",
     ...(cfg ?? {}),
+    ...(presetProfile ?? {}), // a chosen model preset overrides the profile fields
     enabled, host, model, api_style: apiStyle,
   });
+
+  const applyPreset = (idx: number) => {
+    const p = MODEL_PRESETS[idx];
+    setUseOther(false);
+    setModel(p.model);
+    setPresetProfile(p.profile);
+    setPresetWarning(models.length > 0 && !models.some(m => m === p.model || m.startsWith(p.model + ":"))
+      ? `${p.model} isn't on the Ollama host yet — pull it first (ollama pull ${p.model})`
+      : null);
+  };
+
+  const benchmark = async () => {
+    setBenching(true);
+    setBenchResult(null);
+    try {
+      await settingsApi.updateOllama(buildPayload()); // dry run uses saved config
+      const r = await settingsApi.ollamaPreview("match", false);
+      setBenchResult(`${(r.latency_ms / 1000).toFixed(1)}s — ${r.json_valid
+        ? "verdict parsed ✓ (model handles structured matching)"
+        : "verdict did NOT parse ✗ — model may be too small; try Simple replies / Minimal verbosity"}`);
+    } catch (e: unknown) {
+      setBenchResult(e instanceof Error ? e.message : String(e));
+    } finally { setBenching(false); }
+  };
 
   const saveMut = useMutation({
     mutationFn: () => settingsApi.updateOllama(buildPayload()),
@@ -338,6 +386,21 @@ function OllamaCard() {
             />
           )}
         </div>
+        <div>
+          <label className="text-xs text-slate-400 mb-1 block">Known-good small-model presets</label>
+          <select
+            value=""
+            onChange={e => { if (e.target.value !== "") applyPreset(Number(e.target.value)); }}
+            className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white"
+          >
+            <option value="">Pick a preset to fill model + tuned profile (size, verbosity, reply format)…</option>
+            {MODEL_PRESETS.map((p, i) => <option key={p.model} value={i}>{p.label}</option>)}
+          </select>
+          {presetProfile && !presetWarning && (
+            <p className="text-xs text-slate-500 mt-1">Preset profile will apply on Save: {Object.entries(presetProfile).map(([k, v]) => `${k}=${v}`).join(", ")}</p>
+          )}
+          {presetWarning && <p className="text-xs text-amber-400 mt-1">{presetWarning}</p>}
+        </div>
       </div>
 
       <div className="flex items-center flex-wrap gap-2 mt-4">
@@ -348,6 +411,15 @@ function OllamaCard() {
         >
           {testing ? <Loader2 size={13} className="animate-spin" /> : null}
           Test
+        </button>
+        <button
+          onClick={benchmark}
+          disabled={benching || !host || !model}
+          title="Save, then send a tiny fixed match prompt to measure latency and check the reply parses — nothing is stored"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors disabled:opacity-40"
+        >
+          {benching ? <Loader2 size={13} className="animate-spin" /> : null}
+          Benchmark Model
         </button>
         <button
           onClick={() => saveMut.mutate()}
@@ -363,6 +435,7 @@ function OllamaCard() {
             {testResult.message}
           </div>
         )}
+        {benchResult && <span className="text-sm text-slate-300 ml-1">{benchResult}</span>}
       </div>
     </div>
   );

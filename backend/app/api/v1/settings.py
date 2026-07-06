@@ -130,3 +130,96 @@ async def refine_prompt(body: dict = Body(...), db: Session = Depends(get_db)):
     if not refined:
         raise HTTPException(status_code=502, detail="No response from the LLM — try again or check the host")
     return {"refined": refined}
+
+
+@router.get("/ollama/context-length")
+async def ollama_context_length(db: Session = Depends(get_db)):
+    """The saved model's real context window (Ollama /api/show), or null when the
+    host/model isn't configured, the api style is openai, or the field is absent."""
+    from app.services import llm_assist
+    cfg = _get_json_setting(db, "ollama", OllamaSettings)
+    length = await llm_assist.get_model_context_length(cfg.host, cfg.model, cfg.api_style)
+    return {"context_length": length, "model": cfg.model or None}
+
+
+# Canned inputs for the no-real-data benchmark case — fixed so latency numbers
+# are comparable between runs and models.
+_BENCH_MATCH = {
+    "release": "The.Example.Show.S02E05.1080p.WEB.h264-GRP",
+    "candidate": "The Example Show - S02E05 - The Middle Episode",
+    "context": "Source app: sonarr. Queue error: no files eligible for import",
+    "det_summary": "episode title similarity 0.91; season+episode numbers match (heuristic confidence 0.88)",
+}
+_BENCH_ITEM = "The Example Movie (2011), movie, 8.2 GB, watched 0x, last watched never, deletion score 72.4/100"
+
+
+@router.post("/ollama/preview")
+async def ollama_preview(body: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Dry-run the saved prompt/model settings and report what came back.
+    {"task": "match"|"explain", "use_real_data": bool} — real data pulls one
+    current row (item 13); canned data is the fixed self-test/benchmark (item 14).
+    Nothing is persisted."""
+    import time
+    from app.services import llm_assist
+    cfg = _get_json_setting(db, "ollama", OllamaSettings)
+    if not (cfg.enabled and cfg.host and cfg.model):
+        raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
+    task = body.get("task") or "match"
+    use_real = bool(body.get("use_real_data"))
+    if not llm_assist.acquire_slot():
+        raise HTTPException(status_code=409, detail="An LLM run is already in progress")
+    try:
+        source = "canned sample"
+        if task == "explain":
+            item_summary = _BENCH_ITEM
+            if use_real:
+                from app.models.media import MediaItem
+                from app.services.media_llm import item_summary as summarize
+                row = (db.query(MediaItem).filter(MediaItem.score > 0)
+                       .order_by(MediaItem.score.desc()).first())
+                if row:
+                    item_summary, source = summarize(row), f"media item #{row.id}"
+            prompt = llm_assist.build_explain_prompt(cfg.explain_prompt, item_summary, cfg.verbosity)
+            started = time.monotonic()
+            raw = await llm_assist._generate(
+                cfg.host, cfg.model, prompt, cfg.api_style, json_format=False,
+                verbose=cfg.verbosity == "verbose", model_size=cfg.model_size,
+                keep_alive_minutes=cfg.keep_alive_minutes)
+            latency_ms = round((time.monotonic() - started) * 1000)
+            output = llm_assist._strip_think(raw or "")
+            return {"output": output or None, "latency_ms": latency_ms, "json_valid": None,
+                    "message": f"Ran the deletion-rationale prompt against {source}."
+                               + ("" if output else " Empty reply after <think> stripping — try Minimal verbosity.")}
+        fields = dict(_BENCH_MATCH)
+        if use_real:
+            from app.models.failed_import import FailedImport
+            row = (db.query(FailedImport).filter(FailedImport.matched_title.isnot(None))
+                   .order_by(FailedImport.created_at.desc()).first())
+            if row:
+                fields = {"release": row.raw_title, "candidate": row.matched_title,
+                          "context": f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
+                          "det_summary": (row.match_rationale or "series/title heuristics only")
+                                         + f" (heuristic confidence {row.heuristic_confidence or row.confidence})"}
+                source = f"failed import #{row.id}"
+        prompt = llm_assist.build_review_prompt(
+            cfg.match_prompt, fields["release"], fields["candidate"], fields["context"],
+            fields["det_summary"], cfg.verbosity, cfg.reply_format, cfg.confidence_style)
+        started = time.monotonic()
+        raw = await llm_assist._generate(
+            cfg.host, cfg.model, prompt, cfg.api_style,
+            json_format=cfg.reply_format != "simple", verbose=cfg.verbosity == "verbose",
+            model_size=cfg.model_size, keep_alive_minutes=cfg.keep_alive_minutes)
+        latency_ms = round((time.monotonic() - started) * 1000)
+        if cfg.reply_format == "simple":
+            parsed = llm_assist._parse_simple(raw or "") or llm_assist._parse_json(raw or "")
+        else:
+            parsed = llm_assist._parse_json(raw or "") or llm_assist._parse_simple(raw or "")
+        ok = bool(parsed and "agrees" in parsed)
+        message = f"Ran the match-review prompt against {source}."
+        if not ok:
+            message += (" Reply did not parse as a verdict — this model may be too small for "
+                        "structured matching; try the Simple reply format or Minimal verbosity.")
+        return {"output": llm_assist._strip_think(raw or "") or None, "latency_ms": latency_ms,
+                "json_valid": ok, "message": message}
+    finally:
+        llm_assist.release_slot()

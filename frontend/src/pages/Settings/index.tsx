@@ -346,14 +346,22 @@ const PROMPT_PRESETS: Record<"match" | "explain", { label: string; text: string 
   ],
 };
 
+// Worst-case injected-data token overhead per task, from the CAP_* truncation
+// limits in llm_assist.py (chars/4) plus the fixed reply-instruction scaffold.
+const INJECTED_TOKENS = { match: Math.ceil((300 + 300 + 400 + 600) / 4) + 60, explain: Math.ceil(500 / 4) + 30 };
+const DEFAULT_TEMPLATE_TOKENS = { match: 40, explain: 35 }; // built-in defaults, when the textarea is empty
+
 function LLMAssistSection() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["ollama-settings"], queryFn: settingsApi.getOllama });
+  const { data: ctx } = useQuery({ queryKey: ["ollama-ctx"], queryFn: settingsApi.ollamaContextLength });
   const [cfg, setCfg] = useState<OllamaSettings | null>(null);
   const [task, setTask] = useState<"match" | "explain">("match");
   const [msg, setMsg] = useState<string | null>(null);
   const [refining, setRefining] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ output: string | null; latency_ms: number; json_valid: boolean | null; message: string } | null>(null);
 
   useEffect(() => { if (data) setCfg(data); }, [data]);
 
@@ -401,6 +409,24 @@ function LLMAssistSection() {
       setMsg(r.message);
     } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
+
+  const testWithRealData = async () => {
+    setTesting(true);
+    setTestResult(null);
+    setMsg(null);
+    try {
+      await settingsApi.updateOllama(cfg!); // dry run uses saved settings — save first
+      setTestResult(await settingsApi.ollamaPreview(task, true));
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+    finally { setTesting(false); }
+  };
+
+  // Live template-size estimate (item 12) vs the model's detected context window (item 9).
+  const promptTokens = Math.ceil((cfg?.[task === "match" ? "match_prompt" : "explain_prompt"] ?? "").length / 4)
+    || DEFAULT_TEMPLATE_TOKENS[task];
+  const estTokens = promptTokens + INJECTED_TOKENS[task];
+  const ctxLimit = ctx?.context_length ?? null;
+  const nearCeiling = ctxLimit !== null && estTokens > ctxLimit * 0.8;
 
   return (
     <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
@@ -570,6 +596,29 @@ function LLMAssistSection() {
           placeholder={`(using built-in default — type here or load a suggestion to customize the ${task === "match" ? "matching" : "rationale"} prompt)`}
           className="w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-xs font-mono text-white placeholder:text-slate-600"
         />
+        <div className="flex items-center justify-between mt-1">
+          <p className={`text-[11px] ${nearCeiling ? "text-amber-400" : "text-slate-600"}`}>
+            ≈ {estTokens} tokens with worst-case injected data
+            {ctxLimit !== null && ` · model context window: ${ctxLimit.toLocaleString()}`}
+            {nearCeiling && " — template likely too large for this model's context, trim it"}
+          </p>
+          <button
+            onClick={testWithRealData}
+            disabled={testing}
+            title="Save, then dry-run the current prompt/model settings against one real item from your data — nothing is stored"
+            className="px-3 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-xs transition-colors disabled:opacity-50"
+          >
+            {testing ? "Testing…" : "Test with Real Data"}
+          </button>
+        </div>
+        {testResult && (
+          <div className="mt-2 bg-surface rounded border border-purple-900/40 px-3 py-2 text-xs">
+            <p className="text-slate-300">
+              {testResult.message} <span className="text-slate-500">({(testResult.latency_ms / 1000).toFixed(1)}s{testResult.json_valid !== null ? `, verdict ${testResult.json_valid ? "parsed ✓" : "did NOT parse ✗"}` : ""})</span>
+            </p>
+            {testResult.output && <p className="text-slate-500 font-mono mt-1 break-words whitespace-pre-wrap max-h-40 overflow-y-auto">{testResult.output}</p>}
+          </div>
+        )}
       </div>
 
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
