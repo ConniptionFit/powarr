@@ -847,6 +847,8 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
                 row.confidence = round(min(1.0, 0.7 * row.heuristic_confidence + 0.3 * row.llm_confidence), 3)
                 db.commit()
                 scored += 1
+                if ollama.batch_delay_ms > 0:
+                    await asyncio.sleep(ollama.batch_delay_ms / 1000)
         finally:
             db.close()
     finally:

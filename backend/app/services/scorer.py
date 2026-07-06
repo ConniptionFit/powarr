@@ -81,7 +81,7 @@ def rescore_all(db, weights: ScoringWeights):
 
     items = db.query(MediaItem).all()
     for item in items:
-        item.score = score_item(
+        new_score = score_item(
             {
                 "watch_count": item.watch_count,
                 "last_watched_at": item.last_watched_at,
@@ -91,5 +91,13 @@ def rescore_all(db, weights: ScoringWeights):
             },
             weights,
         )
+        if new_score != item.score:
+            # A cached LLM rationale describes the old score's factors — clear it
+            # so the Cleanup page never displays a rationale for a stale score.
+            # (The cache key would miss anyway; this also removes the stale text.)
+            item.llm_rationale = None
+            item.llm_rationale_at = None
+            item.llm_rationale_key = None
+        item.score = new_score
     db.commit()
     return len(items)

@@ -394,6 +394,14 @@ function LLMAssistSection() {
     } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
 
+  const runCandidates = async () => {
+    setMsg(null);
+    try {
+      const r = await mediaApi.llmRun();
+      setMsg(r.message);
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+
   return (
     <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
       <div className="flex items-center gap-2 pt-5 pb-3">
@@ -492,6 +500,22 @@ function LLMAssistSection() {
         />
       </div>
 
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Batch Pacing Delay (ms)</p>
+          <p className="text-slate-500 text-xs mt-0.5">Optional pause between sequential calls during a batch run, so weak hardware isn't pinned at 100% CPU for the whole run. 0 = no pause</p>
+        </div>
+        <input
+          type="number"
+          min={0}
+          max={60000}
+          step={250}
+          value={cfg.batch_delay_ms}
+          onChange={e => setCfg(c => c ? { ...c, batch_delay_ms: Math.max(0, Number(e.target.value) || 0) } : c)}
+          className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6 w-24"
+        />
+      </div>
+
       <div className="py-4 border-b border-purple-900/20">
         <div className="flex items-center justify-between mb-2">
           <div>
@@ -548,7 +572,7 @@ function LLMAssistSection() {
         />
       </div>
 
-      <div className="py-4 flex items-center justify-between">
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>
           <p className="text-white text-sm font-medium">Run LLM on Unscored Imports</p>
           <p className="text-slate-500 text-xs mt-0.5">
@@ -557,6 +581,22 @@ function LLMAssistSection() {
         </div>
         <button
           onClick={runNow}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors ml-6"
+        >
+          <Play size={14} />
+          Run Now
+        </button>
+      </div>
+
+      <div className="py-4 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Run LLM on Unscored Candidates</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Generate deletion rationales for Cleanup candidates that don't have a current cached one (up to 50 per run, sequential). Results appear inline on the Cleanup page.
+          </p>
+        </div>
+        <button
+          onClick={runCandidates}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors ml-6"
         >
           <Play size={14} />

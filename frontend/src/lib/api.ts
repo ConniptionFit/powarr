@@ -40,6 +40,8 @@ export interface MediaItem {
   parent_title: string | null;
   protected: boolean | null;
   pending_delete_at: string | null;
+  llm_rationale: string | null;
+  llm_rationale_at: string | null;
   sonarr_id: number | null;
   radarr_id: number | null;
   lidarr_id: number | null;
@@ -84,8 +86,13 @@ export const mediaApi = {
     req(`/media/batch`, { method: "DELETE", body: JSON.stringify(ids) }),
   libraries: () => req<string[]>("/media/libraries"),
   restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
-  explain: (id: number) =>
-    req<{ rationale: string | null; message: string | null }>(`/media/${id}/explain`, { method: "POST" }),
+  explain: (id: number, force = false) =>
+    req<{ rationale: string | null; message: string | null; cached: boolean }>(
+      `/media/${id}/explain${force ? "?force=true" : ""}`, { method: "POST" }),
+  llmRun: (ids?: number[]) =>
+    req<{ started: number; total_eligible: number; message: string }>("/media/llm-run", {
+      method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
+    }),
   deletionLog: () => req<DeletionLogEntry[]>("/media/deletion-log"),
   deletionStats: () => req<DeletionStats>("/media/deletion-stats"),
 };
@@ -133,6 +140,7 @@ export interface OllamaSettings {
   keep_alive_minutes: number; // ollama keep_alive between calls; 0 = unload after each
   reply_format: string; // json | simple
   confidence_style: string; // numeric | classified
+  batch_delay_ms: number; // pause between sequential batch calls; 0 = none
   match_prompt: string;
   explain_prompt: string;
 }

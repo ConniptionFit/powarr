@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, BigInteger, Boolean
+from sqlalchemy import Column, Integer, String, Float, DateTime, BigInteger, Boolean, Text
 from app.database import Base
 
 
@@ -22,6 +22,13 @@ class MediaItem(Base):
     parent_title = Column(String, nullable=True)  # Show name for episodes, artist name for tracks
     protected = Column(Boolean, default=False)  # actively requested in Seerr — hidden from suggestions
     pending_delete_at = Column(DateTime, nullable=True)  # soft-delete: when deletion was requested
+
+    # Cached LLM deletion rationale. The key hashes the prompt template, model
+    # config, and this item's scoring-relevant fields — any of those changing
+    # makes the cache miss, so stale rationales are never served as current.
+    llm_rationale = Column(Text, nullable=True)
+    llm_rationale_at = Column(DateTime, nullable=True)
+    llm_rationale_key = Column(String, nullable=True)
 
     # *arr app link IDs (set after matching)
     sonarr_id = Column(Integer, nullable=True)

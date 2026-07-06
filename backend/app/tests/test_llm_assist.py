@@ -225,5 +225,37 @@ class TestReviewMinimalSalvage(unittest.TestCase):
         self.assertIsNone(_stubbed_review("<think>I agree but never finish", verbosity="brief"))
 
 
+class TestRationaleKey(unittest.TestCase):
+    """media_llm.rationale_key — the cache must miss when the prompt config or the
+    item's scoring-relevant fields change, and hit otherwise."""
+
+    class _Item:
+        def __init__(self, **kw):
+            self.score = kw.get("score", 55.0)
+            self.watch_count = kw.get("watch_count", 0)
+            self.last_watched_at = kw.get("last_watched_at")
+            self.file_size = kw.get("file_size", 10 ** 9)
+
+    def _key(self, item=None, **ollama_overrides):
+        from app.schemas.settings import OllamaSettings
+        from app.services.media_llm import rationale_key
+        ollama = OllamaSettings(**{"model": "m1", **ollama_overrides})
+        return rationale_key(ollama, item or self._Item())
+
+    def test_stable_for_same_inputs(self):
+        self.assertEqual(self._key(), self._key())
+
+    def test_changes_with_prompt_model_verbosity_and_score(self):
+        base = self._key()
+        self.assertNotEqual(base, self._key(explain_prompt="custom {item}"))
+        self.assertNotEqual(base, self._key(model="m2"))
+        self.assertNotEqual(base, self._key(verbosity="minimal"))
+        self.assertNotEqual(base, self._key(item=self._Item(score=70.0)))
+
+    def test_ignores_unrelated_settings(self):
+        # keep_alive/batch pacing don't affect the generated text — same key.
+        self.assertEqual(self._key(), self._key(keep_alive_minutes=99, batch_delay_ms=500))
+
+
 if __name__ == "__main__":
     unittest.main()

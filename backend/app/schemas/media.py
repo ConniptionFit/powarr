@@ -21,6 +21,8 @@ class MediaItemOut(BaseModel):
     parent_title: Optional[str]
     protected: Optional[bool] = False
     pending_delete_at: Optional[datetime] = None
+    llm_rationale: Optional[str] = None
+    llm_rationale_at: Optional[datetime] = None
     sonarr_id: Optional[int]
     radarr_id: Optional[int]
     lidarr_id: Optional[int]

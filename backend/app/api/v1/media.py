@@ -159,32 +159,53 @@ def restore_media(item_id: int, db: Session = Depends(get_db)):
     return {"id": item_id, "restored": True}
 
 
+@router.post("/llm-run")
+async def media_llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """On-demand LLM deletion rationales. {"ids": [...]} for specific items; omit
+    to process candidates lacking a current cached rationale. Runs in the
+    background — an SSE "media_llm_run" event fires when it finishes."""
+    import asyncio
+    from app.schemas.settings import OllamaSettings
+    from app.services import llm_assist, media_llm
+    ids = payload.get("ids") or None
+    if llm_assist.slot_active():
+        raise HTTPException(status_code=409, detail="An LLM run is already in progress")
+    ollama = _get_setting(db, "ollama", OllamaSettings)
+    if not ollama.enabled:
+        raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
+    count = len(media_llm.eligible_candidates(db, ollama, ids))
+    asyncio.get_event_loop().create_task(media_llm.llm_media_run(ids))
+    return {"started": count, "total_eligible": count,
+            "message": f"LLM run started on {count} candidate(s) — results stream in live"}
+
+
 @router.post("/{item_id}/explain")
-async def explain_media(item_id: int, db: Session = Depends(get_db)):
-    """Optional LLM one-liner on whether this is a good deletion candidate. Fails soft."""
+async def explain_media(item_id: int, force: bool = Query(False), db: Session = Depends(get_db)):
+    """Optional LLM one-liner on whether this is a good deletion candidate. Fails
+    soft. Served from the cached rationale when its key still matches the current
+    prompt/model/score; force=true regenerates regardless."""
     item = db.query(MediaItem).filter_by(id=item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Media item not found")
     from app.schemas.settings import OllamaSettings
     ollama = _get_setting(db, "ollama", OllamaSettings)
     if not (ollama.enabled and ollama.host and ollama.model):
-        return {"rationale": None, "message": "LLM assist not configured"}
-    from app.services import llm_assist
+        return {"rationale": None, "message": "LLM assist not configured", "cached": False}
+    from app.services import llm_assist, media_llm
+    if (not force and item.llm_rationale
+            and item.llm_rationale_key == media_llm.rationale_key(ollama, item)):
+        return {"rationale": item.llm_rationale, "message": None, "cached": True,
+                "generated_at": item.llm_rationale_at}
     if not llm_assist.acquire_slot():
-        # Same single-flight contract as the batch import run — one LLM task at a
-        # time, shared slot, so rapid clicks/tabs can't pile up parallel generations.
+        # Same single-flight contract as the batch runs — one LLM task at a time,
+        # shared slot, so rapid clicks/tabs can't pile up parallel generations.
         raise HTTPException(status_code=409, detail="Another LLM task is already running")
     try:
-        summary = (f"{item.title} ({item.year or 'unknown year'}), {item.media_type}, "
-                   f"{round((item.file_size or 0) / 1024**3, 1)} GB, watched {item.watch_count}x, "
-                   f"last watched {item.last_watched_at or 'never'}, deletion score {item.score}/100")
-        rationale = await llm_assist.explain_deletion(
-            ollama.host, ollama.model, summary, ollama.api_style,
-            template=ollama.explain_prompt, verbosity=ollama.verbosity,
-            model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes)
+        rationale = await media_llm.generate_and_store(item, ollama, db)
     finally:
         llm_assist.release_slot()
-    return {"rationale": rationale, "message": None if rationale else "No response from LLM"}
+    return {"rationale": rationale, "message": None if rationale else "No response from LLM",
+            "cached": False, "generated_at": item.llm_rationale_at}
 
 
 @router.delete("/{item_id}")

@@ -47,6 +47,7 @@ class OllamaSettings(BaseModel):
     keep_alive_minutes: int = 10  # ollama keep_alive between calls; 0 = ollama default (unload)
     reply_format: str = "json"  # json | simple — simple = one pipe-separated line, for models that can't do JSON
     confidence_style: str = "numeric"  # numeric (model picks ±0.3 float) | classified (more/less/same → fixed steps)
+    batch_delay_ms: int = 0  # optional pause between sequential batch calls — keeps weak hardware from pinning at 100%
     match_prompt: str = ""  # custom template for import matching; "" = built-in default
     explain_prompt: str = ""  # custom template for deletion rationale; "" = built-in default
 
