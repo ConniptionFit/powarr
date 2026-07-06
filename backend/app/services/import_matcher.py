@@ -461,8 +461,9 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             det_summary=f"{match_rationale} (heuristic confidence {heuristic_confidence})",
             context=llm_context,
             api_style=ollama.api_style, template=ollama.match_prompt,
-            verbose=ollama.verbosity == "verbose", model_size=ollama.model_size,
-            keep_alive_minutes=ollama.keep_alive_minutes)
+            verbosity=ollama.verbosity, model_size=ollama.model_size,
+            keep_alive_minutes=ollama.keep_alive_minutes,
+            reply_format=ollama.reply_format, confidence_style=ollama.confidence_style)
         if llm:
             llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
             llm_rationale = f"[{'agrees' if llm['agrees'] else 'disagrees'}] {llm['rationale']}"
@@ -821,7 +822,6 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
                 q = q.filter(FailedImport.status.in_(("suggested", "resolve_failed")),
                              FailedImport.llm_confidence.is_(None))
             rows = q.order_by(FailedImport.created_at.desc()).limit(limit).all()
-            verbose = ollama.verbosity == "verbose"
             for row in rows:
                 if not row.matched_title:
                     skipped += 1
@@ -834,8 +834,10 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
                     ollama.host, ollama.model, row.raw_title, row.matched_title,
                     det_summary=det_summary,
                     context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
-                    api_style=ollama.api_style, template=ollama.match_prompt, verbose=verbose,
-                    model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes)
+                    api_style=ollama.api_style, template=ollama.match_prompt,
+                    verbosity=ollama.verbosity, model_size=ollama.model_size,
+                    keep_alive_minutes=ollama.keep_alive_minutes,
+                    reply_format=ollama.reply_format, confidence_style=ollama.confidence_style)
                 if not llm:
                     skipped += 1
                     continue

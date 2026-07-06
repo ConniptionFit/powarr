@@ -180,7 +180,7 @@ async def explain_media(item_id: int, db: Session = Depends(get_db)):
                    f"last watched {item.last_watched_at or 'never'}, deletion score {item.score}/100")
         rationale = await llm_assist.explain_deletion(
             ollama.host, ollama.model, summary, ollama.api_style,
-            template=ollama.explain_prompt, verbose=ollama.verbosity == "verbose",
+            template=ollama.explain_prompt, verbosity=ollama.verbosity,
             model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes)
     finally:
         llm_assist.release_slot()

@@ -413,13 +413,14 @@ function LLMAssistSection() {
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>
           <p className="text-white text-sm font-medium">Explanation Verbosity</p>
-          <p className="text-slate-500 text-xs mt-0.5">Brief = one-liners; Verbose = detailed multi-sentence explanations in notes, tooltips, and rationales</p>
+          <p className="text-slate-500 text-xs mt-0.5">Minimal = bare verdict only (agree/disagree, KEEP/DELETE) — best for tiny models; Brief = one-liners; Verbose = detailed multi-sentence explanations</p>
         </div>
         <select
           value={cfg.verbosity}
           onChange={e => setCfg(c => c ? { ...c, verbosity: e.target.value } : c)}
           className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"
         >
+          <option value="minimal">Minimal</option>
           <option value="brief">Brief</option>
           <option value="verbose">Verbose</option>
         </select>
@@ -428,16 +429,51 @@ function LLMAssistSection() {
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>
           <p className="text-white text-sm font-medium">Model Size Profile</p>
-          <p className="text-slate-500 text-xs mt-0.5">Scales reply length and timeouts to the model. Small (1-3B) gets tight caps — small models ramble past what they can produce coherently</p>
+          <p className="text-slate-500 text-xs mt-0.5">Scales reply length and timeouts to the model. Selecting Small also pre-fills Minimal verbosity and Simple replies (adjust after if you like)</p>
         </div>
         <select
           value={cfg.model_size}
-          onChange={e => setCfg(c => c ? { ...c, model_size: e.target.value } : c)}
+          onChange={e => {
+            const size = e.target.value;
+            setCfg(c => c ? (size === "small"
+              ? { ...c, model_size: size, verbosity: "minimal", reply_format: "simple" }
+              : { ...c, model_size: size }) : c);
+          }}
           className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"
         >
           <option value="small">Small (1-3B)</option>
           <option value="medium">Medium (7-14B)</option>
           <option value="large">Large (30B+)</option>
+        </select>
+      </div>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Reply Format</p>
+          <p className="text-slate-500 text-xs mt-0.5">JSON = structured replies (default). Simple = one pipe-separated line, for models that can't produce reliable JSON. Either way, the other format is still accepted as a fallback</p>
+        </div>
+        <select
+          value={cfg.reply_format}
+          onChange={e => setCfg(c => c ? { ...c, reply_format: e.target.value } : c)}
+          className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"
+        >
+          <option value="json">JSON</option>
+          <option value="simple">Simple text</option>
+        </select>
+      </div>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Confidence Question</p>
+          <p className="text-slate-500 text-xs mt-0.5">Numeric asks the model for a ±0.3 adjustment; Classified asks only more/less/same confident (mapped to fixed ±0.15 steps) — small models classify far better than they calibrate numbers</p>
+        </div>
+        <select
+          value={cfg.confidence_style}
+          onChange={e => setCfg(c => c ? { ...c, confidence_style: e.target.value } : c)}
+          className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"
+        >
+          <option value="numeric">Numeric adjustment</option>
+          <option value="classified">Classified (more/less/same)</option>
         </select>
       </div>
 

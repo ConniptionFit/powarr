@@ -60,28 +60,59 @@ def _base_url(host: str) -> str:
 
 
 def build_review_prompt(template: str, release: str, candidate: str, context: str,
-                        det_summary: str, verbose: bool = False) -> str:
+                        det_summary: str, verbosity: str = "brief",
+                        reply_format: str = "json",
+                        confidence_style: str = "numeric") -> str:
     """Static scaffold around the (optionally user-templated) match prompt. The
     deterministic scorer's per-variable results are always injected verbatim —
-    the LLM reviews the deterministic decision, it never replaces it."""
+    the LLM reviews the deterministic decision, it never replaces it.
+
+    verbosity: minimal (bare verdict, no adjustment/reason) | brief | verbose.
+    reply_format: json | simple (one pipe-separated line, for models that can't
+    reliably produce JSON). confidence_style: numeric (model picks a ±0.3 float) |
+    classified (model picks more/less/same — mapped to fixed steps internally,
+    since small models classify far better than they calibrate numbers)."""
     tpl = (template or "").strip() or DEFAULT_MATCH_PROMPT
     prompt = (tpl.replace("{release}", _truncate(release, CAP_RELEASE))
                  .replace("{candidate}", _truncate(candidate, CAP_CANDIDATE))
                  .replace("{context}", _truncate(context, CAP_CONTEXT)))
     prompt += ("\nDeterministic scorer result (computed from title/season/episode/"
                f"absolute-number comparisons): {_truncate(det_summary, CAP_DET_SUMMARY)}")
-    reason_spec = ("a detailed 2-3 sentence explanation citing the specific factors"
-                   if verbose else "<short reason>")
-    prompt += ('\nDo you agree with this match? Reply with ONLY a JSON object: '
-               f'{{"agrees": true|false, "confidence_adjustment": <-0.3 to 0.3>, "reason": "{reason_spec}"}}')
+    if reply_format == "simple":
+        if verbosity == "minimal":
+            prompt += "\nDo you agree with this match? Reply with ONLY one word: agree or disagree."
+        elif confidence_style == "classified":
+            prompt += ("\nDo you agree with this match, and does the evidence make you more, "
+                       "less, or same confident than the scorer? Reply with ONLY one line, "
+                       "exactly this form:\nagree or disagree | more or less or same | short reason")
+        else:
+            prompt += ("\nDo you agree with this match? Reply with ONLY one line, exactly this "
+                       "form:\nagree or disagree | confidence adjustment between -0.3 and 0.3 | short reason")
+    else:
+        if verbosity == "minimal":
+            prompt += ('\nDo you agree with this match? Reply with ONLY a JSON object: '
+                       '{"agrees": true|false}')
+        else:
+            reason_spec = ("a detailed 2-3 sentence explanation citing the specific factors"
+                           if verbosity == "verbose" else "<short reason>")
+            if confidence_style == "classified":
+                prompt += ('\nDo you agree with this match? Reply with ONLY a JSON object: '
+                           f'{{"agrees": true|false, "confidence_shift": "more"|"less"|"same", "reason": "{reason_spec}"}}')
+            else:
+                prompt += ('\nDo you agree with this match? Reply with ONLY a JSON object: '
+                           f'{{"agrees": true|false, "confidence_adjustment": <-0.3 to 0.3>, "reason": "{reason_spec}"}}')
     return prompt
 
 
-def build_explain_prompt(template: str, item_summary: str, verbose: bool = False) -> str:
+def build_explain_prompt(template: str, item_summary: str, verbosity: str = "brief") -> str:
     tpl = (template or "").strip() or DEFAULT_EXPLAIN_PROMPT
     prompt = tpl.replace("{item}", _truncate(item_summary, CAP_ITEM))
-    prompt += ("\nAnswer in 3-4 sentences citing the concrete factors."
-               if verbose else "\nAnswer in ONE short sentence.")
+    if verbosity == "minimal":
+        prompt += "\nReply with ONLY one word: KEEP or DELETE."
+    elif verbosity == "verbose":
+        prompt += "\nAnswer in 3-4 sentences citing the concrete factors."
+    else:
+        prompt += "\nAnswer in ONE short sentence."
     return prompt
 
 
@@ -166,13 +197,60 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
         return None
 
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_RE = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL | re.IGNORECASE)
 
 
 def _strip_think(text: str) -> str:
     """Reasoning models (e.g. lfm2.5, deepseek-r1) emit <think>...</think> blocks —
-    strip them so chain-of-thought never leaks into stored output or JSON parsing."""
+    strip them so chain-of-thought never leaks into stored output or JSON parsing.
+    Also matches an *unclosed* block: when the token cap cuts generation off before
+    </think>, everything from <think> on is chain-of-thought and must go (the reply
+    then fails soft to None rather than leaking)."""
     return _THINK_RE.sub("", text or "").strip()
+
+
+# Fixed steps for confidence_style="classified" — the model only classifies,
+# it never chooses the magnitude.
+_SHIFT_STEPS = {"more": 0.15, "same": 0.0, "less": -0.15}
+
+
+def _parse_simple(raw: str) -> Optional[dict]:
+    """Lenient parser for the non-JSON reply format:
+    "agree|disagree [| <±float or more/less/same> [| reason]]" — also accepts a
+    bare verdict word (minimal tier). Tolerant of missing pieces; returns the same
+    key shape as the JSON reply, or None if no verdict is recognizable."""
+    text = _strip_think(raw)
+    if not text:
+        return None
+    line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    parts = [p.strip() for p in line.split("|")]
+    head = parts[0].lower()
+    if "{" in head:
+        # JSON-looking reply — a key like "agrees" would false-positive the word
+        # match below; let _parse_json handle it instead.
+        return None
+    # Only the words the prompt asks for count as a verdict — matching stray
+    # "yes"/"no" in prose would turn arbitrary rambling into a verdict.
+    if "disagree" in head:
+        agrees = False
+    elif "agree" in head:
+        agrees = True
+    else:
+        return None
+    out: dict[str, Any] = {"agrees": agrees}
+    rest = parts[1:]
+    if rest:
+        num = re.search(r"[+-]?\d+(?:\.\d+)?", rest[0])
+        shift = next((k for k in _SHIFT_STEPS if k in rest[0].lower()), None)
+        if num:
+            out["confidence_adjustment"] = float(num.group(0))
+            rest = rest[1:]
+        elif shift:
+            out["confidence_shift"] = shift
+            rest = rest[1:]
+    if rest:
+        out["reason"] = " | ".join(rest)
+    return out
 
 
 def _parse_json(raw: str) -> Optional[dict]:
@@ -213,30 +291,62 @@ def slot_active() -> bool:
     return _slot_active
 
 
+def _extract_adjustment(parsed: dict) -> float:
+    """Numeric adjustment from either reply shape: an explicit float (clamped ±0.3)
+    or a more/less/same classification mapped to fixed steps."""
+    try:
+        adjustment = max(-0.3, min(0.3, float(parsed.get("confidence_adjustment") or 0.0)))
+    except (TypeError, ValueError):
+        adjustment = 0.0
+    if not adjustment and "confidence_shift" in parsed:
+        adjustment = _SHIFT_STEPS.get(str(parsed["confidence_shift"]).lower().strip(), 0.0)
+    return adjustment
+
+
 async def review_match(host: str, model: str, release_title: str,
                        candidate_title: str, det_summary: str, context: str = "",
                        api_style: str = "ollama", template: str = "",
-                       verbose: bool = False, model_size: str = "medium",
-                       keep_alive_minutes: int = 10) -> Optional[dict[str, Any]]:
+                       verbosity: str = "brief", model_size: str = "medium",
+                       keep_alive_minutes: int = 10, reply_format: str = "json",
+                       confidence_style: str = "numeric") -> Optional[dict[str, Any]]:
     """Single structured LLM review of a deterministic match decision (one call —
     no separate match/explain prompts). Returns
     {"agrees": bool, "confidence_adjustment": float ±0.3, "rationale": str}
     or None (= no assist available). Supplements the deterministic rationale,
     never replaces it."""
+    verbose = verbosity == "verbose"
     prompt = build_review_prompt(template, release_title, candidate_title, context,
-                                 det_summary, verbose)
-    raw = await _generate(host, model, prompt, api_style, verbose=verbose,
+                                 det_summary, verbosity, reply_format, confidence_style)
+    raw = await _generate(host, model, prompt, api_style,
+                          json_format=reply_format != "simple", verbose=verbose,
                           model_size=model_size, keep_alive_minutes=keep_alive_minutes)
     if raw is None:
         return None
-    parsed = _parse_json(raw)
+    # Whichever format was asked for, accept the other as a fallback — a "json"
+    # model that wrapped its verdict in prose, or a "simple" model that emitted
+    # JSON anyway, still parses instead of being dropped.
+    if reply_format == "simple":
+        parsed = _parse_simple(raw) or _parse_json(raw)
+    else:
+        parsed = _parse_json(raw) or _parse_simple(raw)
+    if (not parsed or "agrees" not in parsed) and verbosity == "minimal":
+        # Reasoning models that emit <think> as plain text (e.g. lfm2.5) can burn
+        # the whole token cap thinking and never emit the answer. Minimal asks for
+        # one verdict word — salvaging the model's last stated verdict from the raw
+        # text is not CoT leakage (one word, exactly what was asked), and in
+        # minimal mode the verdict carries no confidence adjustment regardless.
+        words = re.findall(r"\b(disagree|agree)", (raw or "").lower())
+        if words:
+            parsed = {"agrees": words[-1] == "agree"}
     if not parsed or "agrees" not in parsed:
         return None
-    try:
-        adjustment = max(-0.3, min(0.3, float(parsed.get("confidence_adjustment") or 0.0)))
-    except (TypeError, ValueError):
-        adjustment = 0.0
     agrees = bool(parsed["agrees"])
+    if verbosity == "minimal":
+        # Minimal tier asks for the verdict only — never trust stray extras.
+        adjustment, reason = 0.0, ""
+    else:
+        adjustment = _extract_adjustment(parsed)
+        reason = str(parsed.get("reason", ""))
     if not agrees:
         # Small models sometimes disagree yet return a positive adjustment —
         # a disagreement must never raise confidence.
@@ -244,20 +354,30 @@ async def review_match(host: str, model: str, release_title: str,
     limit = 1500 if verbose else 500
     return {"agrees": agrees,
             "confidence_adjustment": adjustment,
-            "rationale": str(parsed.get("reason", ""))[:limit]}
+            "rationale": reason[:limit]}
 
 
 async def explain_deletion(host: str, model: str, item_summary: str,
                            api_style: str = "ollama", template: str = "",
-                           verbose: bool = False, model_size: str = "medium",
+                           verbosity: str = "brief", model_size: str = "medium",
                            keep_alive_minutes: int = 10) -> Optional[str]:
-    """Deletion-candidate rationale. Returns the text or None (= no assist available)."""
-    prompt = build_explain_prompt(template, item_summary, verbose)
+    """Deletion-candidate rationale. Returns the text or None (= no assist available).
+    Minimal verbosity returns a bare KEEP/DELETE verdict."""
+    verbose = verbosity == "verbose"
+    prompt = build_explain_prompt(template, item_summary, verbosity)
     raw = await _generate(host, model, prompt, api_style, json_format=False, verbose=verbose,
                           model_size=model_size, keep_alive_minutes=keep_alive_minutes)
     if not raw:
         return None
     text = _strip_think(raw)
+    if verbosity == "minimal":
+        # Same salvage rule as review_match: if a plain-text-thinking model got cut
+        # off mid-<think>, its last stated KEEP/DELETE is still the one word we
+        # asked for — extracting it is not CoT leakage.
+        matches = re.findall(r"\b(keep|delete)\b", text or raw, re.IGNORECASE)
+        if matches:
+            return matches[-1].upper()
+        return _truncate(text.split("\n")[0], 60) if text else None
     if not text:
         return None
     return (text if verbose else text.split("\n")[0])[:1500 if verbose else 300]

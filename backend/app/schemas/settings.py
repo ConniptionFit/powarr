@@ -42,9 +42,11 @@ class OllamaSettings(BaseModel):
     host: str = ""  # ip:port or http(s)://host:port
     model: str = ""
     api_style: str = "ollama"  # ollama | openai (LM Studio, llama.cpp server, etc.)
-    verbosity: str = "brief"  # brief | verbose — length of LLM explanations
+    verbosity: str = "brief"  # minimal | brief | verbose — minimal = bare verdict, no prose
     model_size: str = "medium"  # small | medium | large — scales token caps/timeouts to the model
     keep_alive_minutes: int = 10  # ollama keep_alive between calls; 0 = ollama default (unload)
+    reply_format: str = "json"  # json | simple — simple = one pipe-separated line, for models that can't do JSON
+    confidence_style: str = "numeric"  # numeric (model picks ±0.3 float) | classified (more/less/same → fixed steps)
     match_prompt: str = ""  # custom template for import matching; "" = built-in default
     explain_prompt: str = ""  # custom template for deletion rationale; "" = built-in default
 

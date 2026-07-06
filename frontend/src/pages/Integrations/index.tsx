@@ -228,6 +228,7 @@ function OllamaCard() {
   // managed in Settings → LLM Assist) survive connection-side saves.
   const buildPayload = () => ({
     verbosity: "brief", model_size: "medium", keep_alive_minutes: 10,
+    reply_format: "json", confidence_style: "numeric",
     match_prompt: "", explain_prompt: "",
     ...(cfg ?? {}),
     enabled, host, model, api_style: apiStyle,

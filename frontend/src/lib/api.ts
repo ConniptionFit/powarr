@@ -128,9 +128,11 @@ export interface OllamaSettings {
   host: string;
   model: string;
   api_style: string;
-  verbosity: string; // brief | verbose
+  verbosity: string; // minimal | brief | verbose
   model_size: string; // small | medium | large — scales token caps/timeouts
   keep_alive_minutes: number; // ollama keep_alive between calls; 0 = unload after each
+  reply_format: string; // json | simple
+  confidence_style: string; // numeric | classified
   match_prompt: string;
   explain_prompt: string;
 }
