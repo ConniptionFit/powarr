@@ -128,6 +128,7 @@ export interface ImportMatchingSettings {
   title_only_cap: number;
   anime_absolute_numbering: boolean;
   orphan_auto_purge: boolean;
+  llm_blend_weight: number; // LLM share of the confidence blend (0-1)
 }
 
 export interface OllamaSettings {

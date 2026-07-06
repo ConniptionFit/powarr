@@ -35,6 +35,9 @@ class ImportMatchingSettings(BaseModel):
     # Orphan handling (v0.6.1) — confirmed-missing rows prompt for confirmation by default;
     # this skips the prompt and marks them orphaned immediately (same positive-confirmation gate)
     orphan_auto_purge: bool = False
+    # LLM share of the confidence blend (v0.12.0, user-confirmed 2026-07-06) —
+    # final = (1-w) * deterministic + w * llm. 0 = ignore the LLM entirely.
+    llm_blend_weight: float = 0.3
 
 
 class OllamaSettings(BaseModel):

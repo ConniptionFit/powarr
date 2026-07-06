@@ -467,7 +467,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         if llm:
             llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
             llm_rationale = f"[{'agrees' if llm['agrees'] else 'disagrees'}] {llm['rationale']}"
-            confidence = 0.7 * confidence + 0.3 * llm_confidence
+            confidence = blend_confidence(confidence, llm_confidence, cfg.llm_blend_weight)
 
     return {
         "matched_id": matched_id,
@@ -796,6 +796,13 @@ async def _notify_scan(summary: dict) -> None:
         logger.info(f"Scan notification failed (non-fatal): {e}")
 
 
+def blend_confidence(deterministic: float, llm: float, weight: float) -> float:
+    """Deterministic/LLM confidence blend. weight = the LLM's share (0-1, clamped);
+    user-adjustable since v0.12.0 (previously hardcoded 0.7/0.3)."""
+    w = max(0.0, min(1.0, weight))
+    return round(min(1.0, (1.0 - w) * deterministic + w * llm), 3)
+
+
 def llm_run_active() -> bool:
     # Delegates to the shared single-flight slot in llm_assist, so a batch run and
     # the Cleanup page's per-item explain can never hit the LLM host concurrently.
@@ -812,7 +819,7 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
     try:
         db = SessionLocal()
         try:
-            _, ollama = load_settings(db)
+            cfg, ollama = load_settings(db)
             if not (ollama.enabled and ollama.host and ollama.model):
                 return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled"}
             q = db.query(FailedImport)
@@ -844,7 +851,8 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
                 row.llm_confidence = round(
                     max(0.0, min(1.0, row.heuristic_confidence + llm["confidence_adjustment"])), 3)
                 row.llm_rationale = f"[{'agrees' if llm['agrees'] else 'disagrees'}] {llm['rationale']}"
-                row.confidence = round(min(1.0, 0.7 * row.heuristic_confidence + 0.3 * row.llm_confidence), 3)
+                row.confidence = blend_confidence(row.heuristic_confidence, row.llm_confidence,
+                                                  cfg.llm_blend_weight)
                 db.commit()
                 scored += 1
                 if ollama.batch_delay_ms > 0:

@@ -313,5 +313,21 @@ class TestRationaleKey(unittest.TestCase):
         self.assertEqual(self._key(), self._key(keep_alive_minutes=99, batch_delay_ms=500))
 
 
+class TestBlendConfidence(unittest.TestCase):
+    def test_default_weight_matches_legacy_blend(self):
+        from app.services.import_matcher import blend_confidence
+        self.assertEqual(blend_confidence(0.8, 0.6, 0.3), round(0.7 * 0.8 + 0.3 * 0.6, 3))
+
+    def test_zero_weight_is_pure_deterministic(self):
+        from app.services.import_matcher import blend_confidence
+        self.assertEqual(blend_confidence(0.8, 0.1, 0.0), 0.8)
+
+    def test_weight_clamped_and_result_capped(self):
+        from app.services.import_matcher import blend_confidence
+        self.assertEqual(blend_confidence(0.5, 0.9, 5.0), 0.9)   # weight clamps to 1
+        self.assertEqual(blend_confidence(0.5, 0.9, -1.0), 0.5)  # weight clamps to 0
+        self.assertEqual(blend_confidence(1.0, 1.0, 0.5), 1.0)   # never exceeds 1
+
+
 if __name__ == "__main__":
     unittest.main()
