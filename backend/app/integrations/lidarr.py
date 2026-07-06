@@ -74,7 +74,9 @@ class LidarrIntegration(BaseIntegration):
             return r.json()
 
     async def push_import_command(self, download_id: str, artist_id: int | None = None) -> dict:
-        """Fetch manual-import candidates for a download and POST back the importable ones."""
+        """Fetch manual-import candidates for a download and execute a ManualImport
+        command for the importable ones. Imports MUST go through POST /command —
+        the bare POST /manualimport route is the reprocess endpoint and never imports."""
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
                 params = {"downloadId": download_id, "filterExistingFiles": "false"}
@@ -82,19 +84,29 @@ class LidarrIntegration(BaseIntegration):
                 r.raise_for_status()
                 files = []
                 for f in r.json():
-                    if artist_id and not f.get("artist") and not f.get("artistId"):
-                        f["artistId"] = artist_id
-                    has_artist = f.get("artist") or f.get("artistId")
-                    has_album = f.get("album") or f.get("albums") or f.get("albumId")
-                    if not has_artist or not has_album:
+                    aid = (f.get("artist") or {}).get("id") or f.get("artistId") or artist_id
+                    album_id = (f.get("album") or {}).get("id") or f.get("albumId")
+                    if not aid or not album_id or not f.get("path"):
                         continue
-                    f["importMode"] = "move"
-                    files.append(f)
+                    entry = {
+                        "path": f["path"],
+                        "artistId": aid,
+                        "albumId": album_id,
+                        "albumReleaseId": (f.get("albumRelease") or {}).get("id") or f.get("albumReleaseId"),
+                        "trackIds": f.get("trackIds") or [t["id"] for t in (f.get("tracks") or []) if t.get("id")],
+                        "quality": f.get("quality"),
+                        "downloadId": f.get("downloadId") or download_id,
+                    }
+                    files.append({k: v for k, v in entry.items() if v is not None})
                 if not files:
                     return {"ok": False, "message": "No importable files resolved for this download", "imported": 0}
-                pr = await client.post(f"{self._base()}/manualimport", headers=self._headers(), json=files)
+                pr = await client.post(f"{self._base()}/command", headers=self._headers(),
+                                       json={"name": "ManualImport", "files": files, "importMode": "move",
+                                             "replaceExistingFiles": False})
                 if pr.status_code in (200, 201, 202):
-                    return {"ok": True, "message": f"Imported {len(files)} file(s)", "imported": len(files)}
+                    return {"ok": True, "imported": len(files),
+                            "message": f"Manual import command queued for {len(files)} file(s) — "
+                                       "confirmed against history afterward"}
                 return {"ok": False, "message": f"Import push failed: HTTP {pr.status_code}", "imported": 0}
         except Exception as e:
             return {"ok": False, "message": str(e), "imported": 0}

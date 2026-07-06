@@ -4,6 +4,30 @@ import httpx
 from app.integrations.base import BaseIntegration
 
 
+def build_manual_import_files(candidates: list[dict], movie_id: int | None,
+                              download_id: str) -> list[dict]:
+    """Map GET /manualimport candidates to ManualImport-command file entries
+    (pure, unit-tested). Mirrors Radarr's interactive import: flat movieId,
+    never the nested movie object."""
+    files = []
+    for f in candidates:
+        mid = (f.get("movie") or {}).get("id") or f.get("movieId") or movie_id
+        if not mid or not f.get("path"):
+            continue
+        entry = {
+            "path": f["path"],
+            "folderName": f.get("folderName"),
+            "movieId": mid,
+            "quality": f.get("quality"),
+            "languages": f.get("languages") or [],
+            "releaseGroup": f.get("releaseGroup"),
+            "indexerFlags": f.get("indexerFlags") or 0,
+            "downloadId": f.get("downloadId") or download_id,
+        }
+        files.append({k: v for k, v in entry.items() if v is not None})
+    return files
+
+
 class RadarrIntegration(BaseIntegration):
     name = "radarr"
 
@@ -74,25 +98,23 @@ class RadarrIntegration(BaseIntegration):
             return r.json()
 
     async def push_import_command(self, download_id: str, movie_id: int | None = None) -> dict:
-        """Fetch manual-import candidates for a download and POST back the importable ones."""
+        """Fetch manual-import candidates for a download and execute a ManualImport
+        command for the importable ones. Imports MUST go through POST /command —
+        the bare POST /manualimport route is the reprocess endpoint and never imports."""
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
                 params = {"downloadId": download_id, "filterExistingFiles": "false"}
                 r = await client.get(f"{self._base()}/manualimport", headers=self._headers(), params=params)
                 r.raise_for_status()
-                files = []
-                for f in r.json():
-                    if movie_id and not f.get("movie") and not f.get("movieId"):
-                        f["movieId"] = movie_id
-                    if not (f.get("movie") or f.get("movieId")):
-                        continue
-                    f["importMode"] = "move"
-                    files.append(f)
+                files = build_manual_import_files(r.json(), movie_id, download_id)
                 if not files:
                     return {"ok": False, "message": "No importable files resolved for this download", "imported": 0}
-                pr = await client.post(f"{self._base()}/manualimport", headers=self._headers(), json=files)
+                pr = await client.post(f"{self._base()}/command", headers=self._headers(),
+                                       json={"name": "ManualImport", "files": files, "importMode": "move"})
                 if pr.status_code in (200, 201, 202):
-                    return {"ok": True, "message": f"Imported {len(files)} file(s)", "imported": len(files)}
+                    return {"ok": True, "imported": len(files),
+                            "message": f"Manual import command queued for {len(files)} file(s) — "
+                                       "confirmed against history afterward"}
                 return {"ok": False, "message": f"Import push failed: HTTP {pr.status_code}", "imported": 0}
         except Exception as e:
             return {"ok": False, "message": str(e), "imported": 0}
