@@ -288,9 +288,17 @@ export const importsApi = {
 };
 
 // --- System ---
+export interface ScheduleInfo {
+  last_scan_at: string | null;
+  next_scan_at: string | null; // null = scanning disabled
+  last_synced_at: string | null;
+  next_sync_at: string | null; // null = manual sync only
+}
+
 export const systemApi = {
   health: () => req<{ status: string; db: string }>("/system/health"),
   logs: (lines = 200) => req<{ lines: string[] }>(`/system/logs?lines=${lines}`),
+  schedule: () => req<ScheduleInfo>("/system/schedule"),
 };
 
 // --- Auth ---

@@ -10,6 +10,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
+from typing import Any
 
 from app.database import SessionLocal
 from app.models.app_setting import AppSetting
@@ -649,6 +650,14 @@ async def _check_orphans(db, cfg: ImportMatchingSettings, summary: dict) -> None
     if not orphaned:
         return
     now = datetime.utcnow()
+    arr_clients: dict[str, Any] = {}
+
+    def _arr_client(app_name: str):
+        if app_name not in arr_clients:
+            arr_row = db.query(Integration).filter_by(name=app_name, enabled=True).first()
+            arr_clients[app_name] = _get_client(app_name, arr_row) if arr_row else None
+        return arr_clients[app_name]
+
     for row in rows:
         if row.download_id.lower() not in orphaned:
             continue
@@ -670,6 +679,10 @@ async def _check_orphans(db, cfg: ImportMatchingSettings, summary: dict) -> None
             summary["orphaned"] += 1
             logger.info(f"Orphan check: '{row.raw_title}' ({row.source_app}) gone from "
                         f"all download clients — marked orphaned (auto-purge on)")
+            if row.queue_item_id and row.queue_item_id.isdigit():
+                client = _arr_client(row.source_app)
+                if client and await client.remove_from_queue(int(row.queue_item_id)):
+                    logger.info(f"Orphan check: removed '{row.raw_title}' from {row.source_app}'s queue")
         else:
             row.message = ((row.message + " | ") if row.message else "") + \
                 "Download no longer exists in any download client — confirm to mark orphaned"
@@ -841,6 +854,9 @@ async def scan_once() -> dict:
                     item.message = ((item.message + " | ") if item.message else "") + \
                         "Auto-rejected: every file is a quality downgrade of an existing library file"
                     summary["quality_downgrade_auto_rejected"] += 1
+                    if queue_item_id and queue_item_id.isdigit():
+                        if await client.remove_from_queue(int(queue_item_id)):
+                            logger.info(f"Quality downgrade: removed '{item.raw_title}' from {app_name}'s queue")
                 elif (cfg.auto_resolve_enabled and match["matched_id"]
                         and match["confidence"] >= cfg.high_confidence_threshold and download_id):
                     result = await client.push_import_command(download_id, match["matched_id"])
@@ -857,6 +873,16 @@ async def scan_once() -> dict:
                 db.add(item)
                 db.commit()
         await _check_orphans(db, cfg, summary)
+
+        # Last-scan timestamp for the dashboard's "next scan" countdown — updated on
+        # every completed cycle, manual "Scan Now" included, so it reflects reality
+        # even if the background poller has been off.
+        setting = db.query(AppSetting).filter_by(key="last_scan_at").first()
+        if not setting:
+            setting = AppSetting(key="last_scan_at")
+            db.add(setting)
+        setting.value = datetime.utcnow().isoformat()
+        db.commit()
     finally:
         db.close()
 

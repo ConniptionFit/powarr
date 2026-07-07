@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle } from "lucide-react";
-import { mediaApi, integrationsApi, importsApi, fmtBytes } from "../../lib/api";
+import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock } from "lucide-react";
+import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes } from "../../lib/api";
 
 function StatCard({ icon: Icon, label, value, sub, color }: {
   icon: React.ElementType;
@@ -24,6 +24,39 @@ function StatCard({ icon: Icon, label, value, sub, color }: {
   );
 }
 
+function fmtCountdown(ms: number): string {
+  if (ms <= 0) return "Due now";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+// Ticks its own display every second without re-rendering the rest of the
+// dashboard — the target time comes from the server (next_scan_at etc.),
+// this just formats "time remaining" and re-formats on each tick.
+function CountdownStat({ icon, label, color, targetIso, disabledLabel, sub }: {
+  icon: React.ElementType;
+  label: string;
+  color: string;
+  targetIso: string | null;
+  disabledLabel: string;
+  sub?: string;
+}) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!targetIso) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [targetIso]);
+
+  const value = targetIso ? fmtCountdown(new Date(targetIso).getTime() - Date.now()) : disabledLabel;
+  return <StatCard icon={icon} label={label} value={value} sub={sub} color={color} />;
+}
+
 export default function Dashboard() {
   const qc = useQueryClient();
   const { data: stats, isLoading, refetch } = useQuery({
@@ -39,6 +72,12 @@ export default function Dashboard() {
   const { data: deletionStats } = useQuery({
     queryKey: ["deletion-stats"],
     queryFn: mediaApi.deletionStats,
+  });
+
+  const { data: schedule } = useQuery({
+    queryKey: ["schedule"],
+    queryFn: systemApi.schedule,
+    refetchInterval: 60_000, // periodically resync with the server in case a scan/sync just ran elsewhere
   });
 
   const byService = importStats?.by_service ?? {};
@@ -158,19 +197,24 @@ export default function Dashboard() {
             sub="imports needing re-triage"
             color="bg-red-800"
           />
+          <CountdownStat
+            icon={Clock}
+            label="Next Import Scan"
+            targetIso={schedule?.next_scan_at ?? null}
+            disabledLabel="Disabled"
+            sub="Failed Import Matching → Detection Enabled"
+            color="bg-cyan-700"
+          />
+          <CountdownStat
+            icon={CalendarClock}
+            label="Next Plex Sync"
+            targetIso={schedule?.next_sync_at ?? null}
+            disabledLabel="Manual only"
+            sub="Settings → Sync Interval"
+            color="bg-violet-700"
+          />
         </div>
       )}
-
-      <div className="mt-10 bg-surface-raised rounded-xl border border-purple-900/30 p-6">
-        <h2 className="text-lg font-semibold text-white mb-2">Getting Started</h2>
-        <ol className="text-slate-400 text-sm space-y-2 list-decimal list-inside">
-          <li>Configure your Plex connection in <span className="text-brand-light">Integrations</span></li>
-          <li>Optionally enable Tautulli for enriched watch history</li>
-          <li>Connect Sonarr / Radarr / Lidarr for deletion control</li>
-          <li>Run a Plex sync, then visit <span className="text-brand-light">Cleanup</span> to review candidates</li>
-          <li>Tune scoring weights in <span className="text-brand-light">Settings</span></li>
-        </ol>
-      </div>
     </div>
   );
 }
