@@ -62,6 +62,7 @@ function ImportMatchingSection() {
   const { data } = useQuery({ queryKey: ["import-matching"], queryFn: settingsApi.getImportMatching });
   const [cfg, setCfg] = useState<ImportMatchingSettings | null>(null);
   const [saved, setSaved] = useState(false);
+  const [newExt, setNewExt] = useState("");
 
   useEffect(() => { if (data) setCfg(data); }, [data]);
 
@@ -95,8 +96,8 @@ function ImportMatchingSection() {
     </div>
   );
 
-  const toggleRow = (label: string, description: string, field: keyof ImportMatchingSettings) => (
-    <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+  const toggleRow = (label: string, description: string, field: keyof ImportMatchingSettings, nested = false) => (
+    <label className={`py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer ${nested ? "pl-6" : ""}`}>
       <div>
         <p className="text-white text-sm font-medium">{label}</p>
         <p className="text-slate-500 text-xs mt-0.5">{description}</p>
@@ -109,6 +110,19 @@ function ImportMatchingSection() {
       />
     </label>
   );
+
+  const addExtension = () => {
+    const ext = newExt.trim().toLowerCase();
+    if (!ext) return;
+    const normalized = ext.startsWith(".") ? ext : `.${ext}`;
+    if (!cfg.suspicious_extensions.includes(normalized)) {
+      set("suspicious_extensions", [...cfg.suspicious_extensions, normalized]);
+    }
+    setNewExt("");
+  };
+
+  const removeExtension = (ext: string) =>
+    set("suspicious_extensions", cfg.suspicious_extensions.filter(e => e !== ext));
 
   return (
     <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
@@ -138,6 +152,50 @@ function ImportMatchingSection() {
       {toggleRow("Anime Absolute Numbering", "For Sonarr anime series, match by absolute episode number (with season/episode fallback and stale-data guards)", "anime_absolute_numbering")}
       {numRow("LLM Blend Weight", "The LLM's share of the final confidence blend: final = (1−w)·deterministic + w·LLM. 0 = ignore the LLM entirely; 0.3 = long-standing default", "llm_blend_weight", { min: 0, max: 1, step: 0.05 })}
       {toggleRow("Auto-Reject Quality Downgrades", "Skip triage entirely for downloads where every file rejects as 'not an upgrade' over an existing library file — they can never import as-is. Off by default; the Downgrade badge and filter always show these regardless of this setting.", "quality_downgrade_auto_reject")}
+
+      <div className="py-4 border-b border-purple-900/20">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-white text-sm font-medium flex items-center gap-1.5">
+              Suspicious File Extensions
+              <AlertTriangle size={13} className="text-red-400" />
+            </p>
+            <p className="text-slate-500 text-xs mt-0.5">
+              Any file in a download matching one of these extensions gets the row flagged — across all *arr apps, any single match is enough.
+              Archive formats (zip/rar/7z/...) are deliberately not included by default since most legitimate downloads arrive compressed.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5 mt-3">
+          {cfg.suspicious_extensions.map(ext => (
+            <span key={ext} className="flex items-center gap-1 px-2 py-1 rounded bg-red-900/30 border border-red-900/40 text-red-300 text-xs">
+              {ext}
+              <button onClick={() => removeExtension(ext)} className="text-red-400 hover:text-white ml-0.5" title={`Remove ${ext}`}>
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 mt-3">
+          <input
+            type="text"
+            value={newExt}
+            onChange={e => setNewExt(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && (e.preventDefault(), addExtension())}
+            placeholder=".ext"
+            className="w-32 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white"
+          />
+          <button
+            onClick={addExtension}
+            className="px-3 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-xs transition-colors"
+          >
+            Add
+          </button>
+        </div>
+      </div>
+
+      {toggleRow("Auto-Reject Suspicious File Types", "Skip triage entirely for downloads containing a file matching the list above. Off by default; the Suspicious badge and filter always show these regardless of this setting.", "suspicious_extension_auto_reject")}
+      {toggleRow("Also Delete From Disk", "When auto-rejecting a suspicious download, also delete it via the download client (deletes every file in the download, not just the flagged one — no per-file delete is available). Only takes effect when Auto-Reject Suspicious File Types is also on.", "suspicious_extension_delete_from_disk", true)}
 
       <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
         <div>

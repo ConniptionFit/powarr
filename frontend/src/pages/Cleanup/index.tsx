@@ -13,7 +13,7 @@ const TABS = [
 type TabKey = (typeof TABS)[number]["key"];
 
 export default function Cleanup() {
-  const [tab, setTab] = useState<TabKey>("deletion");
+  const [tab, setTab] = useState<TabKey>("imports");
 
   return (
     <div className="p-8">

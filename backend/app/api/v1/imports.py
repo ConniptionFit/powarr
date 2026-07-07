@@ -328,21 +328,6 @@ def _confirm_orphan(item_id: int, db: Session) -> dict:
     return {"id": item.id, "status": item.status}
 
 
-async def _remove_from_download_clients(download_id: str, db: Session) -> list[str]:
-    """Try each enabled download-client integration until one removes the torrent."""
-    from app.api.v1.integrations import DOWNLOAD_CLIENT_NAMES
-    from app.api.v1.integrations import _get_client as _download_client
-    messages = []
-    for name in DOWNLOAD_CLIENT_NAMES:
-        row = db.query(Integration).filter_by(name=name, enabled=True).first()
-        if not row or not row.url:
-            continue
-        client = _download_client(row)
-        result = await client.delete_download(download_id)
-        messages.append(f"{name}: {result['message']}")
-        if result["ok"]:
-            break
-    return messages or ["No download client integration enabled"]
 
 
 @router.get("/{item_id}/candidates")
@@ -425,7 +410,7 @@ async def reject_import(item_id: int, remove_download: bool = Query(False), db: 
     if remove_download:
         item = db.query(FailedImport).filter_by(id=item_id).first()
         if item and item.download_id:
-            result["download_client"] = await _remove_from_download_clients(item.download_id, db)
+            result["download_client"] = await import_matcher.remove_from_download_clients(item.download_id, db)
         else:
             result["download_client"] = ["No download id — nothing to remove"]
     return result

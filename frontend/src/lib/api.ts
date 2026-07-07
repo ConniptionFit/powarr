@@ -130,6 +130,9 @@ export interface ImportMatchingSettings {
   orphan_auto_purge: boolean;
   llm_blend_weight: number; // LLM share of the confidence blend (0-1)
   quality_downgrade_auto_reject: boolean;
+  suspicious_extensions: string[];
+  suspicious_extension_auto_reject: boolean;
+  suspicious_extension_delete_from_disk: boolean;
 }
 
 export interface OllamaSettings {
@@ -212,6 +215,7 @@ export interface FailedImport {
   pack_file_matches: string | null; // JSON: per-file episode suggestions from LLM review
   mapping_overrides: string | null; // JSON: user-corrected per-file episode mappings, keyed by raw path
   quality_downgrade: boolean | null; // every file in the download rejects as "not an upgrade"
+  suspicious_files: string | null; // JSON list of filenames matching a suspicious extension
   status: string;
   verified: boolean | null;
   message: string | null;

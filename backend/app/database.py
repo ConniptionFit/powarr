@@ -49,6 +49,7 @@ def _migrate():
             "pack_file_matches": "TEXT",
             "mapping_overrides": "TEXT",
             "quality_downgrade": "BOOLEAN",
+            "suspicious_files": "TEXT",
         },
         "integrations": {
             "username": "VARCHAR",

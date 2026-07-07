@@ -333,6 +333,7 @@ export default function FailedImports() {
   const [packReviewLoading, setPackReviewLoading] = useState(new Set<number>());
   const [packReviewResults, setPackReviewResults] = useState<Record<string, Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>>>({});
   const [downgradeOnly, setDowngradeOnly] = useState(false);
+  const [suspiciousOnly, setSuspiciousOnly] = useState(false);
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
@@ -374,7 +375,10 @@ export default function FailedImports() {
   });
 
   const sortedItems = useMemo(() => {
-    const arr = downgradeOnly ? items.filter(i => i.quality_downgrade) : [...items];
+    let arr = items;
+    if (downgradeOnly) arr = arr.filter(i => i.quality_downgrade);
+    if (suspiciousOnly) arr = arr.filter(i => i.suspicious_files);
+    arr = [...arr];
     arr.sort((a, b) => {
       const av = a[sortBy], bv = b[sortBy];
       if (av == null && bv == null) return 0;
@@ -386,7 +390,7 @@ export default function FailedImports() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return arr;
-  }, [items, sortBy, sortDir, downgradeOnly]);
+  }, [items, sortBy, sortDir, downgradeOnly, suspiciousOnly]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["imports"] });
@@ -566,6 +570,14 @@ export default function FailedImports() {
                 Downgrade
               </span>
             )}
+            {item.suspicious_files && (
+              <span
+                className="block mt-0.5 px-1.5 py-0.5 rounded bg-red-900/60 text-red-300 text-[10px] font-bold uppercase tracking-wide w-fit"
+                title={`Suspicious file type(s): ${JSON.parse(item.suspicious_files).join(", ")}`}
+              >
+                Suspicious
+              </span>
+            )}
           </>
         );
       }
@@ -647,6 +659,15 @@ export default function FailedImports() {
           }`}
         >
           Downgrades only
+        </button>
+        <button
+          onClick={() => setSuspiciousOnly(v => !v)}
+          title="Show only items with a suspicious file type (e.g. .exe) in the download"
+          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+            suspiciousOnly ? "bg-red-700 border-red-700 text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
+          }`}
+        >
+          Suspicious only
         </button>
         {actionMsg && <span className="text-sm text-slate-300 ml-2">{actionMsg}</span>}
       </div>

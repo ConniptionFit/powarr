@@ -43,6 +43,21 @@ class ImportMatchingSettings(BaseModel):
     # auto-rejects it during the scan instead of leaving it in triage. Off by default —
     # same positive-opt-in pattern as orphan_auto_purge.
     quality_downgrade_auto_reject: bool = False
+    # Suspicious file-type detection (v0.19.0) — any file in a download matching one
+    # of these (case-insensitive) extensions gets the row flagged/badged, across all
+    # *arr apps (unlike quality-downgrade, one bad file is enough — checked with OR,
+    # not AND). Archive formats (zip/rar/7z/...) are deliberately excluded from the
+    # default list since most legitimate downloads arrive compressed.
+    suspicious_extensions: list[str] = [
+        ".exe", ".scr", ".bat", ".cmd", ".com", ".pif", ".msi", ".vbs", ".vbe",
+        ".js", ".jse", ".wsf", ".wsh", ".ps1", ".jar", ".lnk", ".hta", ".cpl",
+    ]
+    suspicious_extension_auto_reject: bool = False
+    # Also removes the download (every file, not just the flagged one — no download
+    # client exposes reliable single-file deletion) via the download client's own
+    # delete API. Only meaningful when suspicious_extension_auto_reject is on;
+    # user-confirmed 2026-07-07 that whole-download deletion is acceptable here.
+    suspicious_extension_delete_from_disk: bool = False
 
 
 class OllamaSettings(BaseModel):

@@ -147,6 +147,27 @@ def _se_label(season, episode) -> str:
     return s + e
 
 
+def find_suspicious_files(candidates: list[dict], extensions: list[str]) -> list[str]:
+    """Pure: filenames in a manual-import candidate list matching any of the given
+    (case-insensitive) extensions. Unlike is_quality_downgrade, a single match is
+    enough to flag the whole download — one malicious file hiding among otherwise
+    legitimate ones is still a real risk. Returns the matched filenames (empty list
+    = clean); extensions may be given with or without a leading dot."""
+    exts = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions if e}
+    if not exts:
+        return []
+    matches = []
+    for f in candidates:
+        path = f.get("path") or f.get("relativePath") or ""
+        name = path.rsplit("/", 1)[-1]
+        if not name:
+            continue
+        _, ext = os.path.splitext(name)
+        if ext.lower() in exts:
+            matches.append(name)
+    return matches
+
+
 def is_quality_downgrade(candidates: list[dict]) -> bool:
     """Pure: True when EVERY file in a manual-import candidate list rejects purely
     because it's not an upgrade over an existing library file (Sonarr's own
@@ -527,6 +548,15 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         llm_context_parts = [
             f"Source app: {app_name}",
             f"Queue status: {_queue_messages(rec)[:150]}",
+            # Weak local models sometimes report a "year mismatch" between two
+            # numerically identical years (observed live: "year mismatch (2025 vs
+            # 2025)") — the candidate title occasionally carries a disambiguating
+            # "(YYYY)" suffix (e.g. "Paradise (2025)"), so a year comparison is
+            # sometimes genuinely possible; the instruction only needs to rule out
+            # a self-contradictory verdict, not the comparison itself.
+            "Never report a year mismatch between two years that are the same "
+            "number — only flag a year mismatch if the release year and the "
+            "candidate's year (when the candidate's title includes one) actually differ.",
         ]
         if triggered_title and triggered_title != matched_title:
             llm_context_parts.append(
@@ -615,6 +645,27 @@ def _row_output_path(row) -> str | None:
         return json.loads(row.raw_metadata or "{}").get("outputPath")
     except (ValueError, TypeError):
         return None
+
+
+async def remove_from_download_clients(download_id: str, db) -> list[str]:
+    """Try each enabled download-client integration until one removes the torrent
+    (and, by default, its downloaded data — delete_download defaults to
+    delete_files=True). Shared by the manual reject-and-remove-download flow
+    (api/v1/imports.py) and the suspicious-file auto-reject-with-delete path
+    below."""
+    from app.api.v1.integrations import DOWNLOAD_CLIENT_NAMES
+    from app.api.v1.integrations import _get_client as _download_client
+    messages = []
+    for name in DOWNLOAD_CLIENT_NAMES:
+        row = db.query(Integration).filter_by(name=name, enabled=True).first()
+        if not row or not row.url:
+            continue
+        client = _download_client(row)
+        result = await client.delete_download(download_id)
+        messages.append(f"{name}: {result['message']}")
+        if result["ok"]:
+            break
+    return messages or ["No download client integration enabled"]
 
 
 async def _check_orphans(db, cfg: ImportMatchingSettings, summary: dict) -> None:
@@ -748,7 +799,7 @@ async def scan_once() -> dict:
     summary: dict = {"scanned": [], "new_suggestions": 0, "auto_resolved": 0, "skipped_existing": 0,
                      "below_floor": 0, "in_grace": 0, "closed_external": 0, "verified": 0,
                      "resolve_failed": 0, "orphaned": 0, "orphan_pending": 0,
-                     "quality_downgrade_auto_rejected": 0}
+                     "quality_downgrade_auto_rejected": 0, "suspicious_auto_rejected": 0}
     db = SessionLocal()
     try:
         cfg, ollama = load_settings(db)
@@ -837,18 +888,40 @@ async def scan_once() -> dict:
                     message=_queue_messages(rec)[:500] or None,
                 )
 
-                # Quality-downgrade check (v0.17.0) — a release that only ever
-                # rejects as "not an upgrade" will never successfully import;
-                # one manual-import call per NEW row, bounded the same way as
-                # pack coverage/corroboration (never on an existing row's re-poll).
-                if app_name == "sonarr" and download_id:
+                # Quality-downgrade + suspicious-file checks (v0.17.0/v0.19.0) — one
+                # manual-import call per NEW row, shared by both checks, bounded the
+                # same way as pack coverage/corroboration (never on an existing row's
+                # re-poll). Suspicious-file detection runs for every app (a malicious
+                # file can hide in any download); quality-downgrade is Sonarr-only
+                # (relies on Sonarr's episode-specific "not an upgrade" rejections).
+                mi_candidates: list[dict] = []
+                if download_id:
                     try:
-                        dg_candidates = await client.get_manual_import(download_id)
-                        item.quality_downgrade = is_quality_downgrade(dg_candidates)
+                        mi_candidates = await client.get_manual_import(download_id)
                     except Exception as e:
-                        logger.info(f"Quality-downgrade check failed (non-fatal): {e}")
+                        logger.info(f"Manual-import check failed (non-fatal): {e}")
+                if mi_candidates:
+                    suspicious = find_suspicious_files(mi_candidates, cfg.suspicious_extensions)
+                    item.suspicious_files = json.dumps(suspicious) if suspicious else None
+                    if app_name == "sonarr":
+                        item.quality_downgrade = is_quality_downgrade(mi_candidates)
 
-                if item.quality_downgrade and cfg.quality_downgrade_auto_reject:
+                if item.suspicious_files and cfg.suspicious_extension_auto_reject:
+                    matched = json.loads(item.suspicious_files)
+                    item.status = "rejected"
+                    item.resolved_at = datetime.utcnow()
+                    item.message = ((item.message + " | ") if item.message else "") + \
+                        f"Auto-rejected: suspicious file type(s) detected ({', '.join(matched)})"
+                    summary["suspicious_auto_rejected"] += 1
+                    if queue_item_id and queue_item_id.isdigit():
+                        if await client.remove_from_queue(int(queue_item_id)):
+                            logger.info(f"Suspicious file: removed '{item.raw_title}' from {app_name}'s queue")
+                    if cfg.suspicious_extension_delete_from_disk and download_id:
+                        dl_messages = await remove_from_download_clients(download_id, db)
+                        item.message += " | " + "; ".join(dl_messages)
+                        logger.warning(f"Suspicious file: deleted download for '{item.raw_title}' "
+                                       f"from disk — {'; '.join(dl_messages)}")
+                elif item.quality_downgrade and cfg.quality_downgrade_auto_reject:
                     item.status = "rejected"
                     item.resolved_at = datetime.utcnow()
                     item.message = ((item.message + " | ") if item.message else "") + \

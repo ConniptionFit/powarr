@@ -6,7 +6,7 @@ from app.schemas.settings import ImportMatchingSettings
 from app.services.import_matcher import (_normalize, title_similarity, _is_stuck, _within_grace,
                                          _parse_release_numbers, score_episode_match,
                                          score_pack_match, find_corroborating_episodes,
-                                         is_quality_downgrade)
+                                         is_quality_downgrade, find_suspicious_files)
 
 CFG = ImportMatchingSettings()  # defaults: title 0.6 / number 0.4, anime numbering on
 
@@ -287,6 +287,46 @@ class TestIsQualityDowngrade(unittest.TestCase):
 
     def test_empty_candidates_false(self):
         self.assertFalse(is_quality_downgrade([]))
+
+
+class TestFindSuspiciousFiles(unittest.TestCase):
+    DEFAULT_EXTS = [".exe", ".scr", ".bat", ".js"]
+
+    def test_matches_exe(self):
+        candidates = [{"path": "/downloads/Show.S01E01/Show.S01E01.exe"}]
+        self.assertEqual(find_suspicious_files(candidates, self.DEFAULT_EXTS), ["Show.S01E01.exe"])
+
+    def test_case_insensitive(self):
+        candidates = [{"path": "/downloads/x/READ.ME.EXE"}]
+        self.assertEqual(find_suspicious_files(candidates, self.DEFAULT_EXTS), ["READ.ME.EXE"])
+
+    def test_clean_video_file_not_flagged(self):
+        candidates = [{"path": "/downloads/x/Show.S01E01.1080p.mkv"}]
+        self.assertEqual(find_suspicious_files(candidates, self.DEFAULT_EXTS), [])
+
+    def test_one_bad_file_among_many_good_still_flags(self):
+        candidates = [
+            {"path": "/d/Show.S01E01.mkv"},
+            {"path": "/d/Show.S01E02.mkv"},
+            {"path": "/d/setup.exe"},
+        ]
+        self.assertEqual(find_suspicious_files(candidates, self.DEFAULT_EXTS), ["setup.exe"])
+
+    def test_archive_formats_not_flagged_by_default_list(self):
+        candidates = [{"path": "/d/release.rar"}, {"path": "/d/release.zip"}]
+        self.assertEqual(find_suspicious_files(candidates, self.DEFAULT_EXTS), [])
+
+    def test_extensions_without_leading_dot_accepted(self):
+        candidates = [{"path": "/d/setup.exe"}]
+        self.assertEqual(find_suspicious_files(candidates, ["exe"]), ["setup.exe"])
+
+    def test_empty_extensions_list_flags_nothing(self):
+        candidates = [{"path": "/d/setup.exe"}]
+        self.assertEqual(find_suspicious_files(candidates, []), [])
+
+    def test_falls_back_to_relative_path(self):
+        candidates = [{"relativePath": "malware.exe"}]
+        self.assertEqual(find_suspicious_files(candidates, self.DEFAULT_EXTS), ["malware.exe"])
 
 
 if __name__ == "__main__":

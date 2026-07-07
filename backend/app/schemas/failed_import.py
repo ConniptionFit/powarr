@@ -20,6 +20,7 @@ class FailedImportOut(BaseModel):
     pack_file_matches: Optional[str] = None  # JSON: per-file episode suggestions from LLM review
     mapping_overrides: Optional[str] = None  # JSON: user-corrected per-file episode mappings
     quality_downgrade: Optional[bool] = None  # every file rejects as "not an upgrade"
+    suspicious_files: Optional[str] = None  # JSON list of filenames matching a suspicious extension
     status: str
     verified: Optional[bool] = None
     message: Optional[str] = None
