@@ -1,6 +1,6 @@
 # Powarr — Master Prompt (LLM IDE Agent)
 
-> **This is the authoritative agent context for Powarr.** Use this whole file as a prefix, together with the linked vault notes, before any future additions to the app. Supersedes [[LLM Context]] (legacy stub). Canonical copy: `Powarr/Master Prompt.md` in the Obsidian vault — keep this mirror identical. Last updated: 2026-07-07 (v0.20.0).
+> **This is the authoritative agent context for Powarr.** Use this whole file as a prefix, together with the linked vault notes, before any future additions to the app. Supersedes [[LLM Context]] (legacy stub). Canonical copy: `Powarr/Master Prompt.md` in the Obsidian vault — keep this mirror identical. Last updated: 2026-07-07 (v0.21.0).
 
 ## Identity & Purpose
 
@@ -10,7 +10,7 @@ You are an LLM IDE agent responsible for reviewing, maintaining, and extending *
 
 | Field | Value |
 |---|---|
-| Version | v0.20.0 |
+| Version | v0.21.0 |
 | Container | `powarr`, port `7979`, Docker host `10.1.1.2` (`ssh docker`, key auth) |
 | Source of truth | Host repo `/mnt/ServerFiles/Docker/composeFiles/powarr` (= build context) |
 | Local working clone | `~/Projects/powarr` on Linux (`ssh docker`) — **edit here via host filesystem** |
@@ -53,7 +53,7 @@ You are an LLM IDE agent responsible for reviewing, maintaining, and extending *
 | Security | Auth, secrets, exposed surface, CVEs, validation | `services/auth.py`, `api/v1/auth.py`, middleware; [[Security]]. TOTP/LAN-bypass live since v0.3.0 |
 | Docker & Deployment | Dockerfile, compose, env, lifecycle, backup/restore | [[Docker & Deployment]]. Compose file is gitignored — edit on host, never commit |
 | Failed Import Detection & Matching | Stuck imports, queue triage, confidence, auto-resolve, triage table, episode/anime/pack matching | `services/import_matcher.py`, `api/v1/imports.py`, FailedImport model; [[Failed Import Matching]]. Independent of deletion flow. Multi-variable episode scorer + deterministic rationale (v0.5.0), season-pack coverage (v0.5.1), orphan cleanup w/ positive-confirmation rule (v0.6.0), prompt-first orphan confirmation + filesystem presence leg + auto-purge toggle (v0.6.1), import push via ManualImport command — never POST /manualimport, never seriesId on the manualimport GET, library-folder guard (v0.6.2/v0.6.3, see incident in [[Future Improvements]]), triggered-series metadata in LLM context + per-file episode review for season packs (v0.13.0), title-similarity punctuation fix + manual-import paired-episode corroboration (v0.16.0), editable per-file episode mapping via `PUT /imports/{id}/file-mapping` (wired into accept) + quality-downgrade detection/auto-reject (v0.17.0, replaces the removed v0.15.0 pack columns), `BaseIntegration.remove_from_queue()` clearing the *arr's own queue entry on orphan-auto-purge/downgrade-auto-reject, no blocklist (v0.18.0), suspicious file-type detection across all apps (`find_suspicious_files`, user-editable extension list) + auto-reject + optional delete-from-disk via `remove_from_download_clients()` (v0.19.0) |
-| Local LLM Assist | LLM connection/behavior, prompts, verbosity, on-demand runs, rationale, pack matching | `services/llm_assist.py`; [[Local LLM Assist]]. Optional, fail-soft, blend 0.3 default. Single structured review call (`review_match`) since v0.5.0; per-file pack matching (`review_pack_files`) since v0.13.0 with triggered-series context prioritization; year-mismatch guard (v0.19.0); judging-guidance fix (ignore quality/uploader tags, consider title translations) + forced-verbose on-demand runs + `llm_agrees` structured field (prefix removed) + Markdown reply format + clickable prompt placeholders (v0.20.0) |
+| Local LLM Assist | LLM connection/behavior, prompts, verbosity, on-demand runs, rationale, pack matching | `services/llm_assist.py`; [[Local LLM Assist]]. Optional, fail-soft, blend 0.3 default. Single structured review call (`review_match`) since v0.5.0; per-file pack matching (`review_pack_files`) since v0.13.0 with triggered-series context prioritization; year-mismatch guard (v0.19.0); judging-guidance fix (ignore quality/uploader tags, consider title translations) + forced-verbose on-demand runs + `llm_agrees` structured field (prefix removed) + Markdown reply format + clickable prompt placeholders (v0.20.0); queued on-demand runs (no more 409) + concise `PACK_MATCH_TYPES` pack-match taxonomy + single-object salvage fix + `AnimatedBot` busy indicator (v0.21.0) |
 | Documentation & Knowledge Base | After any code change; explicit docs requests | Vault notes + repo README + this Master Prompt (and its `CLAUDE.md` mirror — keep both in sync) |
 
 ## Documentation Handoff Map

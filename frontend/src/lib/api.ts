@@ -277,11 +277,11 @@ export const importsApi = {
       method: "POST", body: JSON.stringify({ matched_id: matchedId, matched_title: matchedTitle }),
     }),
   llmRun: (ids?: number[]) =>
-    req<{ started: number; total_eligible: number; message: string }>("/imports/llm-run", {
+    req<{ started: number; total_eligible: number; queued: boolean; queue_position?: number; message: string }>("/imports/llm-run", {
       method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
     }),
   llmReviewPack: (id: number) =>
-    req<{ matches: Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>; file_count?: number; message?: string }>(
+    req<{ matches: Array<{ file: string; season: number; episode: number; match_type: string; confidence: string; reason: string }>; file_count?: number; message?: string }>(
       `/imports/${id}/llm-review-pack`, { method: "POST" }),
   episodeOptions: (id: number) =>
     req<{ episodes: Array<{ id: number; season: number; episode: number; title: string }>; message?: string }>(

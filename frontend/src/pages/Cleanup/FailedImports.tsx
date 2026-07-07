@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, Brain, ThumbsUp, ThumbsDown } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd } from "lucide-react";
 import { importsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import ClampedText from "../../components/ClampedText";
+import AnimatedBot from "../../components/AnimatedBot";
 
 const APP_COLORS: Record<string, string> = {
   sonarr: "bg-teal-600",
@@ -226,7 +227,24 @@ function EpisodePicker({ importId, currentSeason, currentEpisode, onSelect, onCl
   );
 }
 
-function FileDetails({ importId, sourceApp, matchedId }: { importId: number; sourceApp: string; matchedId: number | null }) {
+// Concise LLM pack-match reasoning badges — mirrors the closed vocabulary the
+// backend prompt asks for (llm_assist.PACK_MATCH_TYPES). Strongest evidence
+// (green) to weakest (red), so a glance at color tells you what needs review.
+const MATCH_TYPE_STYLES: Record<string, string> = {
+  "Exact Match": "bg-green-900/40 text-green-300",
+  "Title Match": "bg-teal-900/40 text-teal-300",
+  "Number Match": "bg-blue-900/40 text-blue-300",
+  "Absolute Number Match": "bg-indigo-900/40 text-indigo-300",
+  "Multi-Episode File": "bg-purple-900/40 text-purple-300",
+  "Sequence Match": "bg-orange-900/40 text-orange-300",
+  "Low Confidence": "bg-red-900/40 text-red-300",
+};
+
+const basename = (p: string) => p.split("/").pop() ?? p;
+
+function FileDetails({ importId, sourceApp, matchedId, packFileMatches }: {
+  importId: number; sourceApp: string; matchedId: number | null; packFileMatches: string | null;
+}) {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ["import-files", importId],
@@ -234,6 +252,16 @@ function FileDetails({ importId, sourceApp, matchedId }: { importId: number; sou
     staleTime: 60_000,
   });
   const [editingPath, setEditingPath] = useState<string | null>(null);
+
+  const matchByFile = useMemo(() => {
+    const map = new Map<string, { match_type: string; confidence: string; reason: string }>();
+    if (!packFileMatches) return map;
+    try {
+      const parsed: Array<{ file: string; match_type?: string; confidence: string; reason: string }> = JSON.parse(packFileMatches);
+      for (const m of parsed) map.set(basename(m.file), { match_type: m.match_type ?? "Low Confidence", confidence: m.confidence, reason: m.reason });
+    } catch { /* malformed — ignore, badge just won't show */ }
+    return map;
+  }, [packFileMatches]);
 
   const mappingMut = useMutation({
     mutationFn: ({ path, ep }: { path: string; ep: EpisodeOption }) =>
@@ -264,6 +292,7 @@ function FileDetails({ importId, sourceApp, matchedId }: { importId: number; sou
           <th className="text-left px-4 py-1.5">Size</th>
           <th className="text-left px-4 py-1.5">Quality</th>
           <th className="text-left px-4 py-1.5">Mapped To</th>
+          <th className="text-left px-4 py-1.5">Match Reasoning</th>
           <th className="text-left px-4 py-1.5">Rejections</th>
         </tr>
       </thead>
@@ -272,6 +301,7 @@ function FileDetails({ importId, sourceApp, matchedId }: { importId: number; sou
           const current = parseCurrent(f.detail);
           const isEditing = editable && !!f.raw_path && editingPath === f.raw_path;
           const label = f.mapped_to ? `${f.mapped_to}${f.detail ? ` (${f.detail})` : ""}` : "unmapped";
+          const match = f.path ? matchByFile.get(basename(f.path)) : undefined;
           return (
             <tr key={i}>
               <td className="px-4 py-1.5 max-w-xs truncate" title={f.path ?? ""}>{f.path ?? "—"}</td>
@@ -302,6 +332,16 @@ function FileDetails({ importId, sourceApp, matchedId }: { importId: number; sou
                   />
                 )}
               </td>
+              <td className="px-4 py-1.5">
+                {match ? (
+                  <span
+                    title={`${match.confidence} confidence${match.reason ? ` — ${match.reason}` : ""}`}
+                    className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${MATCH_TYPE_STYLES[match.match_type] ?? "bg-surface-overlay text-slate-400"}`}
+                  >
+                    {match.match_type}
+                  </span>
+                ) : "—"}
+              </td>
               <td className="px-4 py-1.5 max-w-xs truncate" title={f.rejections.join("; ")}>
                 {f.rejections.length ? f.rejections.join("; ") : "—"}
               </td>
@@ -321,6 +361,7 @@ export default function FailedImports() {
   const [scanning, setScanning] = useState(false);
   const [confirmAccept, setConfirmAccept] = useState<number | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [llmQueued, setLlmQueued] = useState<number | null>(null); // queue position, null = not queued
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [expanded, setExpanded] = useState<number | null>(null);
 
@@ -331,9 +372,10 @@ export default function FailedImports() {
   const [sortBy, setSortBy] = useState<keyof FailedImport>("created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [packReviewLoading, setPackReviewLoading] = useState(new Set<number>());
-  const [packReviewResults, setPackReviewResults] = useState<Record<string, Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>>>({});
+  const [packReviewResults, setPackReviewResults] = useState<Record<string, Array<{ file: string; season: number; episode: number; match_type: string; confidence: string; reason: string }>>>({});
   const [downgradeOnly, setDowngradeOnly] = useState(false);
   const [suspiciousOnly, setSuspiciousOnly] = useState(false);
+  const [packFilter, setPackFilter] = useState<"all" | "packs" | "singles">("all");
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
@@ -378,6 +420,8 @@ export default function FailedImports() {
     let arr = items;
     if (downgradeOnly) arr = arr.filter(i => i.quality_downgrade);
     if (suspiciousOnly) arr = arr.filter(i => i.suspicious_files);
+    if (packFilter === "packs") arr = arr.filter(i => i.pack);
+    if (packFilter === "singles") arr = arr.filter(i => !i.pack);
     arr = [...arr];
     arr.sort((a, b) => {
       const av = a[sortBy], bv = b[sortBy];
@@ -390,7 +434,7 @@ export default function FailedImports() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return arr;
-  }, [items, sortBy, sortDir, downgradeOnly, suspiciousOnly]);
+  }, [items, sortBy, sortDir, downgradeOnly, suspiciousOnly, packFilter]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["imports"] });
@@ -407,6 +451,7 @@ export default function FailedImports() {
       try {
         const data = JSON.parse(ev.data);
         if (data.type === "llm_run") setActionMsg(`LLM run finished: ${data.scored} scored, ${data.skipped} skipped`);
+        if (data.type === "llm_run_started") setLlmQueued(null);
       } catch { /* keepalive */ }
     };
     return () => es.close();
@@ -446,7 +491,11 @@ export default function FailedImports() {
 
   const llmRunMut = useMutation({
     mutationFn: (ids?: number[]) => importsApi.llmRun(ids),
-    onSuccess: r => { setActionMsg(r.message); setSelected(new Set()); },
+    onSuccess: r => {
+      setActionMsg(r.message);
+      setLlmQueued(r.queued ? (r.queue_position ?? 1) : null);
+      if (!r.queued) setSelected(new Set());
+    },
     onError: (e: Error) => setActionMsg(`LLM run failed: ${e.message}`),
   });
 
@@ -677,6 +726,29 @@ export default function FailedImports() {
         >
           Suspicious only
         </button>
+        <button
+          onClick={() => setPackFilter(f => f === "packs" ? "all" : "packs")}
+          title="Show only season-pack downloads"
+          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+            packFilter === "packs" ? "bg-brand border-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
+          }`}
+        >
+          Packs only
+        </button>
+        <button
+          onClick={() => setPackFilter(f => f === "singles" ? "all" : "singles")}
+          title="Show only single-episode (non-pack) downloads"
+          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+            packFilter === "singles" ? "bg-brand border-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
+          }`}
+        >
+          Singles only
+        </button>
+        {llmQueued !== null && (
+          <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-indigo-900/40 text-indigo-300 text-xs">
+            <ListEnd size={13} /> LLM run queued (position {llmQueued})
+          </span>
+        )}
         {actionMsg && <span className="text-sm text-slate-300 ml-2">{actionMsg}</span>}
       </div>
 
@@ -715,7 +787,7 @@ export default function FailedImports() {
                 title="Score the selected items with the local LLM (most in-depth reasoning available, regardless of the configured verbosity)"
                 className="flex items-center gap-1.5 px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-xs disabled:opacity-50"
               >
-                <Bot size={12} /> Run LLM on Selected
+                <AnimatedBot active={llmRunMut.isPending} size={12} /> Run LLM on Selected
               </button>
             </>
           )}
@@ -851,7 +923,7 @@ export default function FailedImports() {
                                   title="Score this item with the local LLM (most in-depth reasoning available, regardless of the configured verbosity)"
                                   className="p-1.5 rounded hover:bg-indigo-900/40 text-slate-400 hover:text-indigo-300 transition-colors disabled:opacity-30"
                                 >
-                                  <Bot size={15} className={llmRunMut.isPending ? "animate-pulse" : ""} />
+                                  <AnimatedBot active={llmRunMut.isPending} size={15} />
                                 </button>
                                 {item.pack && item.matched_id && (
                                   <PackReviewButton
@@ -871,7 +943,7 @@ export default function FailedImports() {
                     {isExpanded && (
                       <tr key={`${item.id}-files`} className="bg-surface/50">
                         <td colSpan={cols.length + 2} className="border-t border-purple-900/10">
-                          <FileDetails importId={item.id} sourceApp={item.source_app} matchedId={item.matched_id} />
+                          <FileDetails importId={item.id} sourceApp={item.source_app} matchedId={item.matched_id} packFileMatches={item.pack_file_matches} />
                           {actionable && <MatchOverride item={item} onDone={invalidate} />}
                         </td>
                       </tr>
@@ -897,7 +969,7 @@ function PackReviewButton({
   itemId: number;
   isLoading: boolean;
   hasResults: boolean;
-  results?: Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>;
+  results?: Array<{ file: string; season: number; episode: number; match_type: string; confidence: string; reason: string }>;
   onClick: () => void;
 }) {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -915,7 +987,7 @@ function PackReviewButton({
         title={isLoading ? "Analyzing..." : hasResults ? "Hover to see results" : "Review files in pack with LLM"}
       >
         {isLoading ? (
-          <Brain size={15} className="animate-pulse" />
+          <AnimatedBot active size={15} className="text-cyan-300" />
         ) : hasResults ? (
           <Lightbulb size={15} className="text-cyan-300" />
         ) : (
@@ -928,8 +1000,13 @@ function PackReviewButton({
           <div className="max-h-60 overflow-y-auto space-y-2">
             {results.map((m, i) => (
               <div key={i} className="bg-surface/50 border border-purple-900/20 rounded p-2">
-                <div className="text-xs font-bold text-brand-light">
-                  S{m.season.toString().padStart(2, "0")}E{m.episode.toString().padStart(2, "0")}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-brand-light">
+                    S{m.season.toString().padStart(2, "0")}E{m.episode.toString().padStart(2, "0")}
+                  </span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${MATCH_TYPE_STYLES[m.match_type] ?? "bg-surface-overlay text-slate-400"}`}>
+                    {m.match_type}
+                  </span>
                 </div>
                 <div className="text-xs text-slate-300 truncate" title={m.file}>{m.file}</div>
                 {m.reason && <div className="text-xs text-slate-400 mt-1">{m.reason}</div>}

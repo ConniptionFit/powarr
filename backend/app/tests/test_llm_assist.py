@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, patch
 from app.services import llm_assist
 from app.services.llm_assist import (
     CAP_CANDIDATE, CAP_CONTEXT, CAP_DET_SUMMARY, CAP_ITEM, CAP_RELEASE,
-    _limits, _parse_simple, _strip_think, _truncate,
-    build_explain_prompt, build_review_prompt,
+    _limits, _parse_simple, _parse_pack_matches, _strip_think, _truncate,
+    build_explain_prompt, build_review_prompt, build_pack_prompt,
+    PACK_MATCH_TYPES, review_pack_files,
 )
 
 
@@ -184,6 +185,70 @@ class TestReviewMatchParsing(unittest.TestCase):
     def test_unparseable_returns_none(self):
         self.assertIsNone(_stubbed_review("no idea what this is"))
         self.assertIsNone(_stubbed_review(None))
+
+
+def _stubbed_pack_review(reply, **kwargs):
+    """review_pack_files with _generate stubbed to return a canned reply."""
+    with patch.object(llm_assist, "_generate", new=AsyncMock(return_value=reply)):
+        import asyncio
+        return asyncio.run(llm_assist.review_pack_files(
+            "h", "m", "rel", "cand", ["a.mkv", "b.mkv"], **kwargs))
+
+
+class TestPackMatchPrompt(unittest.TestCase):
+    def test_prompt_lists_all_match_types(self):
+        p = build_pack_prompt("", "rel", "cand", "a.mkv, b.mkv", "ctx")
+        for t in PACK_MATCH_TYPES:
+            self.assertIn(t, p)
+
+    def test_minimal_still_asks_match_type(self):
+        p = build_pack_prompt("", "rel", "cand", "a.mkv", "ctx", verbosity="minimal")
+        self.assertIn("match_type", p)
+        self.assertNotIn('"reason"', p)
+
+
+class TestParsePackMatches(unittest.TestCase):
+    def test_proper_array_parsed(self):
+        out = _parse_pack_matches('[{"file": "a.mkv", "season": 1, "episode": 1}]')
+        self.assertEqual(out, [{"file": "a.mkv", "season": 1, "episode": 1}])
+
+    def test_single_object_salvaged_as_one_item_list(self):
+        # A weaker model on a large pack sometimes collapses to a single object
+        # (answering only the first file) despite the "for each file" instruction.
+        out = _parse_pack_matches('{"file": "a.mkv", "season": 1, "episode": 1}')
+        self.assertEqual(out, [{"file": "a.mkv", "season": 1, "episode": 1}])
+
+    def test_object_without_file_key_not_salvaged(self):
+        self.assertIsNone(_parse_pack_matches('{"season": 1, "episode": 1}'))
+
+    def test_array_embedded_in_prose_extracted(self):
+        out = _parse_pack_matches('Sure, here you go:\n[{"file": "a.mkv", "season": 1, "episode": 2}]\nHope that helps!')
+        self.assertEqual(out, [{"file": "a.mkv", "season": 1, "episode": 2}])
+
+    def test_object_embedded_in_prose_extracted(self):
+        out = _parse_pack_matches('Here is the match:\n{"file": "a.mkv", "season": 1, "episode": 2}')
+        self.assertEqual(out, [{"file": "a.mkv", "season": 1, "episode": 2}])
+
+    def test_garbage_returns_none(self):
+        self.assertIsNone(_parse_pack_matches("no idea what this is"))
+        self.assertIsNone(_parse_pack_matches(""))
+
+
+class TestPackMatchValidation(unittest.TestCase):
+    def test_recognized_match_type_normalized(self):
+        out = _stubbed_pack_review(
+            '[{"file": "a.mkv", "season": 1, "episode": 1, "match_type": "exact match", "confidence": "high"}]')
+        self.assertEqual(out[0]["match_type"], "Exact Match")
+
+    def test_unrecognized_match_type_falls_back_to_low_confidence(self):
+        out = _stubbed_pack_review(
+            '[{"file": "a.mkv", "season": 1, "episode": 1, "match_type": "Best Guess", "confidence": "low"}]')
+        self.assertEqual(out[0]["match_type"], "Low Confidence")
+
+    def test_missing_match_type_falls_back_to_low_confidence(self):
+        out = _stubbed_pack_review(
+            '[{"file": "a.mkv", "season": 1, "episode": 1, "confidence": "medium"}]')
+        self.assertEqual(out[0]["match_type"], "Low Confidence")
 
 
 class TestExplainMinimal(unittest.TestCase):

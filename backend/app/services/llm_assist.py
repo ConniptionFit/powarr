@@ -140,6 +140,33 @@ def build_explain_prompt(template: str, item_summary: str, verbosity: str = "bri
     return prompt
 
 
+# Concise, closed vocabulary for *why* a pack file was mapped to an episode —
+# shown as a badge in the triage UI instead of free-text prose, so a user can
+# tell at a glance which files need a second look. Order matters: the prompt
+# lists them in this same order, roughly strongest-to-weakest evidence.
+PACK_MATCH_TYPES = [
+    "Exact Match",           # filename's S/E number AND episode title both match
+    "Title Match",           # episode title in the filename matches the official title
+    "Number Match",          # season/episode number matches exactly, no title to corroborate
+    "Absolute Number Match", # anime-style absolute episode numbering matched
+    "Multi-Episode File",    # one file covers multiple episodes (e.g. a double-length release)
+    "Sequence Match",        # matched only by file position/order in the pack — weakest signal
+    "Low Confidence",        # evidence is weak or ambiguous
+]
+
+_PACK_MATCH_TYPE_DEFS = (
+    "Match type definitions (pick exactly one per file):\n"
+    "- Exact Match: the filename's season/episode number AND the episode title both match this episode\n"
+    "- Title Match: the episode title in the filename matches this episode's official title, "
+    "even if numbering is absent or uncertain\n"
+    "- Number Match: the season/episode number in the filename matches exactly, with no title to corroborate\n"
+    "- Absolute Number Match: matched via anime-style absolute episode numbering\n"
+    "- Multi-Episode File: this single file covers multiple episodes (e.g. a double-length release)\n"
+    "- Sequence Match: matched only by the file's position/order in the pack, with no explicit number or title evidence\n"
+    "- Low Confidence: the evidence is weak or ambiguous"
+)
+
+
 def build_pack_prompt(template: str, release: str, candidate: str, files_list: str,
                       context: str, verbosity: str = "brief") -> str:
     """Pack-matching prompt: match individual files in a download to episodes.
@@ -149,14 +176,16 @@ def build_pack_prompt(template: str, release: str, candidate: str, files_list: s
                  .replace("{candidate}", _truncate(candidate, CAP_CANDIDATE))
                  .replace("{files}", _truncate(files_list, CAP_FILES))
                  .replace("{context}", _truncate(context, CAP_CONTEXT)))
+    match_type_choices = "|".join(f'"{t}"' for t in PACK_MATCH_TYPES)
+    prompt += f"\n{_PACK_MATCH_TYPE_DEFS}"
     if verbosity == "minimal":
-        prompt += ('\nFor each file, reply with ONLY a JSON array: '
-                   '[{"file": "filename.mkv", "season": 1, "episode": 1, "confidence": "high"|"medium"|"low"}]')
-    else:
-        reason_spec = ("with brief reasoning" if verbosity == "verbose"
-                      else "with brief reasoning if any uncertainty")
         prompt += (f'\nFor each file, reply with ONLY a JSON array: '
-                   f'[{{"file": "filename.mkv", "season": 1, "episode": 1, '
+                   f'[{{"file": "filename.mkv", "season": 1, "episode": 1, "match_type": {match_type_choices}}}]')
+    else:
+        reason_spec = ("a very short reason (a few words)" if verbosity == "verbose"
+                      else "a very short reason if there's real uncertainty, else omit")
+        prompt += (f'\nFor each file, reply with ONLY a JSON array: '
+                   f'[{{"file": "filename.mkv", "season": 1, "episode": 1, "match_type": {match_type_choices}, '
                    f'"confidence": "high"|"medium"|"low", "reason": "{reason_spec}"}}]')
     return prompt
 
@@ -435,7 +464,10 @@ def _parse_json(raw: str) -> Optional[dict]:
 
 
 def _parse_pack_matches(raw: str) -> Optional[list[dict]]:
-    """Parse per-file episode matches from LLM response. Expects JSON array."""
+    """Parse per-file episode matches from LLM response. Expects a JSON array, but
+    weaker models on larger packs sometimes collapse to a single JSON object
+    (answering only the first file) despite the "for each file" instruction —
+    salvage that as a one-item list rather than discarding the whole reply."""
     raw = _strip_think(raw)
     if not raw:
         return None
@@ -443,16 +475,25 @@ def _parse_pack_matches(raw: str) -> Optional[list[dict]]:
         result = json.loads(raw)
         if isinstance(result, list):
             return result
+        if isinstance(result, dict) and "file" in result:
+            return [result]
     except Exception:
         m = re.search(r"\[.*\]", raw or "", re.DOTALL)
-        if not m:
-            return None
-        try:
-            result = json.loads(m.group(0))
-            if isinstance(result, list):
-                return result
-        except Exception:
-            pass
+        if m:
+            try:
+                result = json.loads(m.group(0))
+                if isinstance(result, list):
+                    return result
+            except Exception:
+                pass
+        m = re.search(r"\{.*\}", raw or "", re.DOTALL)
+        if m:
+            try:
+                result = json.loads(m.group(0))
+                if isinstance(result, dict) and "file" in result:
+                    return [result]
+            except Exception:
+                pass
     return None
 
 
@@ -552,7 +593,8 @@ async def review_pack_files(host: str, model: str, release_title: str,
                              verbosity: str = "brief", model_size: str = "medium",
                              keep_alive_minutes: int = 10) -> Optional[list[dict]]:
     """Per-file episode matching for season/series packs. Returns list of
-    [{"file": "...", "season": int, "episode": int, "confidence": "high|medium|low", "reason": "..."}]
+    [{"file": "...", "season": int, "episode": int, "match_type": one of
+    PACK_MATCH_TYPES, "confidence": "high|medium|low", "reason": "..."}]
     or None if unavailable. Fails soft."""
     verbose = verbosity == "verbose"
     files_str = ", ".join(file_names[:50]) if file_names else "No files listed"
@@ -568,14 +610,19 @@ async def review_pack_files(host: str, model: str, release_title: str,
     if not parsed or not isinstance(parsed, list):
         return None
     # Validate and clean results — ensure each has file, season, episode
+    type_by_lower = {t.lower(): t for t in PACK_MATCH_TYPES}
     validated = []
     for item in parsed:
         if isinstance(item, dict) and "file" in item and "season" in item and "episode" in item:
             try:
+                raw_type = str(item.get("match_type", "")).strip().lower()
                 validated.append({
                     "file": str(item["file"])[:200],
                     "season": int(item.get("season", 0)),
                     "episode": int(item.get("episode", 0)),
+                    # Fall back to "Low Confidence" for anything outside the closed
+                    # vocabulary — a small model occasionally invents its own label.
+                    "match_type": type_by_lower.get(raw_type, "Low Confidence"),
                     "confidence": str(item.get("confidence", "medium")).lower()[:20],
                     "reason": str(item.get("reason", ""))[:300]
                 })

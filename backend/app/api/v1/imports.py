@@ -79,12 +79,13 @@ async def trigger_scan():
 async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """On-demand LLM scoring. {"ids": [...]} for checked rows; omit ids to process
     the backlog of open rows without an LLM score. Runs in the background —
-    an SSE "llm_run" event fires when it finishes."""
+    an SSE "llm_run" event fires when it finishes. If a run is already active,
+    this queues instead of failing — it starts automatically once the current
+    one releases the slot (SSE "llm_queued" / "llm_run_started" mark the
+    transition)."""
     from app.models.app_setting import AppSetting
-    from app.services.import_matcher import llm_rescore, llm_run_active
+    from app.services.import_matcher import llm_rescore, llm_run_active, queue_llm_run
     ids = payload.get("ids") or None
-    if llm_run_active():
-        raise HTTPException(status_code=409, detail="An LLM run is already in progress")
     cfg = db.query(AppSetting).filter_by(key="ollama").first()
     if not cfg or not cfg.value or not json.loads(cfg.value).get("enabled"):
         raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
@@ -95,8 +96,13 @@ async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db
             FailedImport.status.in_(("suggested", "resolve_failed")),
             FailedImport.llm_confidence.is_(None),
         ).count()
+    if llm_run_active():
+        position = queue_llm_run(ids)
+        return {"started": 0, "total_eligible": count, "queued": True, "queue_position": position,
+                "message": f"An LLM run is already in progress — queued (position {position}), "
+                           "will start automatically when it finishes"}
     asyncio.get_event_loop().create_task(llm_rescore(ids))
-    return {"started": min(count, 50), "total_eligible": count,
+    return {"started": min(count, 50), "total_eligible": count, "queued": False,
             "message": f"LLM run started on {min(count, 50)} item(s) — results stream in live"}
 
 

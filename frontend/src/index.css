@@ -11,3 +11,18 @@ body {
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: #1a1a2e; }
 ::-webkit-scrollbar-thumb { background: #4c1d95; border-radius: 3px; }
+
+/* "Thinking" robot — a whimsical LLM-busy indicator (see AnimatedBot.tsx).
+   Lightweight CSS-only, no new assets, per the Active Processes Notification
+   Tray plan (Local LLM Assist / Failed Import Matching vault notes). */
+@keyframes bot-think {
+  0%, 100% { transform: rotate(-6deg); }
+  50% { transform: rotate(6deg); }
+}
+@keyframes spark-pulse {
+  0%, 60%, 100% { opacity: 0; transform: translateY(0) scale(0.5); }
+  30% { opacity: 1; transform: translateY(-4px) scale(1); }
+}
+.bot-thinking { animation: bot-think 1.1s ease-in-out infinite; transform-origin: 50% 70%; }
+.bot-spark { animation: spark-pulse 1.4s ease-in-out infinite; }
+.bot-spark-2 { animation-delay: 0.45s; }

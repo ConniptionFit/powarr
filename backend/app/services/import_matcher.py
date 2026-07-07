@@ -1014,12 +1014,31 @@ def llm_run_active() -> bool:
     return llm_assist.slot_active()
 
 
+# FIFO queue of on-demand runs requested while another is already active — a run
+# no longer fails with "already in progress"; it queues and starts automatically
+# once the current one releases the slot (see llm_rescore's finally block).
+_llm_queue: list[list[int] | None] = []
+
+
+def queue_llm_run(ids: list[int] | None) -> int:
+    """Append a pending on-demand run; returns its 1-based position in the queue."""
+    _llm_queue.append(ids)
+    publish({"type": "llm_queued", "position": len(_llm_queue)})
+    return len(_llm_queue)
+
+
+def llm_queue_depth() -> int:
+    return len(_llm_queue)
+
+
 async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
     """On-demand LLM scoring of failed-import rows — either the given ids, or the
     backlog of open rows that never got an LLM signal. Sequential (one call at a
-    time) to be gentle on the LLM host. Publishes an SSE event when done."""
+    time) to be gentle on the LLM host. Publishes an SSE event when done, and when
+    it releases the slot pulls the next queued run (if any) automatically."""
     if not llm_assist.acquire_slot():
         return {"scored": 0, "skipped": 0, "message": "An LLM run is already in progress"}
+    publish({"type": "llm_run_started"})
     scored = skipped = 0
     try:
         db = SessionLocal()
@@ -1073,6 +1092,9 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
             db.close()
     finally:
         llm_assist.release_slot()
+        if _llm_queue:
+            next_ids = _llm_queue.pop(0)
+            asyncio.get_event_loop().create_task(llm_rescore(next_ids))
     logger.info(f"LLM rescore: {scored} scored, {skipped} skipped")
     publish({"type": "llm_run", "scored": scored, "skipped": skipped})
     return {"scored": scored, "skipped": skipped, "message": f"{scored} scored, {skipped} skipped"}
