@@ -273,6 +273,9 @@ export const importsApi = {
   llmReviewPack: (id: number) =>
     req<{ matches: Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>; file_count?: number; message?: string }>(
       `/imports/${id}/llm-review-pack`, { method: "POST" }),
+  updatePackMatch: (id: number, file: string, season: number, episode: number) =>
+    req<{ id: number; matches: Array<{ file: string; season: number; episode: number; confidence: string; reason: string }> }>(
+      `/imports/${id}/pack-match`, { method: "PUT", body: JSON.stringify({ file, season, episode }) }),
 };
 
 // --- System ---

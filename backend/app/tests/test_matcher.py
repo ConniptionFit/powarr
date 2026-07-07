@@ -5,7 +5,7 @@ import unittest
 from app.schemas.settings import ImportMatchingSettings
 from app.services.import_matcher import (_normalize, title_similarity, _is_stuck, _within_grace,
                                          _parse_release_numbers, score_episode_match,
-                                         score_pack_match)
+                                         score_pack_match, apply_pack_match_override)
 
 CFG = ImportMatchingSettings()  # defaults: title 0.6 / number 0.4, anime numbering on
 
@@ -214,6 +214,33 @@ class TestScoreEpisodeMatch(unittest.TestCase):
         score, has_num, parts = score_episode_match("[Group] Anime Show - 1047 [1080p]", ep, "anime", cfg)
         self.assertFalse(has_num)  # S/E path finds nothing to corroborate
         self.assertFalse(any("absolute" in p for p in parts))
+
+
+class TestApplyPackMatchOverride(unittest.TestCase):
+    def matches(self):
+        return [
+            {"file": "ep588.mkv", "season": 16, "episode": 10, "confidence": "high", "reason": "absolute 588"},
+            {"file": "ep589.mkv", "season": 16, "episode": 11, "confidence": "medium", "reason": "absolute 589"},
+        ]
+
+    def test_override_updates_entry_and_marks_user(self):
+        out = apply_pack_match_override(self.matches(), "ep589.mkv", 10, 5)
+        self.assertEqual(out[1]["season"], 10)
+        self.assertEqual(out[1]["episode"], 5)
+        self.assertEqual(out[1]["confidence"], "user")
+        self.assertEqual(out[1]["reason"], "Manually adjusted")
+
+    def test_other_entries_untouched(self):
+        out = apply_pack_match_override(self.matches(), "ep589.mkv", 10, 5)
+        self.assertEqual(out[0], self.matches()[0])
+
+    def test_unknown_file_raises(self):
+        with self.assertRaises(ValueError):
+            apply_pack_match_override(self.matches(), "missing.mkv", 1, 1)
+
+    def test_negative_numbers_raise(self):
+        with self.assertRaises(ValueError):
+            apply_pack_match_override(self.matches(), "ep588.mkv", -1, 5)
 
 
 if __name__ == "__main__":

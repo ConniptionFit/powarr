@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Sparkles, Lightbulb, Brain } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Sparkles, Lightbulb, Brain, Pencil } from "lucide-react";
 import { importsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import ClampedText from "../../components/ClampedText";
 
@@ -213,6 +213,10 @@ export default function FailedImports() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [packReviewLoading, setPackReviewLoading] = useState(new Set<number>());
   const [packReviewResults, setPackReviewResults] = useState<Record<string, Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>>>({});
+  // Select Episode column: which pack match the dropdown points at, and the
+  // inline S/E editor opened from its pencil action (one editor at a time)
+  const [packSel, setPackSel] = useState<Record<number, number>>({});
+  const [packEdit, setPackEdit] = useState<{ itemId: number; index: number; season: number; episode: number } | null>(null);
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
@@ -324,6 +328,13 @@ export default function FailedImports() {
     mutationFn: (ids?: number[]) => importsApi.llmRun(ids),
     onSuccess: r => { setActionMsg(r.message); setSelected(new Set()); },
     onError: (e: Error) => setActionMsg(`LLM run failed: ${e.message}`),
+  });
+
+  const packMatchMut = useMutation({
+    mutationFn: ({ id, file, season, episode }: { id: number; file: string; season: number; episode: number }) =>
+      importsApi.updatePackMatch(id, file, season, episode),
+    onSuccess: () => { setPackEdit(null); setActionMsg("Pack episode mapping updated"); qc.invalidateQueries({ queryKey: ["imports"] }); },
+    onError: (e: Error) => setActionMsg(`Pack match update failed: ${e.message}`),
   });
 
   const handlePackReviewClick = async (itemId: number) => {
@@ -444,13 +455,15 @@ export default function FailedImports() {
       case "detected":
         return <span className="text-slate-400">{fmtDate(item.created_at)}</span>;
       case "pack_episode": {
-        const matches = item.pack_file_matches ? JSON.parse(item.pack_file_matches) : [];
+        const matches: PackMatch[] = item.pack_file_matches ? JSON.parse(item.pack_file_matches) : [];
         if (!matches.length) return <span className="text-slate-600 text-xs">—</span>;
         return (
           <div className="space-y-1">
-            {matches.slice(0, 2).map((m: any, i: number) => (
-              <div key={i} className="text-xs">
-                <span className="text-brand-light font-bold">S{m.season.toString().padStart(2, "0")}E{m.episode.toString().padStart(2, "0")}</span>
+            {matches.slice(0, 2).map((m, i) => (
+              <div key={i} className="text-xs" title={`${m.file} — ${m.confidence}${m.reason ? `: ${m.reason}` : ""}`}>
+                <span className={`font-bold ${m.confidence === "user" ? "text-green-300" : "text-brand-light"}`}>
+                  S{m.season.toString().padStart(2, "0")}E{m.episode.toString().padStart(2, "0")}
+                </span>
                 <span className="text-slate-400"> {m.file}</span>
               </div>
             ))}
@@ -460,19 +473,65 @@ export default function FailedImports() {
       }
       case "pack_select": {
         if (!item.pack) return <span className="text-slate-600 text-xs">—</span>;
-        const matches = item.pack_file_matches ? JSON.parse(item.pack_file_matches) : [];
+        const matches: PackMatch[] = item.pack_file_matches ? JSON.parse(item.pack_file_matches) : [];
         if (!matches.length) return <span className="text-slate-600 text-xs">—</span>;
+        const selIdx = Math.min(packSel[item.id] ?? 0, matches.length - 1);
+        const sel = matches[selIdx];
+        if (packEdit?.itemId === item.id) {
+          return (
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-slate-500">S</span>
+              <input
+                type="number" min={0} value={packEdit.season}
+                onChange={e => setPackEdit({ ...packEdit, season: Number(e.target.value) })}
+                className="w-12 bg-surface border border-purple-900/40 rounded px-1 py-0.5 text-xs text-white"
+              />
+              <span className="text-xs text-slate-500">E</span>
+              <input
+                type="number" min={0} value={packEdit.episode}
+                onChange={e => setPackEdit({ ...packEdit, episode: Number(e.target.value) })}
+                className="w-12 bg-surface border border-purple-900/40 rounded px-1 py-0.5 text-xs text-white"
+              />
+              <button
+                onClick={() => packMatchMut.mutate({ id: item.id, file: matches[packEdit.index].file, season: packEdit.season, episode: packEdit.episode })}
+                disabled={packMatchMut.isPending}
+                title="Save the corrected episode mapping"
+                className="p-1 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300 transition-colors disabled:opacity-40"
+              >
+                <Check size={13} />
+              </button>
+              <button
+                onClick={() => setPackEdit(null)}
+                title="Cancel"
+                className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          );
+        }
         return (
-          <select
-            className="px-2 py-1 rounded text-xs bg-surface-overlay border border-purple-900/40 text-slate-200 hover:border-purple-800 focus:border-purple-500 focus:outline-none"
-            defaultValue={`${matches[0]?.season}-${matches[0]?.episode}`}
-          >
-            {matches.map((m: any) => (
-              <option key={`${m.season}-${m.episode}`} value={`${m.season}-${m.episode}`}>
-                S{m.season.toString().padStart(2, "0")}E{m.episode.toString().padStart(2, "0")} ({m.confidence})
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1">
+            <select
+              className="min-w-0 flex-1 px-2 py-1 rounded text-xs bg-surface-overlay border border-purple-900/40 text-slate-200 hover:border-purple-800 focus:border-purple-500 focus:outline-none"
+              value={selIdx}
+              onChange={e => setPackSel(prev => ({ ...prev, [item.id]: Number(e.target.value) }))}
+              title={sel?.file}
+            >
+              {matches.map((m, i) => (
+                <option key={i} value={i} title={m.file}>
+                  S{m.season.toString().padStart(2, "0")}E{m.episode.toString().padStart(2, "0")} ({m.confidence})
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => setPackEdit({ itemId: item.id, index: selIdx, season: sel.season, episode: sel.episode })}
+              title={`Adjust the episode mapping for ${sel.file}`}
+              className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-brand-light transition-colors flex-shrink-0"
+            >
+              <Pencil size={13} />
+            </button>
+          </div>
         );
       }
     }

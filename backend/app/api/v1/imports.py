@@ -160,6 +160,32 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
     return {"matches": matches or [], "file_count": len(file_names)}
 
 
+@router.put("/{item_id}/pack-match")
+def update_pack_match(item_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+    """Manually adjust one file's episode mapping inside pack_file_matches.
+    Body: {"file": "filename.mkv", "season": 10, "episode": 5}. The entry is
+    marked confidence "user" — triage metadata only; the *arr still does its
+    own file mapping on accept."""
+    file = payload.get("file")
+    season, episode = payload.get("season"), payload.get("episode")
+    if not file or not isinstance(season, int) or not isinstance(episode, int):
+        raise HTTPException(status_code=400, detail="Body must be {file: str, season: int, episode: int}")
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    if not item.pack_file_matches:
+        raise HTTPException(status_code=400, detail="No pack file matches on this item — run the pack review first")
+    matches = json.loads(item.pack_file_matches)
+    try:
+        matches = import_matcher.apply_pack_match_override(matches, file, season, episode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    item.pack_file_matches = json.dumps(matches)
+    item.updated_at = datetime.utcnow()
+    db.commit()
+    return {"id": item.id, "matches": matches}
+
+
 @router.post("/batch")
 async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db)):
     """Accept or reject several suggestions at once: {"ids": [...], "action": "accept"|"reject"}."""

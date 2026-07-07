@@ -819,6 +819,24 @@ def blend_confidence(deterministic: float, llm: float, weight: float) -> float:
     return round(min(1.0, (1.0 - w) * deterministic + w * llm), 3)
 
 
+def apply_pack_match_override(matches: list[dict], file: str,
+                              season: int, episode: int) -> list[dict]:
+    """User correction of one file's episode mapping inside pack_file_matches.
+    Marks the entry confidence "user" so it survives display sorting and reads
+    as an explicit override, not an LLM guess. Raises ValueError when the file
+    isn't in the list or the numbers are out of range."""
+    if season < 0 or episode < 0:
+        raise ValueError("season and episode must be non-negative")
+    for m in matches:
+        if m.get("file") == file:
+            m["season"] = season
+            m["episode"] = episode
+            m["confidence"] = "user"
+            m["reason"] = "Manually adjusted"
+            return matches
+    raise ValueError(f"File not found in pack matches: {file}")
+
+
 def llm_run_active() -> bool:
     # Delegates to the shared single-flight slot in llm_assist, so a batch run and
     # the Cleanup page's per-item explain can never hit the LLM host concurrently.
