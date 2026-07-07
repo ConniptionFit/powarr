@@ -68,7 +68,8 @@ class OllamaSettings(BaseModel):
     verbosity: str = "brief"  # minimal | brief | verbose — minimal = bare verdict, no prose
     model_size: str = "medium"  # small | medium | large — scales token caps/timeouts to the model
     keep_alive_minutes: int = 10  # ollama keep_alive between calls; 0 = ollama default (unload)
-    reply_format: str = "json"  # json | simple — simple = one pipe-separated line, for models that can't do JSON
+    reply_format: str = "json"  # json | simple | markdown — simple = one pipe-separated line for models that
+    # can't do JSON; markdown = same JSON shape as "json" but the reason text is asked for in Markdown
     confidence_style: str = "numeric"  # numeric (model picks ±0.3 float) | classified (more/less/same → fixed steps)
     batch_delay_ms: int = 0  # optional pause between sequential batch calls — keeps weak hardware from pinning at 100%
     match_prompt: str = ""  # custom template for import matching; "" = built-in default

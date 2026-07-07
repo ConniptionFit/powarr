@@ -50,6 +50,7 @@ def _migrate():
             "mapping_overrides": "TEXT",
             "quality_downgrade": "BOOLEAN",
             "suspicious_files": "TEXT",
+            "llm_agrees": "BOOLEAN",
         },
         "integrations": {
             "username": "VARCHAR",

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play } from "lucide-react";
 import { settingsApi, mediaApi, authApi, importsApi, type ScoringWeights, type ImportMatchingSettings,
@@ -411,6 +411,13 @@ const PROMPT_PRESETS: Record<"match" | "explain", { label: string; text: string 
 const INJECTED_TOKENS = { match: Math.ceil((300 + 300 + 400 + 600) / 4) + 60, explain: Math.ceil(500 / 4) + 30 };
 const DEFAULT_TEMPLATE_TOKENS = { match: 40, explain: 35 }; // built-in defaults, when the textarea is empty
 
+// Placeholders each prompt task's scaffold substitutes — kept here so the
+// clickable insert buttons and the static help text can't drift apart.
+const PROMPT_PLACEHOLDERS: Record<"match" | "explain", string[]> = {
+  match: ["{release}", "{candidate}", "{context}"],
+  explain: ["{item}"],
+};
+
 function LLMAssistSection() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["ollama-settings"], queryFn: settingsApi.getOllama });
@@ -422,6 +429,7 @@ function LLMAssistSection() {
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ output: string | null; latency_ms: number; json_valid: boolean | null; message: string } | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { if (data) setCfg(data); }, [data]);
 
@@ -430,6 +438,22 @@ function LLMAssistSection() {
   const promptField = task === "match" ? "match_prompt" : "explain_prompt";
   const promptValue = cfg[promptField];
   const setPrompt = (text: string) => setCfg(c => (c ? { ...c, [promptField]: text } : c));
+
+  // Inserts at the current cursor position (or the end, if the textarea never
+  // had focus) and restores focus + cursor position afterward so repeated
+  // clicks compose naturally instead of always appending to the end.
+  const insertPlaceholder = (token: string) => {
+    const el = promptRef.current;
+    if (!el) { setPrompt(promptValue + token); return; }
+    const start = el.selectionStart ?? promptValue.length;
+    const end = el.selectionEnd ?? promptValue.length;
+    setPrompt(promptValue.slice(0, start) + token + promptValue.slice(end));
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + token.length;
+      el.setSelectionRange(pos, pos);
+    });
+  };
 
   const save = async () => {
     setMsg(null);
@@ -544,7 +568,7 @@ function LLMAssistSection() {
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>
           <p className="text-white text-sm font-medium">Reply Format</p>
-          <p className="text-slate-500 text-xs mt-0.5">JSON = structured replies (default). Simple = one pipe-separated line, for models that can't produce reliable JSON. Either way, the other format is still accepted as a fallback</p>
+          <p className="text-slate-500 text-xs mt-0.5">JSON = structured replies (default). Simple = one pipe-separated line, for models that can't produce reliable JSON. Markdown = same structure as JSON, but the model formats its reason with bold/bullets for a richer display. Either way, the other formats are still accepted as a fallback</p>
         </div>
         <select
           value={cfg.reply_format}
@@ -553,6 +577,7 @@ function LLMAssistSection() {
         >
           <option value="json">JSON</option>
           <option value="simple">Simple text</option>
+          <option value="markdown">Markdown</option>
         </select>
       </div>
 
@@ -607,8 +632,7 @@ function LLMAssistSection() {
           <div>
             <p className="text-white text-sm font-medium">Prompt Templates</p>
             <p className="text-slate-500 text-xs mt-0.5">
-              Pick a suggestion, write your own, or draft roughly and let the LLM clean it up.
-              Placeholders: {task === "match" ? "{release} {candidate} {context}" : "{item}"} · empty = built-in default
+              Pick a suggestion, write your own, or draft roughly and let the LLM clean it up. Empty = built-in default.
             </p>
           </div>
           <div className="flex items-center rounded-lg overflow-hidden border border-purple-900/40">
@@ -649,7 +673,22 @@ function LLMAssistSection() {
           </button>
         </div>
 
+        <div className="flex items-center gap-1.5 mb-2">
+          <span className="text-[11px] text-slate-500 uppercase tracking-wider">Insert:</span>
+          {PROMPT_PLACEHOLDERS[task].map(token => (
+            <button
+              key={token}
+              onClick={() => insertPlaceholder(token)}
+              title={`Insert ${token} at the cursor`}
+              className="px-2 py-0.5 rounded bg-surface-overlay hover:bg-brand/20 hover:text-brand-light text-slate-300 text-xs font-mono transition-colors"
+            >
+              {token}
+            </button>
+          ))}
+        </div>
+
         <textarea
+          ref={promptRef}
           rows={5}
           value={promptValue}
           onChange={e => setPrompt(e.target.value)}

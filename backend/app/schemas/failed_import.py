@@ -17,6 +17,7 @@ class FailedImportOut(BaseModel):
     pack: Optional[str] = None  # season-pack label ("S03", "S01-S03", "complete series")
     llm_confidence: Optional[float] = None
     llm_rationale: Optional[str] = None
+    llm_agrees: Optional[bool] = None  # structured agree/disagree signal (llm_rationale is plain prose)
     pack_file_matches: Optional[str] = None  # JSON: per-file episode suggestions from LLM review
     mapping_overrides: Optional[str] = None  # JSON: user-corrected per-file episode mappings
     quality_downgrade: Optional[bool] = None  # every file rejects as "not an upgrade"

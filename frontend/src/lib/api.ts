@@ -212,6 +212,7 @@ export interface FailedImport {
   pack: string | null; // season-pack label ("S03", "S01-S03", "complete series")
   llm_confidence: number | null;
   llm_rationale: string | null;
+  llm_agrees: boolean | null; // structured agree/disagree signal (llm_rationale is plain prose, no prefix)
   pack_file_matches: string | null; // JSON: per-file episode suggestions from LLM review
   mapping_overrides: string | null; // JSON: user-corrected per-file episode mappings, keyed by raw path
   quality_downgrade: boolean | null; // every file in the download rejects as "not an upgrade"

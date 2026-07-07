@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Sparkles, Lightbulb, Brain } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, Brain, ThumbsUp, ThumbsDown } from "lucide-react";
 import { importsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import ClampedText from "../../components/ClampedText";
 
@@ -550,11 +550,19 @@ export default function FailedImports() {
         ) : <span className="text-slate-600 text-xs">—</span>;
       case "llm_pct":
         return item.llm_confidence !== null ? (
-          <span title={item.llm_rationale ?? ""}><ConfidenceBadge value={item.llm_confidence} /></span>
+          <span className="flex items-center gap-1">
+            <span title={item.llm_rationale ?? ""}><ConfidenceBadge value={item.llm_confidence} /></span>
+            {item.llm_agrees === true && (
+              <span title="LLM agrees with the match"><ThumbsUp size={12} className="text-green-400" /></span>
+            )}
+            {item.llm_agrees === false && (
+              <span title="LLM disagrees with the match"><ThumbsDown size={12} className="text-red-400" /></span>
+            )}
+          </span>
         ) : <span className="text-slate-600 text-xs">—</span>;
       case "llm_notes":
         return item.llm_rationale ? (
-          <ClampedText text={item.llm_rationale} />
+          <ClampedText text={item.llm_rationale} markdown />
         ) : <span className="text-slate-600 text-xs">—</span>;
       case "status": {
         const status = STATUS_META[item.status] ?? { label: item.status, cls: "bg-surface-overlay text-slate-300" };
@@ -704,7 +712,7 @@ export default function FailedImports() {
               <button
                 onClick={() => llmRunMut.mutate([...selected])}
                 disabled={llmRunMut.isPending}
-                title="Score the selected items with the local LLM"
+                title="Score the selected items with the local LLM (most in-depth reasoning available, regardless of the configured verbosity)"
                 className="flex items-center gap-1.5 px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-xs disabled:opacity-50"
               >
                 <Bot size={12} /> Run LLM on Selected
@@ -840,10 +848,10 @@ export default function FailedImports() {
                                 <button
                                   onClick={() => llmRunMut.mutate([item.id])}
                                   disabled={llmRunMut.isPending}
-                                  title="Score this item with the local LLM"
+                                  title="Score this item with the local LLM (most in-depth reasoning available, regardless of the configured verbosity)"
                                   className="p-1.5 rounded hover:bg-indigo-900/40 text-slate-400 hover:text-indigo-300 transition-colors disabled:opacity-30"
                                 >
-                                  <Sparkles size={15} />
+                                  <Bot size={15} className={llmRunMut.isPending ? "animate-pulse" : ""} />
                                 </button>
                                 {item.pack && item.matched_id && (
                                   <PackReviewButton

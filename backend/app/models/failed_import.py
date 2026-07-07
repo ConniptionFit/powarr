@@ -22,6 +22,7 @@ class FailedImport(Base):
     heuristic_confidence = Column(Float, nullable=True)  # algorithm-only score, pre-LLM-blend
     llm_confidence = Column(Float, nullable=True)
     llm_rationale = Column(String, nullable=True)
+    llm_agrees = Column(Boolean, nullable=True)  # structured agree/disagree signal — llm_rationale is plain prose, no [agrees]/[disagrees] prefix
     pack_file_matches = Column(Text, nullable=True)  # JSON: per-file episode suggestions from LLM review
     mapping_overrides = Column(Text, nullable=True)  # JSON: {raw_path: {episode_id, season, episode, title}} user corrections
     quality_downgrade = Column(Boolean, nullable=True)  # every file rejects as "not an upgrade" — never importable as-is

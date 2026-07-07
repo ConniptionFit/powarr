@@ -541,6 +541,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     match_rationale = "; ".join(parts)
     llm_confidence = None
     llm_rationale = None
+    llm_agrees = None
     if matched_title and ollama.enabled and ollama.host and ollama.model:
         # Build comprehensive context: triggered series, queue state, pack info
         triggered_id = rec.get(id_key)
@@ -581,7 +582,8 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             reply_format=ollama.reply_format, confidence_style=ollama.confidence_style)
         if llm:
             llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
-            llm_rationale = f"[{'agrees' if llm['agrees'] else 'disagrees'}] {llm['rationale']}"
+            llm_rationale = llm["rationale"]
+            llm_agrees = llm["agrees"]
             confidence = blend_confidence(confidence, llm_confidence, cfg.llm_blend_weight)
 
     return {
@@ -593,6 +595,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         "pack": pack_label,
         "llm_confidence": llm_confidence,
         "llm_rationale": llm_rationale,
+        "llm_agrees": llm_agrees,
     }
 
 
@@ -884,6 +887,7 @@ async def scan_once() -> dict:
                     heuristic_confidence=match["heuristic_confidence"],
                     llm_confidence=match["llm_confidence"],
                     llm_rationale=match["llm_rationale"],
+                    llm_agrees=match["llm_agrees"],
                     status="suggested",
                     message=_queue_messages(rec)[:500] or None,
                 )
@@ -1043,7 +1047,13 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
                     det_summary=det_summary,
                     context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
                     api_style=ollama.api_style, template=ollama.match_prompt,
-                    verbosity=ollama.verbosity, model_size=ollama.model_size,
+                    # An on-demand run is an explicit user click ("Run LLM on Selected" /
+                    # per-row Bot icon / "Run LLM on Unscored Imports") — always ask for
+                    # the most in-depth reasoning available, regardless of the configured
+                    # default verbosity (which still governs the passive background scan
+                    # in _match_record). model_size's token cap still applies, so this is
+                    # safe even on small models.
+                    verbosity="verbose", model_size=ollama.model_size,
                     keep_alive_minutes=ollama.keep_alive_minutes,
                     reply_format=ollama.reply_format, confidence_style=ollama.confidence_style)
                 if not llm:
@@ -1051,7 +1061,8 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
                     continue
                 row.llm_confidence = round(
                     max(0.0, min(1.0, row.heuristic_confidence + llm["confidence_adjustment"])), 3)
-                row.llm_rationale = f"[{'agrees' if llm['agrees'] else 'disagrees'}] {llm['rationale']}"
+                row.llm_rationale = llm["rationale"]
+                row.llm_agrees = llm["agrees"]
                 row.confidence = blend_confidence(row.heuristic_confidence, row.llm_confidence,
                                                   cfg.llm_blend_weight)
                 db.commit()

@@ -27,8 +27,9 @@ class TestTruncation(unittest.TestCase):
         huge = "R" * 5000
         prompt = build_review_prompt("", huge, huge, huge, huge)
         # Even with every field pathological, the prompt stays bounded by the caps
-        # plus the static scaffold text.
-        budget = CAP_RELEASE + CAP_CANDIDATE + CAP_CONTEXT + CAP_DET_SUMMARY + 600
+        # plus the static scaffold text (reply-format instruction + the fixed
+        # judging-guidance block added in v0.20.0).
+        budget = CAP_RELEASE + CAP_CANDIDATE + CAP_CONTEXT + CAP_DET_SUMMARY + 1000
         self.assertLess(len(prompt), budget)
         # No single substituted run may exceed the largest per-field cap.
         self.assertNotIn("R" * (CAP_DET_SUMMARY + 1), prompt)

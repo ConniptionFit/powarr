@@ -78,15 +78,26 @@ def build_review_prompt(template: str, release: str, candidate: str, context: st
 
     verbosity: minimal (bare verdict, no adjustment/reason) | brief | verbose.
     reply_format: json | simple (one pipe-separated line, for models that can't
-    reliably produce JSON). confidence_style: numeric (model picks a ±0.3 float) |
-    classified (model picks more/less/same — mapped to fixed steps internally,
-    since small models classify far better than they calibrate numbers)."""
+    reliably produce JSON) | markdown (same JSON shape as "json", but the "reason"
+    field is asked for in Markdown — bold/bullets — for a richer rendered display).
+    confidence_style: numeric (model picks a ±0.3 float) | classified (model picks
+    more/less/same — mapped to fixed steps internally, since small models classify
+    far better than they calibrate numbers)."""
     tpl = (template or "").strip() or DEFAULT_MATCH_PROMPT
     prompt = (tpl.replace("{release}", _truncate(release, CAP_RELEASE))
                  .replace("{candidate}", _truncate(candidate, CAP_CANDIDATE))
                  .replace("{context}", _truncate(context, CAP_CONTEXT)))
     prompt += ("\nDeterministic scorer result (computed from title/season/episode/"
                f"absolute-number comparisons): {_truncate(det_summary, CAP_DET_SUMMARY)}")
+    prompt += (
+        "\nJudging guidance: ignore file-quality/format/codec/audio details and uploader or "
+        "release-group identifiers (resolution, source, codec, audio channels, HDR, encoder, "
+        "release-group tag) — these describe the file, not the show or movie, and are never "
+        "evidence for or against a match. If the release name is in a different language or "
+        "script than the candidate's title (common for anime/international content), consider "
+        "whether it could be a known translation, transliteration, or alternate title for the "
+        "same work rather than judging on string similarity alone."
+    )
     if reply_format == "simple":
         if verbosity == "minimal":
             prompt += "\nDo you agree with this match? Reply with ONLY one word: agree or disagree."
@@ -104,6 +115,10 @@ def build_review_prompt(template: str, release: str, candidate: str, context: st
         else:
             reason_spec = ("a detailed 2-3 sentence explanation citing the specific factors"
                            if verbosity == "verbose" else "<short reason>")
+            if reply_format == "markdown":
+                reason_spec += (" — write it using Markdown formatting (bold key terms with "
+                                "**text**, use a bullet list with \"- \" if citing multiple "
+                                "factors) for a nicer-looking display")
             if confidence_style == "classified":
                 prompt += ('\nDo you agree with this match? Reply with ONLY a JSON object: '
                            f'{{"agrees": true|false, "confidence_shift": "more"|"less"|"same", "reason": "{reason_spec}"}}')
