@@ -6,6 +6,8 @@ import SettingsPage from "./pages/Settings";
 import IntegrationsPage from "./pages/Integrations";
 import LogsPage from "./pages/Logs";
 import AuthGate from "./components/AuthGate";
+import ActiveProcessesTray from "./components/ActiveProcessesTray";
+import { TaskProvider } from "./context/TaskContext";
 
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -19,6 +21,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthGate>
+      <TaskProvider>
       <div className="flex h-screen overflow-hidden">
         {/* Sidebar */}
         <aside className="w-56 flex-shrink-0 bg-surface-raised border-r border-purple-900/40 flex flex-col">
@@ -46,7 +49,7 @@ export default function App() {
             ))}
           </nav>
           <div className="px-5 py-3 text-xs text-slate-600 border-t border-purple-900/40">
-            v0.21.0
+            v0.22.0
           </div>
         </aside>
 
@@ -61,6 +64,8 @@ export default function App() {
           </Routes>
         </main>
       </div>
+      <ActiveProcessesTray />
+      </TaskProvider>
       </AuthGate>
     </BrowserRouter>
   );

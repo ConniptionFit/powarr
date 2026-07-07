@@ -72,27 +72,37 @@ async def llm_media_run(ids: list[int] | None = None, limit: int = 50) -> dict:
     holds the shared single-flight slot, publishes an SSE event when done."""
     if not llm_assist.acquire_slot():
         return {"scored": 0, "skipped": 0, "message": "An LLM run is already in progress"}
+    from app.services import tasks
+    task_id = tasks.create_task("llm_run", "Generating deletion rationales with the LLM")
     scored = skipped = 0
     try:
         db = SessionLocal()
         try:
             ollama = _load(db, "ollama", OllamaSettings)
             if not (ollama.enabled and ollama.host and ollama.model):
+                tasks.finish_task(task_id, "done", "LLM assist is not configured/enabled")
                 return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled"}
-            for item in eligible_candidates(db, ollama, ids, limit):
+            candidates = eligible_candidates(db, ollama, ids, limit)
+            tasks.update_task(task_id, total=len(candidates))
+            for i, item in enumerate(candidates, 1):
                 rationale = await generate_and_store(item, ollama, db)
                 if rationale:
                     scored += 1
                 else:
                     skipped += 1
+                tasks.update_task(task_id, current=i, message=f"{scored} scored, {skipped} skipped")
                 if ollama.batch_delay_ms > 0:
                     await asyncio.sleep(ollama.batch_delay_ms / 1000)
         finally:
             db.close()
+    except Exception as e:
+        tasks.finish_task(task_id, "failed", str(e))
+        raise
     finally:
         llm_assist.release_slot()
     logger.info(f"Media LLM run: {scored} scored, {skipped} skipped")
     publish({"type": "media_llm_run", "scored": scored, "skipped": skipped})
+    tasks.finish_task(task_id, "done", f"{scored} scored, {skipped} skipped")
     return {"scored": scored, "skipped": skipped, "message": f"{scored} scored, {skipped} skipped"}
 
 

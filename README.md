@@ -55,6 +55,7 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 - ntfy push notifications, scheduled Plex sync, in-UI log viewer, `/api/v1/system/health` + Docker `HEALTHCHECK`
 - DB-backed settings (PostgreSQL, SQLite fallback) — every knob changes live, no restarts
 - **Animated LLM-busy indicator (v0.21.0)**: every "querying the LLM" button (per-item score, batch runs, pack review, deletion Explain) shows a whimsical CSS-only animated version of the robot icon — gentle rotation plus two pulsing sparks — while a request is in flight, instead of a plain spin/pulse
+- **Active Processes tray (v0.22.0)**: a bottom-right corner tray shows live progress for every tracked background operation — Plex/Seerr sync, *arr scans, LLM batch runs (import-matching and deletion-rationale), deletions — with a real progress bar when the total is known and an indeterminate shimmer otherwise, auto-dismissing a few seconds after each finishes. Replaces the old blocking `alert()` on Plex sync completion. Verified against a 137k-item Plex library sync and a multi-thousand-row scan in production.
 
 ---
 

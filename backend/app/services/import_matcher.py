@@ -798,20 +798,45 @@ async def _verify_resolved(db, app_name: str, client, cfg: ImportMatchingSetting
 
 
 async def scan_once() -> dict:
-    """One detection cycle across all enabled *arr apps. Returns a per-app summary."""
+    """One detection cycle across all enabled *arr apps. Thin wrapper around
+    _scan_once_inner() so the tracked task always gets marked done/failed —
+    including on an exception the inner function doesn't itself catch —
+    without needing a second, deeply-nested try/finally around that whole
+    body."""
+    from app.services import tasks
+    task_id = tasks.create_task("scan", "Scanning *arr apps for stuck imports")
+    try:
+        summary = await _scan_once_inner(task_id)
+        tasks.finish_task(task_id, "done",
+                          f"{summary['new_suggestions']} new suggestion(s), "
+                          f"{summary['auto_resolved']} auto-resolved")
+        return summary
+    except Exception as e:
+        tasks.finish_task(task_id, "failed", str(e))
+        raise
+
+
+async def _scan_once_inner(task_id: str) -> dict:
+    """Returns a per-app summary. See scan_once() for the tracked-task wrapper."""
+    from app.services import tasks
     summary: dict = {"scanned": [], "new_suggestions": 0, "auto_resolved": 0, "skipped_existing": 0,
                      "below_floor": 0, "in_grace": 0, "closed_external": 0, "verified": 0,
                      "resolve_failed": 0, "orphaned": 0, "orphan_pending": 0,
                      "quality_downgrade_auto_rejected": 0, "suspicious_auto_rejected": 0}
     db = SessionLocal()
+    scanned_apps = 0
     try:
         cfg, ollama = load_settings(db)
+        enabled_apps = [name for name in ("sonarr", "radarr", "lidarr", "readarr")
+                        if getattr(cfg, f"{name}_enabled", True)
+                        and db.query(Integration).filter_by(name=name, enabled=True).first()]
+        tasks.update_task(task_id, total=len(enabled_apps))
         for app_name in ("sonarr", "radarr", "lidarr", "readarr"):
-            if not getattr(cfg, f"{app_name}_enabled", True):
+            if app_name not in enabled_apps:
                 continue
+            scanned_apps += 1
+            tasks.update_task(task_id, current=scanned_apps, message=f"Scanning {app_name}…")
             row = db.query(Integration).filter_by(name=app_name, enabled=True).first()
-            if not row or not row.url or not row.api_key:
-                continue
             client = _get_client(app_name, row)
             try:
                 queue = await client.get_queue()
@@ -1035,66 +1060,84 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
     """On-demand LLM scoring of failed-import rows — either the given ids, or the
     backlog of open rows that never got an LLM signal. Sequential (one call at a
     time) to be gentle on the LLM host. Publishes an SSE event when done, and when
-    it releases the slot pulls the next queued run (if any) automatically."""
+    it releases the slot pulls the next queued run (if any) automatically. Thin
+    wrapper around _llm_rescore_inner() so the tracked task always resolves
+    (done/failed) without a third level of nested try/finally."""
     if not llm_assist.acquire_slot():
         return {"scored": 0, "skipped": 0, "message": "An LLM run is already in progress"}
     publish({"type": "llm_run_started"})
-    scored = skipped = 0
+    from app.services import tasks
+    task_id = tasks.create_task("llm_run", "Scoring imports with the LLM")
     try:
-        db = SessionLocal()
-        try:
-            cfg, ollama = load_settings(db)
-            if not (ollama.enabled and ollama.host and ollama.model):
-                return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled"}
-            q = db.query(FailedImport)
-            if ids:
-                q = q.filter(FailedImport.id.in_(ids))
-            else:
-                q = q.filter(FailedImport.status.in_(("suggested", "resolve_failed")),
-                             FailedImport.llm_confidence.is_(None))
-            rows = q.order_by(FailedImport.created_at.desc()).limit(limit).all()
-            for row in rows:
-                if not row.matched_title:
-                    skipped += 1
-                    continue
-                if row.heuristic_confidence is None:
-                    row.heuristic_confidence = row.confidence
-                det_summary = (row.match_rationale or "series/title heuristics only") + \
-                    f" (heuristic confidence {row.heuristic_confidence})"
-                llm = await llm_assist.review_match(
-                    ollama.host, ollama.model, row.raw_title, row.matched_title,
-                    det_summary=det_summary,
-                    context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
-                    api_style=ollama.api_style, template=ollama.match_prompt,
-                    # An on-demand run is an explicit user click ("Run LLM on Selected" /
-                    # per-row Bot icon / "Run LLM on Unscored Imports") — always ask for
-                    # the most in-depth reasoning available, regardless of the configured
-                    # default verbosity (which still governs the passive background scan
-                    # in _match_record). model_size's token cap still applies, so this is
-                    # safe even on small models.
-                    verbosity="verbose", model_size=ollama.model_size,
-                    keep_alive_minutes=ollama.keep_alive_minutes,
-                    reply_format=ollama.reply_format, confidence_style=ollama.confidence_style)
-                if not llm:
-                    skipped += 1
-                    continue
-                row.llm_confidence = round(
-                    max(0.0, min(1.0, row.heuristic_confidence + llm["confidence_adjustment"])), 3)
-                row.llm_rationale = llm["rationale"]
-                row.llm_agrees = llm["agrees"]
-                row.confidence = blend_confidence(row.heuristic_confidence, row.llm_confidence,
-                                                  cfg.llm_blend_weight)
-                db.commit()
-                scored += 1
-                if ollama.batch_delay_ms > 0:
-                    await asyncio.sleep(ollama.batch_delay_ms / 1000)
-        finally:
-            db.close()
+        result = await _llm_rescore_inner(ids, limit, task_id)
+        tasks.finish_task(task_id, "done", result["message"])
+        return result
+    except Exception as e:
+        tasks.finish_task(task_id, "failed", str(e))
+        raise
     finally:
         llm_assist.release_slot()
         if _llm_queue:
             next_ids = _llm_queue.pop(0)
             asyncio.get_event_loop().create_task(llm_rescore(next_ids))
+
+
+async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) -> dict:
+    from app.services import tasks
+    scored = skipped = 0
+    db = SessionLocal()
+    try:
+        cfg, ollama = load_settings(db)
+        if not (ollama.enabled and ollama.host and ollama.model):
+            return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled"}
+        q = db.query(FailedImport)
+        if ids:
+            q = q.filter(FailedImport.id.in_(ids))
+        else:
+            q = q.filter(FailedImport.status.in_(("suggested", "resolve_failed")),
+                         FailedImport.llm_confidence.is_(None))
+        rows = q.order_by(FailedImport.created_at.desc()).limit(limit).all()
+        tasks.update_task(task_id, total=len(rows))
+        for i, row in enumerate(rows, 1):
+            if not row.matched_title:
+                skipped += 1
+                tasks.update_task(task_id, current=i)
+                continue
+            if row.heuristic_confidence is None:
+                row.heuristic_confidence = row.confidence
+            det_summary = (row.match_rationale or "series/title heuristics only") + \
+                f" (heuristic confidence {row.heuristic_confidence})"
+            llm = await llm_assist.review_match(
+                ollama.host, ollama.model, row.raw_title, row.matched_title,
+                det_summary=det_summary,
+                context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
+                api_style=ollama.api_style, template=ollama.match_prompt,
+                # An on-demand run is an explicit user click ("Run LLM on Selected" /
+                # per-row Bot icon / "Run LLM on Unscored Imports") — always ask for
+                # the most in-depth reasoning available, regardless of the configured
+                # default verbosity (which still governs the passive background scan
+                # in _match_record). model_size's token cap still applies, so this is
+                # safe even on small models.
+                verbosity="verbose", model_size=ollama.model_size,
+                keep_alive_minutes=ollama.keep_alive_minutes,
+                reply_format=ollama.reply_format, confidence_style=ollama.confidence_style)
+            if not llm:
+                skipped += 1
+                tasks.update_task(task_id, current=i, message=f"{scored} scored, {skipped} skipped")
+                continue
+            row.llm_confidence = round(
+                max(0.0, min(1.0, row.heuristic_confidence + llm["confidence_adjustment"])), 3)
+            row.llm_rationale = llm["rationale"]
+            row.llm_agrees = llm["agrees"]
+            row.confidence = blend_confidence(row.heuristic_confidence, row.llm_confidence,
+                                              cfg.llm_blend_weight)
+            db.commit()
+            scored += 1
+            tasks.update_task(task_id, current=i, message=f"{scored} scored, {skipped} skipped")
+            if ollama.batch_delay_ms > 0:
+                await asyncio.sleep(ollama.batch_delay_ms / 1000)
+    finally:
+        db.close()
     logger.info(f"LLM rescore: {scored} scored, {skipped} skipped")
     publish({"type": "llm_run", "scored": scored, "skipped": skipped})
     return {"scored": scored, "skipped": skipped, "message": f"{scored} scored, {skipped} skipped"}

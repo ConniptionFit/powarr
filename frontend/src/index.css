@@ -26,3 +26,10 @@ body {
 .bot-thinking { animation: bot-think 1.1s ease-in-out infinite; transform-origin: 50% 70%; }
 .bot-spark { animation: spark-pulse 1.4s ease-in-out infinite; }
 .bot-spark-2 { animation-delay: 0.45s; }
+
+/* Active Processes tray — indeterminate progress bar for tasks with no known total. */
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+.progress-indeterminate { animation: progress-indeterminate 1.3s ease-in-out infinite; }

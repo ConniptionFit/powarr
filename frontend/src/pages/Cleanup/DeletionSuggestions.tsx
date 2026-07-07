@@ -67,6 +67,7 @@ export default function DeletionSuggestions() {
   const [sortBy, setSortBy] = useState<SortKey>("score");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null); // id or "show:title"
   const [explainBusy, setExplainBusy] = useState<number | null>(null);
   const [explainMsg, setExplainMsg] = useState<Record<number, string>>({});
@@ -173,13 +174,16 @@ export default function DeletionSuggestions() {
 
   const handleSync = async () => {
     setSyncing(true);
+    setSyncMsg(null);
     try {
-      const result = await integrationsApi.syncPlex();
-      alert(`Synced ${result.synced} items from Plex.`);
+      // Progress + completion now show in the Active Processes tray (bottom-right)
+      // instead of a blocking alert() — this just kicks the sync off and lets
+      // the tray carry the rest.
+      await integrationsApi.syncPlex();
       qc.invalidateQueries({ queryKey: ["media"] });
       qc.invalidateQueries({ queryKey: ["stats"] });
     } catch (e: unknown) {
-      alert(`Sync failed: ${e instanceof Error ? e.message : String(e)}`);
+      setSyncMsg(`Sync failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSyncing(false);
     }
@@ -199,14 +203,17 @@ export default function DeletionSuggestions() {
     <div>
       <div className="flex items-center justify-between mb-5">
         <p className="text-slate-400 text-sm">Deletion candidates sorted by score</p>
-        <button
-          onClick={handleSync}
-          disabled={syncing}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
-        >
-          <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
-          {syncing ? "Syncing…" : "Sync Plex"}
-        </button>
+        <div className="flex items-center gap-3">
+          {syncMsg && <span className="text-sm text-red-400">{syncMsg}</span>}
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
+            {syncing ? "Syncing…" : "Sync Plex"}
+          </button>
+        </div>
       </div>
 
       {/* Filters */}

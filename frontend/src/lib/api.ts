@@ -292,6 +292,22 @@ export const importsApi = {
     }),
 };
 
+// --- Active processes (tracked background tasks) ---
+export interface TaskProgress {
+  id: string;
+  kind: "llm_run" | "scan" | "plex_sync" | "deletion";
+  label: string;
+  status: "running" | "done" | "failed";
+  current: number | null;
+  total: number | null;
+  message: string | null;
+  started_at: number;
+}
+
+export const tasksApi = {
+  list: () => req<TaskProgress[]>("/tasks"),
+};
+
 // --- System ---
 export interface ScheduleInfo {
   last_scan_at: string | null;

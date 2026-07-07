@@ -117,9 +117,11 @@ def deletion_stats(db: Session = Depends(get_db)):
 @router.delete("/batch")
 async def delete_media_batch(ids: list[int] = Body(...), db: Session = Depends(get_db)):
     """Delete multiple media items by ID. Honors the soft-delete window when configured."""
+    from app.services import tasks
+    task_id = tasks.create_task("deletion", f"Deleting {len(ids)} item(s)", total=len(ids))
     cleanup = _get_setting(db, "cleanup", CleanupSettings)
     deleted, pending = [], []
-    for item_id in ids:
+    for i, item_id in enumerate(ids, 1):
         try:
             item = db.query(MediaItem).filter_by(id=item_id).first()
             if not item:
@@ -132,7 +134,9 @@ async def delete_media_batch(ids: list[int] = Body(...), db: Session = Depends(g
                 deleted.append(item_id)
         except Exception:
             pass
+        tasks.update_task(task_id, current=i)
     db.commit()
+    tasks.finish_task(task_id, "done", f"{len(deleted)} deleted, {len(pending)} pending")
     return {"deleted": deleted, "pending_delete": pending}
 
 
@@ -273,6 +277,13 @@ async def delete_media(item_id: int, db: Session = Depends(get_db)):
         db.commit()
         return {"deleted": None, "pending_delete": item_id,
                 "purge_after_days": cleanup.soft_delete_days}
-    await propagate_and_delete(item, db)
-    db.commit()
+    from app.services import tasks
+    task_id = tasks.create_task("deletion", f"Deleting '{item.title}'")
+    try:
+        await propagate_and_delete(item, db)
+        db.commit()
+    except Exception as e:
+        tasks.finish_task(task_id, "failed", str(e))
+        raise
+    tasks.finish_task(task_id, "done", f"Deleted '{item.title}'")
     return {"deleted": item_id}

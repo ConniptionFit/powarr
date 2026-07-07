@@ -34,42 +34,54 @@ async def run_plex_sync(db) -> dict:
     if not row or not row.enabled:
         raise ValueError("Plex integration not enabled")
 
-    from app.integrations.plex import PlexIntegration
-    plex = PlexIntegration(row.url, row.api_key)
-    weights = _get_setting(db, "scoring_weights", ScoringWeights)
-
-    items = await plex.fetch_media_items()
-    upserted = 0
-    for item_data in items:
-        existing = db.query(MediaItem).filter_by(plex_rating_key=item_data["plex_rating_key"]).first()
-        if existing:
-            for k, v in item_data.items():
-                setattr(existing, k, v)
-            existing.score = score_item(item_data, weights)
-        else:
-            item_data["score"] = score_item(item_data, weights)
-            db.add(MediaItem(**item_data))
-        upserted += 1
-
-    _set_setting(db, "last_synced", datetime.utcnow().isoformat())
-    db.commit()
-
-    cleanup = _get_setting(db, "cleanup", CleanupSettings)
-    protected = 0
-    if cleanup.protect_requested:
-        try:
-            protected = await refresh_seerr_protection(db)
-        except Exception as e:
-            logger.warning(f"Seerr protection refresh failed (non-fatal): {e}")
-
+    from app.services import tasks
+    task_id = tasks.create_task("plex_sync", "Syncing Plex library")
     try:
-        from app.services.arr_link import link_arr_ids
-        linked = await link_arr_ids(db)
-    except Exception as e:
-        logger.warning(f"arr-link failed (non-fatal): {e}")
-        linked = {}
+        from app.integrations.plex import PlexIntegration
+        plex = PlexIntegration(row.url, row.api_key)
+        weights = _get_setting(db, "scoring_weights", ScoringWeights)
 
-    return {"synced": upserted, "protected": protected, "linked": linked}
+        items = await plex.fetch_media_items()
+        tasks.update_task(task_id, total=len(items))
+        upserted = 0
+        for item_data in items:
+            existing = db.query(MediaItem).filter_by(plex_rating_key=item_data["plex_rating_key"]).first()
+            if existing:
+                for k, v in item_data.items():
+                    setattr(existing, k, v)
+                existing.score = score_item(item_data, weights)
+            else:
+                item_data["score"] = score_item(item_data, weights)
+                db.add(MediaItem(**item_data))
+            upserted += 1
+            if upserted % 50 == 0 or upserted == len(items):
+                tasks.update_task(task_id, current=upserted)
+
+        _set_setting(db, "last_synced", datetime.utcnow().isoformat())
+        db.commit()
+
+        cleanup = _get_setting(db, "cleanup", CleanupSettings)
+        protected = 0
+        if cleanup.protect_requested:
+            tasks.update_task(task_id, message="Refreshing Seerr protection…")
+            try:
+                protected = await refresh_seerr_protection(db)
+            except Exception as e:
+                logger.warning(f"Seerr protection refresh failed (non-fatal): {e}")
+
+        tasks.update_task(task_id, message="Linking *arr IDs…")
+        try:
+            from app.services.arr_link import link_arr_ids
+            linked = await link_arr_ids(db)
+        except Exception as e:
+            logger.warning(f"arr-link failed (non-fatal): {e}")
+            linked = {}
+
+        tasks.finish_task(task_id, "done", f"Synced {upserted} item(s)")
+        return {"synced": upserted, "protected": protected, "linked": linked}
+    except Exception as e:
+        tasks.finish_task(task_id, "failed", str(e))
+        raise
 
 
 async def refresh_seerr_protection(db) -> int:

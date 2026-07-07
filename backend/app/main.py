@@ -8,14 +8,14 @@ import logging
 from fastapi.responses import JSONResponse
 
 from app.database import init_db
-from app.api.v1 import media, settings, integrations, imports, system, auth
+from app.api.v1 import media, settings, integrations, imports, system, auth, tasks
 from app import log_buffer
 
 logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.21.0", docs_url="/api/docs")
+app = FastAPI(title="Powarr", version="0.22.0", docs_url="/api/docs")
 
 # Paths that stay reachable without a session: the auth flow itself, and the
 # health endpoint (Docker healthcheck probes from inside the container).
@@ -109,6 +109,7 @@ app.include_router(integrations.router, prefix="/api/v1")
 app.include_router(imports.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(tasks.router, prefix="/api/v1")
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
