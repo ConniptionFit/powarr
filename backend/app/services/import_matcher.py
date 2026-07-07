@@ -452,10 +452,26 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     llm_confidence = None
     llm_rationale = None
     if matched_title and ollama.enabled and ollama.host and ollama.model:
-        llm_context = f"Source app: {app_name}. Queue error: {_queue_messages(rec)[:200]}"
+        # Build comprehensive context: triggered series, queue state, pack info
+        triggered_id = rec.get(id_key)
+        triggered_title = lib_by_id.get(triggered_id, {}).get(title_key) if triggered_id else None
+        llm_context_parts = [
+            f"Source app: {app_name}",
+            f"Queue status: {_queue_messages(rec)[:150]}",
+        ]
+        if triggered_title and triggered_title != matched_title:
+            llm_context_parts.append(
+                f"Item that triggered download: '{triggered_title}' "
+                f"(series ID {triggered_id}). This is the most reliable source of truth.")
+        elif triggered_title:
+            llm_context_parts.append(
+                f"Item that triggered download: '{triggered_title}' — "
+                f"usually matches the candidate unless it's a season pack.")
         if pack_label:
-            llm_context += (f" This download is a season pack ({pack_label}) — "
-                            "accepting it imports every mappable file, not one episode.")
+            llm_context_parts.append(
+                f"Download type: season pack ({pack_label}). Accepting it imports every "
+                f"mappable file from the pack, not a single episode.")
+        llm_context = " | ".join(llm_context_parts)
         llm = await llm_assist.review_match(
             ollama.host, ollama.model, raw_title, matched_title,
             det_summary=f"{match_rationale} (heuristic confidence {heuristic_confidence})",

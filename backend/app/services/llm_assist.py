@@ -28,11 +28,20 @@ CAP_CANDIDATE = 300
 CAP_CONTEXT = 400
 CAP_ITEM = 500
 CAP_DET_SUMMARY = 600
+CAP_FILES = 800
 
 DEFAULT_MATCH_PROMPT = (
     "You match download release names to media library entries.\n"
     "Release name: {release}\n"
     "Candidate library entry: {candidate}\n"
+    "Context: {context}"
+)
+
+DEFAULT_PACK_PROMPT = (
+    "You match individual files within a season/series pack to episodes in a media library.\n"
+    "Pack: {release}\n"
+    "Library entry: {candidate}\n"
+    "Files in download: {files}\n"
     "Context: {context}"
 )
 
@@ -113,6 +122,27 @@ def build_explain_prompt(template: str, item_summary: str, verbosity: str = "bri
         prompt += "\nAnswer in 3-4 sentences citing the concrete factors."
     else:
         prompt += "\nAnswer in ONE short sentence."
+    return prompt
+
+
+def build_pack_prompt(template: str, release: str, candidate: str, files_list: str,
+                      context: str, verbosity: str = "brief") -> str:
+    """Pack-matching prompt: match individual files in a download to episodes.
+    Files should be: "filename1.mkv, filename2.mkv, ..." (list only, no paths)."""
+    tpl = (template or "").strip() or DEFAULT_PACK_PROMPT
+    prompt = (tpl.replace("{release}", _truncate(release, CAP_RELEASE))
+                 .replace("{candidate}", _truncate(candidate, CAP_CANDIDATE))
+                 .replace("{files}", _truncate(files_list, CAP_FILES))
+                 .replace("{context}", _truncate(context, CAP_CONTEXT)))
+    if verbosity == "minimal":
+        prompt += ('\nFor each file, reply with ONLY a JSON array: '
+                   '[{"file": "filename.mkv", "season": 1, "episode": 1, "confidence": "high"|"medium"|"low"}]')
+    else:
+        reason_spec = ("with brief reasoning" if verbosity == "verbose"
+                      else "with brief reasoning if any uncertainty")
+        prompt += (f'\nFor each file, reply with ONLY a JSON array: '
+                   f'[{{"file": "filename.mkv", "season": 1, "episode": 1, '
+                   f'"confidence": "high"|"medium"|"low", "reason": "{reason_spec}"}}]')
     return prompt
 
 
@@ -389,6 +419,28 @@ def _parse_json(raw: str) -> Optional[dict]:
             return None
 
 
+def _parse_pack_matches(raw: str) -> Optional[list[dict]]:
+    """Parse per-file episode matches from LLM response. Expects JSON array."""
+    raw = _strip_think(raw)
+    if not raw:
+        return None
+    try:
+        result = json.loads(raw)
+        if isinstance(result, list):
+            return result
+    except Exception:
+        m = re.search(r"\[.*\]", raw or "", re.DOTALL)
+        if not m:
+            return None
+        try:
+            result = json.loads(m.group(0))
+            if isinstance(result, list):
+                return result
+        except Exception:
+            pass
+    return None
+
+
 _slot_active = False
 
 
@@ -477,6 +529,44 @@ async def review_match(host: str, model: str, release_title: str,
     return {"agrees": agrees,
             "confidence_adjustment": adjustment,
             "rationale": reason[:limit]}
+
+
+async def review_pack_files(host: str, model: str, release_title: str,
+                             candidate_title: str, file_names: list[str],
+                             api_style: str = "ollama", template: str = "",
+                             verbosity: str = "brief", model_size: str = "medium",
+                             keep_alive_minutes: int = 10) -> Optional[list[dict]]:
+    """Per-file episode matching for season/series packs. Returns list of
+    [{"file": "...", "season": int, "episode": int, "confidence": "high|medium|low", "reason": "..."}]
+    or None if unavailable. Fails soft."""
+    verbose = verbosity == "verbose"
+    files_str = ", ".join(file_names[:50]) if file_names else "No files listed"
+    context = f"This is a multi-file download (pack). Match each file to its episode."
+    prompt = build_pack_prompt(template, release_title, candidate_title, files_str,
+                              context, verbosity)
+    raw = await _generate(host, model, prompt, api_style, json_format=True,
+                         verbose=verbose, model_size=model_size,
+                         keep_alive_minutes=keep_alive_minutes)
+    if raw is None:
+        return None
+    parsed = _parse_pack_matches(raw)
+    if not parsed or not isinstance(parsed, list):
+        return None
+    # Validate and clean results — ensure each has file, season, episode
+    validated = []
+    for item in parsed:
+        if isinstance(item, dict) and "file" in item and "season" in item and "episode" in item:
+            try:
+                validated.append({
+                    "file": str(item["file"])[:200],
+                    "season": int(item.get("season", 0)),
+                    "episode": int(item.get("episode", 0)),
+                    "confidence": str(item.get("confidence", "medium")).lower()[:20],
+                    "reason": str(item.get("reason", ""))[:300]
+                })
+            except (TypeError, ValueError):
+                continue
+    return validated if validated else None
 
 
 async def explain_deletion(host: str, model: str, item_summary: str,

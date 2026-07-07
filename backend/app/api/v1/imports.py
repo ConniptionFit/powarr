@@ -100,6 +100,59 @@ async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db
             "message": f"LLM run started on {min(count, 50)} item(s) — results stream in live"}
 
 
+@router.post("/{item_id}/llm-review-pack")
+async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
+    """Per-file LLM review for season packs: matches each file to its episode.
+    Returns [{"file": "filename.mkv", "season": 1, "episode": 2, "confidence": "high", "reason": "..."}]."""
+    from app.models.app_setting import AppSetting
+    from app.services import llm_assist
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    if not item.pack:
+        return {"matches": [], "message": "Not a season pack — use the regular LLM-run for this item"}
+    if not item.matched_title or not item.matched_id:
+        return {"matches": [], "message": "No matched library entry — run LLM-run first to match this download"}
+    if not item.download_id:
+        return {"matches": [], "message": "No download id on this item"}
+    cfg = db.query(AppSetting).filter_by(key="ollama").first()
+    if not cfg or not cfg.value or not json.loads(cfg.value).get("enabled"):
+        raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
+
+    # Fetch file list from the download
+    row = db.query(Integration).filter_by(name=item.source_app, enabled=True).first()
+    if not row:
+        return {"matches": [], "message": f"{item.source_app} integration not enabled"}
+    client = _get_client(item.source_app, row)
+    try:
+        candidates = await client.get_manual_import(item.download_id)
+    except Exception as e:
+        return {"matches": [], "message": f"Manual-import lookup failed: {e}"}
+
+    # Extract just the file names from the paths
+    file_names = []
+    for f in candidates:
+        path = f.get("relativePath") or f.get("path") or ""
+        if path:
+            file_names.append(path.split("/")[-1] if "/" in path else path)
+
+    if not file_names:
+        return {"matches": [], "message": "No files found in this download"}
+
+    ollama_cfg = json.loads(cfg.value) if cfg.value else {}
+    matches = await llm_assist.review_pack_files(
+        host=ollama_cfg.get("host"), model=ollama_cfg.get("model"),
+        release_title=item.raw_title, candidate_title=item.matched_title,
+        file_names=file_names,
+        api_style=ollama_cfg.get("api_style", "ollama"),
+        template=ollama_cfg.get("pack_prompt", ""),
+        verbosity=ollama_cfg.get("verbosity", "brief"),
+        model_size=ollama_cfg.get("model_size", "medium"),
+        keep_alive_minutes=ollama_cfg.get("keep_alive_minutes", 10)
+    )
+    return {"matches": matches or [], "file_count": len(file_names)}
+
+
 @router.post("/batch")
 async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db)):
     """Accept or reject several suggestions at once: {"ids": [...], "action": "accept"|"reject"}."""

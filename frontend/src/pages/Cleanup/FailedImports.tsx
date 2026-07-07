@@ -147,6 +147,14 @@ function MatchOverride({ item, onDone }: { item: FailedImport; onDone: () => voi
   );
 }
 
+interface PackMatch {
+  file: string;
+  season: number;
+  episode: number;
+  confidence: string;
+  reason: string;
+}
+
 function FileDetails({ importId }: { importId: number }) {
   const { data, isLoading } = useQuery({
     queryKey: ["import-files", importId],
@@ -201,6 +209,7 @@ export default function FailedImports() {
   const [showColMenu, setShowColMenu] = useState(false);
   const [sortBy, setSortBy] = useState<keyof FailedImport>("created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [packReviewId, setPackReviewId] = useState<number | null>(null);
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
@@ -312,6 +321,11 @@ export default function FailedImports() {
     mutationFn: (ids?: number[]) => importsApi.llmRun(ids),
     onSuccess: r => { setActionMsg(r.message); setSelected(new Set()); },
     onError: (e: Error) => setActionMsg(`LLM run failed: ${e.message}`),
+  });
+
+  const llmPackReviewMut = useMutation({
+    mutationFn: (id: number) => importsApi.llmReviewPack(id),
+    onError: (e: Error) => setActionMsg(`Pack review failed: ${e.message}`),
   });
 
   const handleScan = async () => {
@@ -658,6 +672,16 @@ export default function FailedImports() {
                                 >
                                   <Sparkles size={15} />
                                 </button>
+                                {item.pack && item.matched_id && (
+                                  <button
+                                    onClick={() => { setPackReviewId(item.id); llmPackReviewMut.mutate(item.id); }}
+                                    disabled={llmPackReviewMut.isPending}
+                                    title={`Review files in ${item.pack} with LLM`}
+                                    className="p-1.5 rounded hover:bg-cyan-900/40 text-slate-400 hover:text-cyan-300 transition-colors disabled:opacity-30"
+                                  >
+                                    <Bot size={15} />
+                                  </button>
+                                )}
                               </>
                             )}
                           </div>
@@ -679,6 +703,113 @@ export default function FailedImports() {
           </table>
         </div>
       )}
+      {packReviewId !== null && (
+        <PackReviewModal
+          importId={packReviewId}
+          data={llmPackReviewMut.data}
+          loading={llmPackReviewMut.isPending}
+          onClose={() => { setPackReviewId(null); llmPackReviewMut.reset(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+interface PackMatch {
+  file: string;
+  season: number;
+  episode: number;
+  confidence: string;
+  reason: string;
+}
+
+function PackReviewModal({
+  importId,
+  data,
+  loading,
+  onClose,
+}: {
+  importId: number;
+  data: { matches: PackMatch[]; file_count?: number; message?: string } | undefined;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  if (!data && !loading) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-surface-raised border border-purple-900/40 rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+        <div className="sticky top-0 flex items-center justify-between p-6 border-b border-purple-900/20 bg-surface-raised">
+          <h2 className="text-xl font-bold text-white">Season Pack File Matching</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-white">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-6">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 bg-brand rounded-full animate-pulse" />
+                <span className="text-slate-300">Analyzing files with LLM…</span>
+              </div>
+            </div>
+          ) : data?.message ? (
+            <div className="text-slate-400 text-sm">{data.message}</div>
+          ) : data?.matches && data.matches.length > 0 ? (
+            <div>
+              <p className="text-slate-400 text-sm mb-4">
+                Matched {data.matches.length} file(s):
+              </p>
+              <div className="space-y-3">
+                {data.matches.map((match, idx) => (
+                  <div key={idx} className="bg-surface/50 border border-purple-900/20 rounded-lg p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-slate-200 font-medium truncate text-sm" title={match.file}>
+                          {match.file}
+                        </p>
+                        <p className="text-brand-light text-sm font-bold mt-1">
+                          S{match.season.toString().padStart(2, "0")}E{match.episode
+                            .toString()
+                            .padStart(2, "0")}
+                        </p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div
+                          className={`inline-block px-2 py-1 rounded text-xs font-bold ${
+                            match.confidence === "high"
+                              ? "bg-green-900/60 text-green-300"
+                              : match.confidence === "medium"
+                              ? "bg-yellow-900/60 text-yellow-300"
+                              : "bg-red-900/60 text-red-300"
+                          }`}
+                        >
+                          {match.confidence}
+                        </div>
+                      </div>
+                    </div>
+                    {match.reason && (
+                      <p className="text-slate-400 text-xs mt-2">{match.reason}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-slate-400 text-sm">No matches found.</div>
+          )}
+        </div>
+
+        <div className="sticky bottom-0 flex items-center justify-end gap-3 p-6 border-t border-purple-900/20 bg-surface-raised">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

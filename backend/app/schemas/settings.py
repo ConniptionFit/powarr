@@ -53,6 +53,8 @@ class OllamaSettings(BaseModel):
     batch_delay_ms: int = 0  # optional pause between sequential batch calls — keeps weak hardware from pinning at 100%
     match_prompt: str = ""  # custom template for import matching; "" = built-in default
     explain_prompt: str = ""  # custom template for deletion rationale; "" = built-in default
+    pack_prompt: str = ""  # custom template for season pack file matching; "" = built-in default
+    verbose_rationales: bool = False  # extended reasoning in rationales (impacts token usage)
 
 
 class CleanupSettings(BaseModel):

@@ -269,6 +269,9 @@ export const importsApi = {
     req<{ started: number; total_eligible: number; message: string }>("/imports/llm-run", {
       method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
     }),
+  llmReviewPack: (id: number) =>
+    req<{ matches: Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>; file_count?: number; message?: string }>(
+      `/imports/${id}/llm-review-pack`, { method: "POST" }),
 };
 
 // --- System ---
