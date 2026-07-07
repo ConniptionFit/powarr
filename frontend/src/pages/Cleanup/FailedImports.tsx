@@ -211,8 +211,8 @@ export default function FailedImports() {
   const [showColMenu, setShowColMenu] = useState(false);
   const [sortBy, setSortBy] = useState<keyof FailedImport>("created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [packReviewLoading, setPackReviewLoading] = useState<Set<number>>(new Set());
-  const [packReviewResults, setPackReviewResults] = useState<Record<number, Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>>({});
+  const [packReviewLoading, setPackReviewLoading] = useState(new Set<number>());
+  const [packReviewResults, setPackReviewResults] = useState<Record<string, Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>>>({});
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
@@ -328,18 +328,18 @@ export default function FailedImports() {
 
   const handlePackReviewClick = async (itemId: number) => {
     if (packReviewLoading.has(itemId)) return; // already loading
-    setPackReviewLoading(prev => new Set(prev).add(itemId));
+    setPackReviewLoading((prev: Set<number>) => new Set(prev).add(itemId));
     try {
       const result = await importsApi.llmReviewPack(itemId);
       if (result.matches && result.matches.length > 0) {
-        setPackReviewResults(prev => ({ ...prev, [itemId]: result.matches }));
+        setPackReviewResults((prev: Record<string, any>) => ({ ...prev, [itemId.toString()]: result.matches }));
       } else {
         setActionMsg(result.message || "No matches found for pack review");
       }
-    } catch (e: Error) {
-      setActionMsg(`Pack review failed: ${e.message}`);
+    } catch (e: unknown) {
+      setActionMsg(`Pack review failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setPackReviewLoading(prev => { const next = new Set(prev); next.delete(itemId); return next; });
+      setPackReviewLoading((prev: Set<number>) => { const next = new Set(prev); next.delete(itemId); return next; });
     }
   };
 
@@ -723,8 +723,8 @@ export default function FailedImports() {
                                   <PackReviewButton
                                     itemId={item.id}
                                     isLoading={packReviewLoading.has(item.id)}
-                                    hasResults={!!packReviewResults[item.id]}
-                                    results={packReviewResults[item.id]}
+                                    hasResults={!!packReviewResults[item.id.toString()]}
+                                    results={packReviewResults[item.id.toString()]}
                                     onClick={() => handlePackReviewClick(item.id)}
                                   />
                                 )}

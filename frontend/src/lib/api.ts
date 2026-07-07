@@ -208,6 +208,7 @@ export interface FailedImport {
   pack: string | null; // season-pack label ("S03", "S01-S03", "complete series")
   llm_confidence: number | null;
   llm_rationale: string | null;
+  pack_file_matches: string | null; // JSON: per-file episode suggestions from LLM review
   status: string;
   verified: boolean | null;
   message: string | null;
