@@ -103,7 +103,7 @@ async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db
 @router.post("/{item_id}/llm-review-pack")
 async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
     """Per-file LLM review for season packs: matches each file to its episode.
-    Returns [{"file": "filename.mkv", "season": 1, "episode": 2, "confidence": "high", "reason": "..."}]."""
+    Returns and persists [{"file": "filename.mkv", "season": 1, "episode": 2, "confidence": "high", "reason": "..."}]."""
     from app.models.app_setting import AppSetting
     from app.services import llm_assist
     item = db.query(FailedImport).filter_by(id=item_id).first()
@@ -150,6 +150,13 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
         model_size=ollama_cfg.get("model_size", "medium"),
         keep_alive_minutes=ollama_cfg.get("keep_alive_minutes", 10)
     )
+
+    # Persist results to database
+    if matches:
+        item.pack_file_matches = json.dumps(matches)
+        item.updated_at = datetime.utcnow()
+        db.commit()
+
     return {"matches": matches or [], "file_count": len(file_names)}
 
 

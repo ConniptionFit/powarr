@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Sparkles } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Sparkles, Lightbulb, Brain } from "lucide-react";
 import { importsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import ClampedText from "../../components/ClampedText";
 
@@ -33,7 +33,7 @@ function ConfidenceBadge({ value }: { value: number }) {
 
 // --- Column system: visibility + widths persisted per-browser (localStorage) ---
 
-type ColKey = "source" | "release" | "matched" | "match_pct" | "match_notes" | "llm_pct" | "llm_notes" | "status" | "detected";
+type ColKey = "source" | "release" | "matched" | "match_pct" | "match_notes" | "llm_pct" | "llm_notes" | "pack_episode" | "pack_select" | "status" | "detected";
 
 interface ColDef {
   key: ColKey;
@@ -50,6 +50,8 @@ const COLUMNS: ColDef[] = [
   { key: "match_notes", label: "Match Notes", width: 260, sortField: "match_rationale" },
   { key: "llm_pct", label: "LLM", width: 90, sortField: "llm_confidence" },
   { key: "llm_notes", label: "LLM Notes", width: 260, sortField: "llm_rationale" },
+  { key: "pack_episode", label: "Pack Episodes", width: 200 },
+  { key: "pack_select", label: "Select Episode", width: 180 },
   { key: "status", label: "Status", width: 120, sortField: "status" },
   { key: "detected", label: "Detected", width: 110, sortField: "created_at" },
 ];
@@ -209,7 +211,8 @@ export default function FailedImports() {
   const [showColMenu, setShowColMenu] = useState(false);
   const [sortBy, setSortBy] = useState<keyof FailedImport>("created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [packReviewId, setPackReviewId] = useState<number | null>(null);
+  const [packReviewLoading, setPackReviewLoading] = useState<Set<number>>(new Set());
+  const [packReviewResults, setPackReviewResults] = useState<Record<number, Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>>({});
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
@@ -323,10 +326,22 @@ export default function FailedImports() {
     onError: (e: Error) => setActionMsg(`LLM run failed: ${e.message}`),
   });
 
-  const llmPackReviewMut = useMutation({
-    mutationFn: (id: number) => importsApi.llmReviewPack(id),
-    onError: (e: Error) => setActionMsg(`Pack review failed: ${e.message}`),
-  });
+  const handlePackReviewClick = async (itemId: number) => {
+    if (packReviewLoading.has(itemId)) return; // already loading
+    setPackReviewLoading(prev => new Set(prev).add(itemId));
+    try {
+      const result = await importsApi.llmReviewPack(itemId);
+      if (result.matches && result.matches.length > 0) {
+        setPackReviewResults(prev => ({ ...prev, [itemId]: result.matches }));
+      } else {
+        setActionMsg(result.message || "No matches found for pack review");
+      }
+    } catch (e: Error) {
+      setActionMsg(`Pack review failed: ${e.message}`);
+    } finally {
+      setPackReviewLoading(prev => { const next = new Set(prev); next.delete(itemId); return next; });
+    }
+  };
 
   const handleScan = async () => {
     setScanning(true);
@@ -428,6 +443,38 @@ export default function FailedImports() {
       }
       case "detected":
         return <span className="text-slate-400">{fmtDate(item.created_at)}</span>;
+      case "pack_episode": {
+        const matches = item.pack_file_matches ? JSON.parse(item.pack_file_matches) : [];
+        if (!matches.length) return <span className="text-slate-600 text-xs">—</span>;
+        return (
+          <div className="space-y-1">
+            {matches.slice(0, 2).map((m: any, i: number) => (
+              <div key={i} className="text-xs">
+                <span className="text-brand-light font-bold">S{m.season.toString().padStart(2, "0")}E{m.episode.toString().padStart(2, "0")}</span>
+                <span className="text-slate-400"> {m.file}</span>
+              </div>
+            ))}
+            {matches.length > 2 && <span className="text-xs text-slate-500">+{matches.length - 2} more</span>}
+          </div>
+        );
+      }
+      case "pack_select": {
+        if (!item.pack) return <span className="text-slate-600 text-xs">—</span>;
+        const matches = item.pack_file_matches ? JSON.parse(item.pack_file_matches) : [];
+        if (!matches.length) return <span className="text-slate-600 text-xs">—</span>;
+        return (
+          <select
+            className="px-2 py-1 rounded text-xs bg-surface-overlay border border-purple-900/40 text-slate-200 hover:border-purple-800 focus:border-purple-500 focus:outline-none"
+            defaultValue={`${matches[0]?.season}-${matches[0]?.episode}`}
+          >
+            {matches.map((m: any) => (
+              <option key={`${m.season}-${m.episode}`} value={`${m.season}-${m.episode}`}>
+                S{m.season.toString().padStart(2, "0")}E{m.episode.toString().padStart(2, "0")} ({m.confidence})
+              </option>
+            ))}
+          </select>
+        );
+      }
     }
   };
 
@@ -673,14 +720,13 @@ export default function FailedImports() {
                                   <Sparkles size={15} />
                                 </button>
                                 {item.pack && item.matched_id && (
-                                  <button
-                                    onClick={() => { setPackReviewId(item.id); llmPackReviewMut.mutate(item.id); }}
-                                    disabled={llmPackReviewMut.isPending}
-                                    title={`Review files in ${item.pack} with LLM`}
-                                    className="p-1.5 rounded hover:bg-cyan-900/40 text-slate-400 hover:text-cyan-300 transition-colors disabled:opacity-30"
-                                  >
-                                    <Bot size={15} />
-                                  </button>
+                                  <PackReviewButton
+                                    itemId={item.id}
+                                    isLoading={packReviewLoading.has(item.id)}
+                                    hasResults={!!packReviewResults[item.id]}
+                                    results={packReviewResults[item.id]}
+                                    onClick={() => handlePackReviewClick(item.id)}
+                                  />
                                 )}
                               </>
                             )}
@@ -703,113 +749,61 @@ export default function FailedImports() {
           </table>
         </div>
       )}
-      {packReviewId !== null && (
-        <PackReviewModal
-          importId={packReviewId}
-          data={llmPackReviewMut.data}
-          loading={llmPackReviewMut.isPending}
-          onClose={() => { setPackReviewId(null); llmPackReviewMut.reset(); }}
-        />
-      )}
     </div>
   );
 }
 
-interface PackMatch {
-  file: string;
-  season: number;
-  episode: number;
-  confidence: string;
-  reason: string;
-}
-
-function PackReviewModal({
-  importId,
-  data,
-  loading,
-  onClose,
+function PackReviewButton({
+  itemId,
+  isLoading,
+  hasResults,
+  results,
+  onClick,
 }: {
-  importId: number;
-  data: { matches: PackMatch[]; file_count?: number; message?: string } | undefined;
-  loading: boolean;
-  onClose: () => void;
+  itemId: number;
+  isLoading: boolean;
+  hasResults: boolean;
+  results?: Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>;
+  onClick: () => void;
 }) {
-  if (!data && !loading) return null;
+  const [showTooltip, setShowTooltip] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-surface-raised border border-purple-900/40 rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
-        <div className="sticky top-0 flex items-center justify-between p-6 border-b border-purple-900/20 bg-surface-raised">
-          <h2 className="text-xl font-bold text-white">Season Pack File Matching</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-white">
-            <X size={20} />
-          </button>
-        </div>
+    <div className="relative">
+      <button
+        ref={buttonRef}
+        onClick={onClick}
+        disabled={isLoading}
+        onMouseEnter={() => { if (hasResults) setShowTooltip(true); }}
+        onMouseLeave={() => setShowTooltip(false)}
+        className="p-1.5 rounded hover:bg-cyan-900/40 text-slate-400 hover:text-cyan-300 transition-colors disabled:opacity-30"
+        title={isLoading ? "Analyzing..." : hasResults ? "Hover to see results" : "Review files in pack with LLM"}
+      >
+        {isLoading ? (
+          <Brain size={15} className="animate-pulse" />
+        ) : hasResults ? (
+          <Lightbulb size={15} className="text-cyan-300" />
+        ) : (
+          <Bot size={15} />
+        )}
+      </button>
 
-        <div className="p-6">
-          {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="flex items-center gap-3">
-                <div className="w-2 h-2 bg-brand rounded-full animate-pulse" />
-                <span className="text-slate-300">Analyzing files with LLM…</span>
+      {showTooltip && hasResults && results && (
+        <div className="absolute bottom-full right-0 mb-2 bg-surface-raised border border-purple-900/40 rounded-lg shadow-xl p-3 w-64 z-50">
+          <div className="max-h-60 overflow-y-auto space-y-2">
+            {results.map((m, i) => (
+              <div key={i} className="bg-surface/50 border border-purple-900/20 rounded p-2">
+                <div className="text-xs font-bold text-brand-light">
+                  S{m.season.toString().padStart(2, "0")}E{m.episode.toString().padStart(2, "0")}
+                </div>
+                <div className="text-xs text-slate-300 truncate" title={m.file}>{m.file}</div>
+                {m.reason && <div className="text-xs text-slate-400 mt-1">{m.reason}</div>}
               </div>
-            </div>
-          ) : data?.message ? (
-            <div className="text-slate-400 text-sm">{data.message}</div>
-          ) : data?.matches && data.matches.length > 0 ? (
-            <div>
-              <p className="text-slate-400 text-sm mb-4">
-                Matched {data.matches.length} file(s):
-              </p>
-              <div className="space-y-3">
-                {data.matches.map((match, idx) => (
-                  <div key={idx} className="bg-surface/50 border border-purple-900/20 rounded-lg p-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-slate-200 font-medium truncate text-sm" title={match.file}>
-                          {match.file}
-                        </p>
-                        <p className="text-brand-light text-sm font-bold mt-1">
-                          S{match.season.toString().padStart(2, "0")}E{match.episode
-                            .toString()
-                            .padStart(2, "0")}
-                        </p>
-                      </div>
-                      <div className="text-right flex-shrink-0">
-                        <div
-                          className={`inline-block px-2 py-1 rounded text-xs font-bold ${
-                            match.confidence === "high"
-                              ? "bg-green-900/60 text-green-300"
-                              : match.confidence === "medium"
-                              ? "bg-yellow-900/60 text-yellow-300"
-                              : "bg-red-900/60 text-red-300"
-                          }`}
-                        >
-                          {match.confidence}
-                        </div>
-                      </div>
-                    </div>
-                    {match.reason && (
-                      <p className="text-slate-400 text-xs mt-2">{match.reason}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="text-slate-400 text-sm">No matches found.</div>
-          )}
+            ))}
+          </div>
         </div>
-
-        <div className="sticky bottom-0 flex items-center justify-end gap-3 p-6 border-t border-purple-900/20 bg-surface-raised">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors"
-          >
-            Close
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

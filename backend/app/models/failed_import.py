@@ -22,6 +22,7 @@ class FailedImport(Base):
     heuristic_confidence = Column(Float, nullable=True)  # algorithm-only score, pre-LLM-blend
     llm_confidence = Column(Float, nullable=True)
     llm_rationale = Column(String, nullable=True)
+    pack_file_matches = Column(Text, nullable=True)  # JSON: per-file episode suggestions from LLM review
     # suggested | auto_resolved | accepted | rejected | closed_external | resolve_failed
     status = Column(String, default="suggested")
     verified = Column(Boolean, nullable=True)  # import confirmed in *arr history after resolve
