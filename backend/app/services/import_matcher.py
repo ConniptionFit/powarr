@@ -81,6 +81,11 @@ def _get_client(name: str, row: Integration):
 def _normalize(title: str) -> str:
     t = (title or "").lower()
     t = re.sub(r"[._\-\[\]()+]", " ", t)
+    # *arr library titles keep punctuation (commas, colons, apostrophes) that release
+    # filenames never carry — left unstripped this breaks the substring-containment
+    # bonus below on otherwise-exact title matches (e.g. "Life, Larry..." vs "Life
+    # Larry..." from a dot-separated filename).
+    t = re.sub(r"[,;:'’!?]", "", t)
     t = _JUNK_RE.sub(" ", t)
     t = _SEASON_EP_RE.sub(" ", t)
     t = _YEAR_RE.sub(" ", t)
@@ -138,6 +143,21 @@ def _se_label(season, episode) -> str:
     s = f"S{season:02d}" if season is not None else "S??"
     e = f"E{episode:02d}" if episode is not None else "E??"
     return s + e
+
+
+def find_corroborating_episodes(candidates: list[dict], triggered_episode_id: int) -> list[dict] | None:
+    """Pure: among Sonarr manual-import candidates for a download, find the file
+    whose *resolved* episode list (Sonarr's own per-file scene-mapping, not our
+    filename regex) includes the triggered episode. Returns that file's full
+    episode list — often 2 entries for paired/segment-numbered releases, where
+    an uploader packs multiple canonical episodes into one file under a
+    different numbering scheme than the *arr library uses — or None if nothing
+    corroborates. Used to rescue a naive S/E-parse mismatch."""
+    for f in candidates:
+        eps = f.get("episodes") or []
+        if any(e.get("id") == triggered_episode_id for e in eps):
+            return eps
+    return None
 
 
 def _numeric_se_score(parsed: dict, cand_season, cand_ep) -> tuple[float | None, list[str]]:
@@ -441,6 +461,36 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     elif app_name == "sonarr" and matched_id and rec.get("episode"):
         series_type = (lib_by_id.get(matched_id) or rec.get("series") or {}).get("seriesType") or ""
         ep_score, has_numeric, ep_parts = score_episode_match(raw_title, rec["episode"], series_type, cfg)
+
+        # A numeric mismatch here only means OUR filename regex disagrees with the
+        # episode Sonarr's queue says it grabbed for — not that the file is wrong.
+        # Paired/segment-numbered releases (uploader packs 2+ canonical episodes
+        # per file under its own numbering) produce exactly this pattern. Sonarr's
+        # manual-import preview already resolves the real per-file mapping via its
+        # own scene data; check it once before trusting the naive parse.
+        numeric_mismatch = (parsed["episode"] is not None and rec["episode"].get("episodeNumber") is not None
+                            and parsed["episode"] != rec["episode"]["episodeNumber"])
+        triggered_ep_id = rec["episode"].get("id")
+        if numeric_mismatch and client is not None and rec.get("downloadId") and triggered_ep_id:
+            try:
+                candidates = await client.get_manual_import(rec["downloadId"])
+            except Exception as e:
+                logger.info(f"Manual-import corroboration failed (non-fatal): {e}")
+                candidates = []
+            corroborating = find_corroborating_episodes(candidates, triggered_ep_id)
+            if corroborating:
+                ep_score, has_numeric = 1.0, True
+                if len(corroborating) > 1:
+                    ep_list = ", ".join(f"{_se_label(e.get('seasonNumber'), e.get('episodeNumber'))} "
+                                        f"'{e.get('title')}'" for e in corroborating)
+                    ep_parts = [f"manual-import preview maps this file to {len(corroborating)} episodes "
+                               f"({ep_list}) — release likely uses paired/segment episode numbering; "
+                               f"Sonarr's own file-level resolution corroborates the triggered episode "
+                               f"despite the filename parsing to a different number"]
+                else:
+                    ep_parts = ["manual-import preview corroborates the triggered episode "
+                               "despite the filename's own episode number not matching"]
+
         parts.extend(ep_parts)
         confidence = 0.5 * confidence + 0.5 * ep_score
         if not has_numeric and confidence > cfg.title_only_cap:

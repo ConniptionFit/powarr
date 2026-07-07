@@ -5,7 +5,8 @@ import unittest
 from app.schemas.settings import ImportMatchingSettings
 from app.services.import_matcher import (_normalize, title_similarity, _is_stuck, _within_grace,
                                          _parse_release_numbers, score_episode_match,
-                                         score_pack_match, apply_pack_match_override)
+                                         score_pack_match, apply_pack_match_override,
+                                         find_corroborating_episodes)
 
 CFG = ImportMatchingSettings()  # defaults: title 0.6 / number 0.4, anime numbering on
 
@@ -21,6 +22,15 @@ class TestNormalize(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(_normalize(""), "")
         self.assertEqual(_normalize(None), "")
+
+    def test_strips_comma(self):
+        # library titles keep punctuation release filenames never carry
+        self.assertEqual(_normalize("Life, Larry and the Pursuit of Unhappiness"),
+                         "life larry and the pursuit of unhappiness")
+
+    def test_strips_colon_and_apostrophe(self):
+        self.assertNotIn(":", _normalize("Show: Subtitle"))
+        self.assertNotIn("'", _normalize("Marvel's Show"))
 
 
 class TestTitleSimilarity(unittest.TestCase):
@@ -38,6 +48,15 @@ class TestTitleSimilarity(unittest.TestCase):
 
     def test_empty_zero(self):
         self.assertEqual(title_similarity("", "Anything"), 0.0)
+
+    def test_substring_bonus_survives_library_punctuation(self):
+        # regression: a comma in the library title (absent from the dot-separated
+        # release filename) used to defeat the containment bonus entirely (2026-07-07)
+        s = title_similarity(
+            "Life.Larry.and.the.Pursuit.of.Unhappiness.An.Almost.History.of.America."
+            "S01E02.Farewell.1080p.AMZN.WEB-DL.DDP5.1.Atmos.H.264-RAWR",
+            "Life, Larry and the Pursuit of Unhappiness")
+        self.assertGreaterEqual(s, 0.85)
 
 
 class TestIsStuck(unittest.TestCase):
@@ -214,6 +233,33 @@ class TestScoreEpisodeMatch(unittest.TestCase):
         score, has_num, parts = score_episode_match("[Group] Anime Show - 1047 [1080p]", ep, "anime", cfg)
         self.assertFalse(has_num)  # S/E path finds nothing to corroborate
         self.assertFalse(any("absolute" in p for p in parts))
+
+
+class TestFindCorroboratingEpisodes(unittest.TestCase):
+    def test_paired_episode_file_corroborates(self):
+        # Camp Snoopy-style case: uploader packs 2 canonical episodes per file
+        # under its own numbering; Sonarr's manual-import already resolved both
+        candidates = [{
+            "path": "Show.S01E20.mkv",
+            "episodes": [
+                {"id": 501, "seasonNumber": 1, "episodeNumber": 39, "title": "Ep A"},
+                {"id": 502, "seasonNumber": 1, "episodeNumber": 40, "title": "Ep B"},
+            ],
+        }]
+        result = find_corroborating_episodes(candidates, triggered_episode_id=502)
+        self.assertEqual(len(result), 2)
+        self.assertEqual([e["id"] for e in result], [501, 502])
+
+    def test_no_matching_candidate_returns_none(self):
+        candidates = [{"path": "x.mkv", "episodes": [{"id": 1, "seasonNumber": 1, "episodeNumber": 1}]}]
+        self.assertIsNone(find_corroborating_episodes(candidates, triggered_episode_id=999))
+
+    def test_empty_candidates_returns_none(self):
+        self.assertIsNone(find_corroborating_episodes([], triggered_episode_id=1))
+
+    def test_candidate_with_no_episodes_key_skipped(self):
+        candidates = [{"path": "x.mkv"}]
+        self.assertIsNone(find_corroborating_episodes(candidates, triggered_episode_id=1))
 
 
 class TestApplyPackMatchOverride(unittest.TestCase):
