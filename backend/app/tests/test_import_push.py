@@ -58,6 +58,21 @@ class TestSonarrManualImportFiles(unittest.TestCase):
         self.assertEqual(f["indexerFlags"], 0)
         self.assertEqual(f["languages"], [])
 
+    def test_override_replaces_episode_ids(self):
+        # user-corrected mapping from the triage UI wins over Sonarr's own guess
+        overrides = {self.CANDIDATE["path"]: {"episode_id": 999}}
+        f = sonarr_files([self.CANDIDATE], None, "abc", overrides)[0]
+        self.assertEqual(f["episodeIds"], [999])
+
+    def test_override_on_unrelated_path_ignored(self):
+        overrides = {"/some/other/file.mkv": {"episode_id": 999}}
+        f = sonarr_files([self.CANDIDATE], None, "abc", overrides)[0]
+        self.assertEqual(f["episodeIds"], [501, 502])
+
+    def test_no_overrides_unchanged(self):
+        f = sonarr_files([self.CANDIDATE], None, "abc", None)[0]
+        self.assertEqual(f["episodeIds"], [501, 502])
+
 
 class TestRadarrManualImportFiles(unittest.TestCase):
     def test_flat_movie_id(self):

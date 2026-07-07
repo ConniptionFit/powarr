@@ -47,6 +47,8 @@ def _migrate():
             "verified": "BOOLEAN",
             "heuristic_confidence": "FLOAT",
             "pack_file_matches": "TEXT",
+            "mapping_overrides": "TEXT",
+            "quality_downgrade": "BOOLEAN",
         },
         "integrations": {
             "username": "VARCHAR",

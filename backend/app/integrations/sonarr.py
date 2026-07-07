@@ -5,15 +5,22 @@ from app.integrations.base import BaseIntegration
 
 
 def build_manual_import_files(candidates: list[dict], series_id: int | None,
-                              download_id: str) -> list[dict]:
+                              download_id: str, overrides: dict | None = None) -> list[dict]:
     """Map GET /manualimport candidates to ManualImport-command file entries
     (pure, unit-tested). Mirrors what Sonarr's own interactive import sends:
-    flat seriesId + episodeIds, never the nested series/episodes objects."""
+    flat seriesId + episodeIds, never the nested series/episodes objects.
+
+    overrides: {raw_path: {"episode_id": int, ...}} — a user correction saved
+    via the triage UI's editable Mapped To column. When a candidate's path has
+    an override, its episodeIds are replaced with the corrected episode before
+    building the command, so accept actually imports what the user picked."""
+    overrides = overrides or {}
     files = []
     for f in candidates:
         sid = (f.get("series") or {}).get("id") or f.get("seriesId") or series_id
-        episode_ids = f.get("episodeIds") or \
-            [e["id"] for e in (f.get("episodes") or []) if e.get("id")]
+        override = overrides.get(f.get("path"))
+        episode_ids = [override["episode_id"]] if override else (
+            f.get("episodeIds") or [e["id"] for e in (f.get("episodes") or []) if e.get("id")])
         if not sid or not episode_ids or not f.get("path"):
             continue
         entry = {
@@ -115,11 +122,15 @@ class SonarrIntegration(BaseIntegration):
             r.raise_for_status()
             return r.json()
 
-    async def push_import_command(self, download_id: str, series_id: int | None = None) -> dict:
+    async def push_import_command(self, download_id: str, series_id: int | None = None,
+                                  overrides: dict | None = None) -> dict:
         """Fetch manual-import candidates for a download and execute a ManualImport
         command for the importable ones. Imports MUST go through POST /command —
         the bare POST /manualimport route is Sonarr's reprocess/re-evaluate endpoint:
-        it never imports, and 404s when a candidate lacks a flat seriesId."""
+        it never imports, and 404s when a candidate lacks a flat seriesId.
+
+        overrides: {raw_path: {"episode_id": int, ...}} — user-corrected per-file
+        episode mappings from the triage UI (see build_manual_import_files)."""
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
                 # downloadId ONLY, and filter already-imported files. NEVER add seriesId
@@ -130,7 +141,7 @@ class SonarrIntegration(BaseIntegration):
                 params = {"downloadId": download_id, "filterExistingFiles": "true"}
                 r = await client.get(f"{self._base()}/manualimport", headers=self._headers(), params=params)
                 r.raise_for_status()
-                files = build_manual_import_files(r.json(), series_id, download_id)
+                files = build_manual_import_files(r.json(), series_id, download_id, overrides)
                 if not files:
                     return {"ok": False, "message": "No importable files resolved for this download", "imported": 0}
                 # Hard guard: never import files that already live inside the series'

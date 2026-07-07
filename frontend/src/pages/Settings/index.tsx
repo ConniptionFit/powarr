@@ -137,6 +137,7 @@ function ImportMatchingSection() {
       {numRow("Title-Only Cap", "Confidence ceiling when no episode number corroborates a title match — keeps title-only matches below auto-resolve", "title_only_cap", { min: 0, max: 1, step: 0.01 })}
       {toggleRow("Anime Absolute Numbering", "For Sonarr anime series, match by absolute episode number (with season/episode fallback and stale-data guards)", "anime_absolute_numbering")}
       {numRow("LLM Blend Weight", "The LLM's share of the final confidence blend: final = (1−w)·deterministic + w·LLM. 0 = ignore the LLM entirely; 0.3 = long-standing default", "llm_blend_weight", { min: 0, max: 1, step: 0.05 })}
+      {toggleRow("Auto-Reject Quality Downgrades", "Skip triage entirely for downloads where every file rejects as 'not an upgrade' over an existing library file — they can never import as-is. Off by default; the Downgrade badge and filter always show these regardless of this setting.", "quality_downgrade_auto_reject")}
 
       <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
         <div>

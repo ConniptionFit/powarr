@@ -38,6 +38,11 @@ class ImportMatchingSettings(BaseModel):
     # LLM share of the confidence blend (v0.12.0, user-confirmed 2026-07-06) —
     # final = (1-w) * deterministic + w * llm. 0 = ignore the LLM entirely.
     llm_blend_weight: float = 0.3
+    # Quality-downgrade handling (v0.17.0) — a suggested row is always flagged/badged
+    # when every file in the download rejects as "not an upgrade"; this additionally
+    # auto-rejects it during the scan instead of leaving it in triage. Off by default —
+    # same positive-opt-in pattern as orphan_auto_purge.
+    quality_downgrade_auto_reject: bool = False
 
 
 class OllamaSettings(BaseModel):

@@ -18,6 +18,8 @@ class FailedImportOut(BaseModel):
     llm_confidence: Optional[float] = None
     llm_rationale: Optional[str] = None
     pack_file_matches: Optional[str] = None  # JSON: per-file episode suggestions from LLM review
+    mapping_overrides: Optional[str] = None  # JSON: user-corrected per-file episode mappings
+    quality_downgrade: Optional[bool] = None  # every file rejects as "not an upgrade"
     status: str
     verified: Optional[bool] = None
     message: Optional[str] = None

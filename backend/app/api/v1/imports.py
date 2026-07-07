@@ -160,32 +160,6 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
     return {"matches": matches or [], "file_count": len(file_names)}
 
 
-@router.put("/{item_id}/pack-match")
-def update_pack_match(item_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
-    """Manually adjust one file's episode mapping inside pack_file_matches.
-    Body: {"file": "filename.mkv", "season": 10, "episode": 5}. The entry is
-    marked confidence "user" — triage metadata only; the *arr still does its
-    own file mapping on accept."""
-    file = payload.get("file")
-    season, episode = payload.get("season"), payload.get("episode")
-    if not file or not isinstance(season, int) or not isinstance(episode, int):
-        raise HTTPException(status_code=400, detail="Body must be {file: str, season: int, episode: int}")
-    item = db.query(FailedImport).filter_by(id=item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Failed import not found")
-    if not item.pack_file_matches:
-        raise HTTPException(status_code=400, detail="No pack file matches on this item — run the pack review first")
-    matches = json.loads(item.pack_file_matches)
-    try:
-        matches = import_matcher.apply_pack_match_override(matches, file, season, episode)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    item.pack_file_matches = json.dumps(matches)
-    item.updated_at = datetime.utcnow()
-    db.commit()
-    return {"id": item.id, "matches": matches}
-
-
 @router.post("/batch")
 async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db)):
     """Accept or reject several suggestions at once: {"ids": [...], "action": "accept"|"reject"}."""
@@ -223,24 +197,87 @@ async def import_files(item_id: int, db: Session = Depends(get_db)):
         candidates = await client.get_manual_import(item.download_id)
     except Exception as e:
         return {"files": [], "message": f"Manual-import lookup failed: {e}"}
+    overrides = json.loads(item.mapping_overrides or "{}")
     files = []
     for f in candidates:
         mapped = (f.get("series") or {}).get("title") or (f.get("movie") or {}).get("title") \
             or (f.get("artist") or {}).get("artistName") or (f.get("author") or {}).get("authorName")
-        detail = ""
-        if f.get("episodes"):
+        raw_path = f.get("path")
+        override = overrides.get(raw_path) if raw_path else None
+        if override:
+            detail = f"S{override['season']:02d}E{override['episode']:02d}" + \
+                (f" '{override['title']}'" if override.get("title") else "")
+        elif f.get("episodes"):
             detail = ", ".join(f"S{e.get('seasonNumber')}E{e.get('episodeNumber')}" for e in f["episodes"][:8])
         elif f.get("album"):
             detail = f["album"].get("title", "")
+        else:
+            detail = ""
         files.append({
             "path": f.get("relativePath") or f.get("path"),
+            "raw_path": raw_path,
             "size": f.get("size", 0),
             "quality": ((f.get("quality") or {}).get("quality") or {}).get("name"),
             "mapped_to": mapped,
             "detail": detail,
+            "overridden": override is not None,
             "rejections": [r.get("reason") for r in (f.get("rejections") or [])],
         })
     return {"files": files, "message": None}
+
+
+@router.get("/{item_id}/episode-options")
+async def episode_options(item_id: int, db: Session = Depends(get_db)):
+    """All episodes of the matched series, for the editable Mapped To column's
+    episode picker (Sonarr only — other *arr apps have no per-file sub-unit to
+    reassign; a wrong match there is a Change Match, not a file-mapping fix)."""
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    if item.source_app != "sonarr":
+        return {"episodes": [], "message": "Episode mapping is only available for Sonarr (TV) items"}
+    if not item.matched_id:
+        return {"episodes": [], "message": "No matched series — set a match first"}
+    row = db.query(Integration).filter_by(name="sonarr", enabled=True).first()
+    if not row:
+        return {"episodes": [], "message": "sonarr integration not enabled"}
+    client = _get_client("sonarr", row)
+    try:
+        eps = await client.get_episodes(item.matched_id)
+    except Exception as e:
+        return {"episodes": [], "message": f"Episode lookup failed: {e}"}
+    episodes = sorted(
+        ({"id": e["id"], "season": e.get("seasonNumber"), "episode": e.get("episodeNumber"),
+          "title": e.get("title") or ""} for e in eps if e.get("id")),
+        key=lambda e: (e["season"] if e["season"] is not None else -1,
+                      e["episode"] if e["episode"] is not None else -1),
+    )
+    return {"episodes": episodes, "message": None}
+
+
+@router.put("/{item_id}/file-mapping")
+def update_file_mapping(item_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+    """User correction of one file's episode mapping (Sonarr episode-level rows
+    only). Body: {"path": raw_path, "episode_id": int, "season": int, "episode":
+    int, "title": str}. Persisted into mapping_overrides (keyed by the file's raw
+    absolute path — stable across manual-import re-fetches) and applied at accept
+    time so the correction actually changes what gets imported, not just displayed."""
+    path = payload.get("path")
+    episode_id = payload.get("episode_id")
+    season, episode = payload.get("season"), payload.get("episode")
+    if not path or not isinstance(episode_id, int) or not isinstance(season, int) or not isinstance(episode, int):
+        raise HTTPException(status_code=400,
+                            detail="Body must be {path: str, episode_id: int, season: int, episode: int}")
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    overrides = json.loads(item.mapping_overrides or "{}")
+    overrides[path] = {"episode_id": episode_id, "season": season, "episode": episode,
+                       "title": payload.get("title") or ""}
+    item.mapping_overrides = json.dumps(overrides)
+    item.updated_at = datetime.utcnow()
+    db.commit()
+    return {"id": item.id, "overrides": overrides}
 
 
 async def _accept(item_id: int, db: Session) -> dict:
@@ -254,7 +291,11 @@ async def _accept(item_id: int, db: Session) -> dict:
         raise HTTPException(status_code=400, detail=f"{item.source_app} integration not enabled")
 
     client = _get_client(item.source_app, row)
-    result = await client.push_import_command(item.download_id, item.matched_id)
+    if item.source_app == "sonarr" and item.mapping_overrides:
+        result = await client.push_import_command(item.download_id, item.matched_id,
+                                                   overrides=json.loads(item.mapping_overrides))
+    else:
+        result = await client.push_import_command(item.download_id, item.matched_id)
     item.message = result["message"]
     if result["ok"]:
         item.status = "accepted"

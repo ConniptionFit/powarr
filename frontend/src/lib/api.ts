@@ -129,6 +129,7 @@ export interface ImportMatchingSettings {
   anime_absolute_numbering: boolean;
   orphan_auto_purge: boolean;
   llm_blend_weight: number; // LLM share of the confidence blend (0-1)
+  quality_downgrade_auto_reject: boolean;
 }
 
 export interface OllamaSettings {
@@ -209,6 +210,8 @@ export interface FailedImport {
   llm_confidence: number | null;
   llm_rationale: string | null;
   pack_file_matches: string | null; // JSON: per-file episode suggestions from LLM review
+  mapping_overrides: string | null; // JSON: user-corrected per-file episode mappings, keyed by raw path
+  quality_downgrade: boolean | null; // every file in the download rejects as "not an upgrade"
   status: string;
   verified: boolean | null;
   message: string | null;
@@ -232,10 +235,12 @@ export interface ImportStats {
 
 export interface ImportFileDetail {
   path: string | null;
+  raw_path: string | null; // stable identifier (Sonarr's own absolute path) — used for mapping overrides
   size: number;
   quality: string | null;
   mapped_to: string | null;
   detail: string;
+  overridden: boolean;
   rejections: string[];
 }
 
@@ -273,9 +278,13 @@ export const importsApi = {
   llmReviewPack: (id: number) =>
     req<{ matches: Array<{ file: string; season: number; episode: number; confidence: string; reason: string }>; file_count?: number; message?: string }>(
       `/imports/${id}/llm-review-pack`, { method: "POST" }),
-  updatePackMatch: (id: number, file: string, season: number, episode: number) =>
-    req<{ id: number; matches: Array<{ file: string; season: number; episode: number; confidence: string; reason: string }> }>(
-      `/imports/${id}/pack-match`, { method: "PUT", body: JSON.stringify({ file, season, episode }) }),
+  episodeOptions: (id: number) =>
+    req<{ episodes: Array<{ id: number; season: number; episode: number; title: string }>; message?: string }>(
+      `/imports/${id}/episode-options`),
+  updateFileMapping: (id: number, path: string, episodeId: number, season: number, episode: number, title: string) =>
+    req<{ id: number; overrides: Record<string, unknown> }>(`/imports/${id}/file-mapping`, {
+      method: "PUT", body: JSON.stringify({ path, episode_id: episodeId, season, episode, title }),
+    }),
 };
 
 // --- System ---

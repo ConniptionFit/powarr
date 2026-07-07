@@ -32,6 +32,7 @@ _JUNK_RE = re.compile(
     r"\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|web[- ]?dl|webrip|bluray|blu-ray|"
     r"remux|hdtv|dvdrip|proper|repack|amzn|dsnp|nf|atvp|hulu|flac|mp3|320|v0|aac|dts|"
     r"truehd|atmos|dv|hdr(10)?|10bit|8bit|multi|vostfr|internal)\b", re.IGNORECASE)
+_DOWNGRADE_RE = re.compile(r"not an upgrade", re.IGNORECASE)
 
 # --- SSE fan-out: scan cycles publish events, /imports/events subscribers consume them ---
 _subscribers: set[asyncio.Queue] = set()
@@ -143,6 +144,23 @@ def _se_label(season, episode) -> str:
     s = f"S{season:02d}" if season is not None else "S??"
     e = f"E{episode:02d}" if episode is not None else "E??"
     return s + e
+
+
+def is_quality_downgrade(candidates: list[dict]) -> bool:
+    """Pure: True when EVERY file in a manual-import candidate list rejects purely
+    because it's not an upgrade over an existing library file (Sonarr's own
+    "Not an upgrade for existing episode file(s)" rejection family) — a release
+    that will never successfully import as-is, safe to flag/auto-reject rather
+    than clutter triage. A partial result (some files ok, some downgrades)
+    returns False — only a clean all-files-downgrade release counts, since a
+    mixed download may still be worth accepting for its non-downgrade files."""
+    if not candidates:
+        return False
+    for f in candidates:
+        reasons = [r.get("reason", "") for r in (f.get("rejections") or [])]
+        if not any(_DOWNGRADE_RE.search(r) for r in reasons):
+            return False
+    return True
 
 
 def find_corroborating_episodes(candidates: list[dict], triggered_episode_id: int) -> list[dict] | None:
@@ -716,7 +734,8 @@ async def scan_once() -> dict:
     """One detection cycle across all enabled *arr apps. Returns a per-app summary."""
     summary: dict = {"scanned": [], "new_suggestions": 0, "auto_resolved": 0, "skipped_existing": 0,
                      "below_floor": 0, "in_grace": 0, "closed_external": 0, "verified": 0,
-                     "resolve_failed": 0, "orphaned": 0, "orphan_pending": 0}
+                     "resolve_failed": 0, "orphaned": 0, "orphan_pending": 0,
+                     "quality_downgrade_auto_rejected": 0}
     db = SessionLocal()
     try:
         cfg, ollama = load_settings(db)
@@ -805,7 +824,24 @@ async def scan_once() -> dict:
                     message=_queue_messages(rec)[:500] or None,
                 )
 
-                if (cfg.auto_resolve_enabled and match["matched_id"]
+                # Quality-downgrade check (v0.17.0) — a release that only ever
+                # rejects as "not an upgrade" will never successfully import;
+                # one manual-import call per NEW row, bounded the same way as
+                # pack coverage/corroboration (never on an existing row's re-poll).
+                if app_name == "sonarr" and download_id:
+                    try:
+                        dg_candidates = await client.get_manual_import(download_id)
+                        item.quality_downgrade = is_quality_downgrade(dg_candidates)
+                    except Exception as e:
+                        logger.info(f"Quality-downgrade check failed (non-fatal): {e}")
+
+                if item.quality_downgrade and cfg.quality_downgrade_auto_reject:
+                    item.status = "rejected"
+                    item.resolved_at = datetime.utcnow()
+                    item.message = ((item.message + " | ") if item.message else "") + \
+                        "Auto-rejected: every file is a quality downgrade of an existing library file"
+                    summary["quality_downgrade_auto_rejected"] += 1
+                elif (cfg.auto_resolve_enabled and match["matched_id"]
                         and match["confidence"] >= cfg.high_confidence_threshold and download_id):
                     result = await client.push_import_command(download_id, match["matched_id"])
                     if result["ok"]:
@@ -867,24 +903,6 @@ def blend_confidence(deterministic: float, llm: float, weight: float) -> float:
     user-adjustable since v0.12.0 (previously hardcoded 0.7/0.3)."""
     w = max(0.0, min(1.0, weight))
     return round(min(1.0, (1.0 - w) * deterministic + w * llm), 3)
-
-
-def apply_pack_match_override(matches: list[dict], file: str,
-                              season: int, episode: int) -> list[dict]:
-    """User correction of one file's episode mapping inside pack_file_matches.
-    Marks the entry confidence "user" so it survives display sorting and reads
-    as an explicit override, not an LLM guess. Raises ValueError when the file
-    isn't in the list or the numbers are out of range."""
-    if season < 0 or episode < 0:
-        raise ValueError("season and episode must be non-negative")
-    for m in matches:
-        if m.get("file") == file:
-            m["season"] = season
-            m["episode"] = episode
-            m["confidence"] = "user"
-            m["reason"] = "Manually adjusted"
-            return matches
-    raise ValueError(f"File not found in pack matches: {file}")
 
 
 def llm_run_active() -> bool:

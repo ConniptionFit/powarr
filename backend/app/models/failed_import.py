@@ -23,6 +23,8 @@ class FailedImport(Base):
     llm_confidence = Column(Float, nullable=True)
     llm_rationale = Column(String, nullable=True)
     pack_file_matches = Column(Text, nullable=True)  # JSON: per-file episode suggestions from LLM review
+    mapping_overrides = Column(Text, nullable=True)  # JSON: {raw_path: {episode_id, season, episode, title}} user corrections
+    quality_downgrade = Column(Boolean, nullable=True)  # every file rejects as "not an upgrade" — never importable as-is
     # suggested | auto_resolved | accepted | rejected | closed_external | resolve_failed
     status = Column(String, default="suggested")
     verified = Column(Boolean, nullable=True)  # import confirmed in *arr history after resolve

@@ -5,8 +5,8 @@ import unittest
 from app.schemas.settings import ImportMatchingSettings
 from app.services.import_matcher import (_normalize, title_similarity, _is_stuck, _within_grace,
                                          _parse_release_numbers, score_episode_match,
-                                         score_pack_match, apply_pack_match_override,
-                                         find_corroborating_episodes)
+                                         score_pack_match, find_corroborating_episodes,
+                                         is_quality_downgrade)
 
 CFG = ImportMatchingSettings()  # defaults: title 0.6 / number 0.4, anime numbering on
 
@@ -262,31 +262,31 @@ class TestFindCorroboratingEpisodes(unittest.TestCase):
         self.assertIsNone(find_corroborating_episodes(candidates, triggered_episode_id=1))
 
 
-class TestApplyPackMatchOverride(unittest.TestCase):
-    def matches(self):
-        return [
-            {"file": "ep588.mkv", "season": 16, "episode": 10, "confidence": "high", "reason": "absolute 588"},
-            {"file": "ep589.mkv", "season": 16, "episode": 11, "confidence": "medium", "reason": "absolute 589"},
+class TestIsQualityDowngrade(unittest.TestCase):
+    def test_all_files_downgrade_true(self):
+        candidates = [
+            {"rejections": [{"reason": "Not an upgrade for existing episode file(s). Existing quality: WEBDL-1080p"}]},
+            {"rejections": [{"reason": "not an upgrade for existing episode file(s)."}]},
         ]
+        self.assertTrue(is_quality_downgrade(candidates))
 
-    def test_override_updates_entry_and_marks_user(self):
-        out = apply_pack_match_override(self.matches(), "ep589.mkv", 10, 5)
-        self.assertEqual(out[1]["season"], 10)
-        self.assertEqual(out[1]["episode"], 5)
-        self.assertEqual(out[1]["confidence"], "user")
-        self.assertEqual(out[1]["reason"], "Manually adjusted")
+    def test_partial_downgrade_false(self):
+        candidates = [
+            {"rejections": [{"reason": "Not an upgrade for existing episode file(s)."}]},
+            {"rejections": []},
+        ]
+        self.assertFalse(is_quality_downgrade(candidates))
 
-    def test_other_entries_untouched(self):
-        out = apply_pack_match_override(self.matches(), "ep589.mkv", 10, 5)
-        self.assertEqual(out[0], self.matches()[0])
+    def test_no_rejections_false(self):
+        candidates = [{"rejections": []}]
+        self.assertFalse(is_quality_downgrade(candidates))
 
-    def test_unknown_file_raises(self):
-        with self.assertRaises(ValueError):
-            apply_pack_match_override(self.matches(), "missing.mkv", 1, 1)
+    def test_unrelated_rejection_false(self):
+        candidates = [{"rejections": [{"reason": "Unable to parse episode number"}]}]
+        self.assertFalse(is_quality_downgrade(candidates))
 
-    def test_negative_numbers_raise(self):
-        with self.assertRaises(ValueError):
-            apply_pack_match_override(self.matches(), "ep588.mkv", -1, 5)
+    def test_empty_candidates_false(self):
+        self.assertFalse(is_quality_downgrade([]))
 
 
 if __name__ == "__main__":
