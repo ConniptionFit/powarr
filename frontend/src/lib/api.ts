@@ -328,9 +328,21 @@ export interface AuthStatus {
   totp_enabled: boolean;
   authenticated: boolean;
   bypassed: boolean;
+  via: "sso" | "lan" | "session" | null; // how the current request was allowed
   lan_bypass: boolean;
   lan_cidrs: string[];
+  sso_enabled: boolean;
+  sso_allow_lan_without_sso: boolean;
+  sso_trusted_proxies: string[] | null; // null unless the caller can manage
+  sso_username_header: string | null;
   username: string | null;
+}
+
+export interface SsoConfig {
+  sso_enabled?: boolean;
+  sso_allow_lan_without_sso?: boolean;
+  sso_trusted_proxies?: string[];
+  sso_username_header?: string;
 }
 
 export const authApi = {
@@ -351,6 +363,9 @@ export const authApi = {
     req<{ ok: boolean; totp_enabled: boolean }>("/auth/totp/disable", { method: "POST", body: JSON.stringify({ password }) }),
   updateConfig: (lan_bypass: boolean, lan_cidrs: string[]) =>
     req<{ ok: boolean }>("/auth/config", { method: "PUT", body: JSON.stringify({ lan_bypass, lan_cidrs }) }),
+  updateSso: (body: SsoConfig) =>
+    req<{ ok: boolean; sso_enabled: boolean; sso_allow_lan_without_sso: boolean; sso_trusted_proxies: string[]; sso_username_header: string }>(
+      "/auth/sso", { method: "PUT", body: JSON.stringify(body) }),
 };
 
 // --- Ollama (optional local-LLM assist) ---

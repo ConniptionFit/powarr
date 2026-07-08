@@ -773,6 +773,11 @@ function SecuritySection() {
   // lan
   const [lanBypass, setLanBypass] = useState(true);
   const [cidrs, setCidrs] = useState("");
+  // sso (Authentik forward-auth)
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [ssoAllowLan, setSsoAllowLan] = useState(false);
+  const [ssoProxies, setSsoProxies] = useState("");
+  const [ssoHeader, setSsoHeader] = useState("X-Authentik-Username");
   // disable
   const [disablePw, setDisablePw] = useState("");
 
@@ -780,6 +785,10 @@ function SecuritySection() {
     if (status) {
       setLanBypass(status.lan_bypass);
       setCidrs(status.lan_cidrs.join("\n"));
+      setSsoEnabled(status.sso_enabled);
+      setSsoAllowLan(status.sso_allow_lan_without_sso);
+      setSsoProxies((status.sso_trusted_proxies ?? []).join("\n"));
+      if (status.sso_username_header) setSsoHeader(status.sso_username_header);
     }
   }, [status]);
 
@@ -919,6 +928,56 @@ function SecuritySection() {
           className={`${btnCls} mt-2`}
         >
           Save LAN Settings
+        </button>
+      </div>
+
+      <div className="py-4 border-t border-purple-900/20">
+        <label className="flex items-center justify-between cursor-pointer">
+          <div>
+            <p className="text-white text-sm font-medium">Single Sign-On (Authentik)</p>
+            <p className="text-slate-500 text-xs mt-0.5">
+              Trust an identity asserted by your reverse proxy (Authentik forward-auth) — honored
+              only from the trusted proxy IPs below, so a direct client can't forge it.
+            </p>
+          </div>
+          <input type="checkbox" checked={ssoEnabled} onChange={e => setSsoEnabled(e.target.checked)} className="accent-purple-500 ml-6" />
+        </label>
+
+        {ssoEnabled && (
+          <div className="mt-3 space-y-3">
+            <div>
+              <p className="text-slate-400 text-xs mb-1">Trusted proxy IPs / CIDRs (one per line) — your reverse proxy's address on the shared network</p>
+              <textarea rows={2} value={ssoProxies} onChange={e => setSsoProxies(e.target.value)}
+                        placeholder="192.168.112.2"
+                        className="w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-xs font-mono text-white placeholder:text-slate-600" />
+            </div>
+            <div>
+              <p className="text-slate-400 text-xs mb-1">Identity header</p>
+              <input type="text" value={ssoHeader} onChange={e => setSsoHeader(e.target.value)} className={inputCls} />
+            </div>
+            <label className="flex items-center justify-between cursor-pointer">
+              <div>
+                <p className="text-white text-sm font-medium">Allow LAN access without SSO</p>
+                <p className="text-slate-500 text-xs mt-0.5">
+                  Off: direct/LAN requests must log in (localhost stays reachable as break-glass).
+                  On: the LAN CIDRs above bypass SSO for direct requests.
+                </p>
+              </div>
+              <input type="checkbox" checked={ssoAllowLan} onChange={e => setSsoAllowLan(e.target.checked)} className="accent-purple-500 ml-6" />
+            </label>
+          </div>
+        )}
+
+        <button
+          onClick={() => run(() => authApi.updateSso({
+            sso_enabled: ssoEnabled,
+            sso_allow_lan_without_sso: ssoAllowLan,
+            sso_trusted_proxies: ssoProxies.split("\n").map(s => s.trim()).filter(Boolean),
+            sso_username_header: ssoHeader.trim() || "X-Authentik-Username",
+          }), "SSO settings saved")}
+          className={`${btnCls} mt-3`}
+        >
+          Save SSO Settings
         </button>
       </div>
     </div>

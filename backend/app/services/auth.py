@@ -41,6 +41,15 @@ def default_config() -> dict:
         "lan_bypass": True,
         "lan_cidrs": DEFAULT_LAN_CIDRS,
         "session_secret": secrets.token_hex(32),
+        # --- Authentik/forward-auth SSO (v0.24.0) ---
+        "sso_enabled": False,
+        # Peer IPs/CIDRs allowed to assert identity (the reverse proxy, e.g. NPM on
+        # the shared docker network). The identity header is trusted ONLY from these.
+        "sso_trusted_proxies": [],
+        "sso_username_header": "X-Authentik-Username",
+        # When SSO is on, direct (non-proxy) LAN requests are gated by default; this
+        # opt-in re-enables the LAN-CIDR bypass for them (Settings → Security → SSO).
+        "sso_allow_lan_without_sso": False,
     }
 
 
@@ -140,13 +149,22 @@ def otpauth_uri(secret: str, username: str) -> str:
 
 # --- Request evaluation ---
 
-def client_ip(request) -> str:
-    """Real client IP. X-Forwarded-For is trusted only when the direct peer is a
-    private address (i.e. a reverse proxy on the LAN/docker network) — a remote
-    client can't spoof a LAN address to earn the bypass."""
+def client_ip(request, cfg: dict | None = None) -> str:
+    """Real client IP for CIDR/lockout purposes. X-Forwarded-For is honored only
+    from a trusted source:
+    - With SSO enabled, ONLY when the direct peer is a configured trusted proxy
+      (`sso_trusted_proxies`) — a private peer is no longer enough, which closes
+      the leftmost-XFF spoof (SEC-02).
+    - Otherwise (SSO off), the legacy behavior: trusted from any private peer."""
     peer = request.client.host if request.client else ""
     xff = request.headers.get("x-forwarded-for", "")
-    if xff and _is_private(peer):
+    if not xff:
+        return peer
+    if cfg and cfg.get("sso_enabled"):
+        if ip_in_cidrs(peer, cfg.get("sso_trusted_proxies") or []):
+            return xff.split(",")[0].strip()
+        return peer
+    if _is_private(peer):
         return xff.split(",")[0].strip()
     return peer
 
@@ -169,17 +187,45 @@ def ip_in_cidrs(ip: str, cidrs: list[str]) -> bool:
             continue
     return False
 
+def sso_identity(request, cfg: dict) -> Optional[str]:
+    """The SSO-asserted username, but ONLY when the request's direct peer is a
+    configured trusted proxy (`sso_trusted_proxies`). A direct/LAN client is never
+    trusted to set the identity header, so it can't forge `X-Authentik-Username`.
+    Returns the username, or None when SSO is off / the peer isn't trusted / no
+    header is present."""
+    if not cfg.get("sso_enabled"):
+        return None
+    peer = request.client.host if request.client else ""
+    if not ip_in_cidrs(peer, cfg.get("sso_trusted_proxies") or []):
+        return None
+    header = (cfg.get("sso_username_header") or "X-Authentik-Username").lower()
+    user = (request.headers.get(header) or "").strip()
+    return user or None
+
+
 def evaluate_request(request, cfg: dict) -> dict:
-    """→ {authenticated, bypassed, allowed}. Auth disabled = always allowed."""
-    if not cfg["enabled"]:
-        return {"authenticated": False, "bypassed": False, "allowed": True}
-    ip = client_ip(request)
+    """→ {authenticated, bypassed, allowed, via}. Auth+SSO both off = always allowed."""
+    sso_on = bool(cfg.get("sso_enabled"))
+    if not cfg["enabled"] and not sso_on:
+        return {"authenticated": False, "bypassed": False, "allowed": True, "via": None}
+
+    # 1. SSO identity from the trusted proxy — the caller is already authenticated
+    #    at the edge (Authentik), so trust the asserted username.
+    if sso_on and sso_identity(request, cfg):
+        return {"authenticated": True, "bypassed": False, "allowed": True, "via": "sso"}
+
+    # 2. LAN-CIDR bypass. Off by default once SSO is on; the operator re-enables it
+    #    with sso_allow_lan_without_sso for direct/local access without SSO.
+    ip = client_ip(request, cfg)
     if cfg["lan_bypass"] and ip_in_cidrs(ip, cfg["lan_cidrs"]):
-        return {"authenticated": False, "bypassed": True, "allowed": True}
+        if not sso_on or cfg.get("sso_allow_lan_without_sso"):
+            return {"authenticated": False, "bypassed": True, "allowed": True, "via": "lan"}
+
+    # 3. Session cookie (password login; the localhost break-glass path when SSO is on).
     token = request.cookies.get(COOKIE_NAME, "")
     user = verify_token(token, cfg["session_secret"]) if token else None
     ok = user is not None and user == cfg["username"]
-    return {"authenticated": ok, "bypassed": False, "allowed": ok}
+    return {"authenticated": ok, "bypassed": False, "allowed": ok, "via": "session" if ok else None}
 
 
 # --- Brute-force damper ---

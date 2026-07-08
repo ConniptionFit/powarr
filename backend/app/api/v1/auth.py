@@ -18,14 +18,21 @@ def _can_manage(request: Request, cfg: dict) -> bool:
 def status(request: Request, db: Session = Depends(get_db)):
     cfg = auth_svc.load_config(db)
     state = auth_svc.evaluate_request(request, cfg)
+    manage = _can_manage(request, cfg)
     return {
         "enabled": cfg["enabled"],
         "totp_enabled": cfg["totp_enabled"],
         "authenticated": state["authenticated"],
         "bypassed": state["bypassed"],
+        "via": state.get("via"),
         "lan_bypass": cfg["lan_bypass"],
         "lan_cidrs": cfg["lan_cidrs"],
-        "username": cfg["username"] if _can_manage(request, cfg) else None,
+        "sso_enabled": cfg.get("sso_enabled", False),
+        "sso_allow_lan_without_sso": cfg.get("sso_allow_lan_without_sso", False),
+        # Trusted-proxy list + header name are config — exposed only to a manager.
+        "sso_trusted_proxies": cfg.get("sso_trusted_proxies", []) if manage else None,
+        "sso_username_header": cfg.get("sso_username_header", "") if manage else None,
+        "username": cfg["username"] if manage else None,
     }
 
 
@@ -34,7 +41,7 @@ def login(request: Request, response: Response, body: dict = Body(...), db: Sess
     cfg = auth_svc.load_config(db)
     if not cfg["enabled"]:
         raise HTTPException(status_code=400, detail="Authentication is not enabled")
-    ip = auth_svc.client_ip(request)
+    ip = auth_svc.client_ip(request, cfg)
     if auth_svc.login_locked(ip):
         raise HTTPException(status_code=429, detail="Too many failed attempts — try again in a minute")
 
@@ -160,3 +167,38 @@ def update_config(request: Request, body: dict = Body(...), db: Session = Depend
         cfg["lan_cidrs"] = [c.strip() for c in body["lan_cidrs"] if c.strip()]
     auth_svc.save_config(db, cfg)
     return {"ok": True, "lan_bypass": cfg["lan_bypass"], "lan_cidrs": cfg["lan_cidrs"]}
+
+
+@router.put("/sso")
+def update_sso(request: Request, body: dict = Body(...), db: Session = Depends(get_db)):
+    """Authentik/forward-auth SSO config: enable, trusted proxy IP/CIDRs, the
+    identity header name, and the 'allow LAN without SSO' toggle."""
+    cfg = auth_svc.load_config(db)
+    if not _can_manage(request, cfg):
+        raise HTTPException(status_code=401, detail="Not authorized")
+
+    enabling = bool(body.get("sso_enabled", cfg.get("sso_enabled")))
+    allow_lan = bool(body.get("sso_allow_lan_without_sso", cfg.get("sso_allow_lan_without_sso")))
+    # Lock-out guard: with SSO on, a direct/localhost request has no way in unless
+    # either password login is set (break-glass on localhost) or LAN-without-SSO is
+    # allowed. Refuse a config that would strand the operator.
+    if enabling and not cfg["enabled"] and not allow_lan:
+        raise HTTPException(
+            status_code=400,
+            detail="Enabling SSO without a password login or 'Allow LAN without SSO' "
+                   "would lock you out on localhost — set a password first (Security) "
+                   "or enable LAN-without-SSO.")
+
+    if "sso_enabled" in body:
+        cfg["sso_enabled"] = enabling
+    if "sso_allow_lan_without_sso" in body:
+        cfg["sso_allow_lan_without_sso"] = allow_lan
+    if "sso_trusted_proxies" in body and isinstance(body["sso_trusted_proxies"], list):
+        cfg["sso_trusted_proxies"] = [c.strip() for c in body["sso_trusted_proxies"] if c.strip()]
+    if body.get("sso_username_header"):
+        cfg["sso_username_header"] = str(body["sso_username_header"]).strip()
+    auth_svc.save_config(db, cfg)
+    return {"ok": True, "sso_enabled": cfg["sso_enabled"],
+            "sso_allow_lan_without_sso": cfg["sso_allow_lan_without_sso"],
+            "sso_trusted_proxies": cfg["sso_trusted_proxies"],
+            "sso_username_header": cfg["sso_username_header"]}
