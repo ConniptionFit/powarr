@@ -28,6 +28,35 @@ def _set_setting(db, key: str, value: str) -> None:
     row.value = value
 
 
+def upsert_media_items(db, items: list[dict], weights: ScoringWeights,
+                       progress=None) -> int:
+    """Upsert Plex items by plex_rating_key + rescore. Loads every existing row's
+    key in ONE query into a dict instead of a SELECT per item — on a large library
+    that turns tens of thousands of round trips into one. progress(n) is called
+    (if given) every 50 items and at the end for the task-tracker countdown."""
+    existing_by_key = {m.plex_rating_key: m for m in db.query(MediaItem).all()}
+    total = len(items)
+    upserted = 0
+    for item_data in items:
+        key = item_data["plex_rating_key"]
+        existing = existing_by_key.get(key)
+        if existing:
+            for k, v in item_data.items():
+                setattr(existing, k, v)
+            existing.score = score_item(item_data, weights)
+        else:
+            data = dict(item_data)
+            data["score"] = score_item(item_data, weights)
+            new_item = MediaItem(**data)
+            db.add(new_item)
+            # Guard against the same rating key appearing twice in one payload.
+            existing_by_key[key] = new_item
+        upserted += 1
+        if progress and (upserted % 50 == 0 or upserted == total):
+            progress(upserted)
+    return upserted
+
+
 async def run_plex_sync(db) -> dict:
     """Full library sync from Plex; upserts + rescores. Raises on Plex being unconfigured."""
     row = db.query(Integration).filter_by(name="plex").first()
@@ -43,19 +72,9 @@ async def run_plex_sync(db) -> dict:
 
         items = await plex.fetch_media_items()
         tasks.update_task(task_id, total=len(items))
-        upserted = 0
-        for item_data in items:
-            existing = db.query(MediaItem).filter_by(plex_rating_key=item_data["plex_rating_key"]).first()
-            if existing:
-                for k, v in item_data.items():
-                    setattr(existing, k, v)
-                existing.score = score_item(item_data, weights)
-            else:
-                item_data["score"] = score_item(item_data, weights)
-                db.add(MediaItem(**item_data))
-            upserted += 1
-            if upserted % 50 == 0 or upserted == len(items):
-                tasks.update_task(task_id, current=upserted)
+        upserted = upsert_media_items(
+            db, items, weights,
+            progress=lambda n: tasks.update_task(task_id, current=n))
 
         _set_setting(db, "last_synced", datetime.utcnow().isoformat())
         db.commit()
