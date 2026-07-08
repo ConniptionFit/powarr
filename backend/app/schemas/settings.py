@@ -97,9 +97,11 @@ class NotificationSettings(BaseModel):
 class IntegrationConfig(BaseModel):
     name: str
     url: Optional[str] = None
-    api_key: Optional[str] = None
-    username: Optional[str] = None  # user/pass download clients (qbittorrent)
-    password: Optional[str] = None
+    api_key: Optional[str] = None  # masked on read (SECRET_MASK) — never the stored secret
+    api_key_set: bool = False      # a secret is stored (drives the "leave blank to keep" UI)
+    username: Optional[str] = None  # not a secret — returned as stored (qbittorrent WebUI user)
+    password: Optional[str] = None  # masked on read — never the stored secret
+    password_set: bool = False
     enabled: bool = False
     remove_from_monitored_on_delete: bool = True
     delete_from_arr_list: bool = False

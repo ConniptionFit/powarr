@@ -363,9 +363,11 @@ export const ollamaApi = {
 export interface IntegrationConfig {
   name: string;
   url: string | null;
-  api_key: string | null;
-  username: string | null; // user/pass download clients (qBittorrent)
-  password: string | null;
+  api_key: string | null;   // masked on read — never the stored secret
+  api_key_set: boolean;     // a secret is stored (drives the "leave blank to keep" placeholder)
+  username: string | null;  // user/pass download clients (qBittorrent) — not a secret
+  password: string | null;  // masked on read — never the stored secret
+  password_set: boolean;
   enabled: boolean;
   remove_from_monitored_on_delete: boolean;
   delete_from_arr_list: boolean;

@@ -89,22 +89,41 @@ async def sync_seerr(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"protected": protected}
 
 
+# Upstream API keys / download-client passwords are write-only over the API: a
+# read masks them (SECRET_MASK) and reports only whether a secret is stored. They
+# never leave the backend in cleartext, and the mask can't be written back (see
+# _is_new_secret) so editing a URL can't wipe or round-trip a key.
+SECRET_MASK = "sec_************"
+
+
+def _is_new_secret(value: str | None) -> bool:
+    """A secret field on update is applied only when it carries a real new value.
+    A blank field or the display mask means 'leave the stored secret unchanged'."""
+    return bool(value) and value != SECRET_MASK
+
+
+def _public_config(row: Integration, extra: dict) -> IntegrationConfig:
+    """Client-safe view of an integration row — secrets masked, never echoed."""
+    return IntegrationConfig(
+        name=row.name,
+        url=row.url,
+        api_key=SECRET_MASK if row.api_key else None,
+        api_key_set=bool(row.api_key),
+        username=row.username,  # username is not a secret
+        password=SECRET_MASK if row.password else None,
+        password_set=bool(row.password),
+        enabled=row.enabled,
+        remove_from_monitored_on_delete=extra.get("remove_from_monitored_on_delete", True),
+        delete_from_arr_list=extra.get("delete_from_arr_list", False),
+    )
+
+
 @router.get("", response_model=list[IntegrationConfig])
 def list_integrations(db: Session = Depends(get_db)):
-    rows = db.query(Integration).all()
     result = []
-    for row in rows:
+    for row in db.query(Integration).all():
         extra = json.loads(row.extra_config) if row.extra_config else {}
-        result.append(IntegrationConfig(
-            name=row.name,
-            url=row.url,
-            api_key=row.api_key,
-            username=row.username,
-            password=row.password,
-            enabled=row.enabled,
-            remove_from_monitored_on_delete=extra.get("remove_from_monitored_on_delete", True),
-            delete_from_arr_list=extra.get("delete_from_arr_list", False),
-        ))
+        result.append(_public_config(row, extra))
     return result
 
 
@@ -118,11 +137,11 @@ def update_integration(name: str, body: IntegrationConfigUpdate, db: Session = D
 
     if body.url is not None:
         row.url = body.url
-    if body.api_key is not None:
+    if _is_new_secret(body.api_key):
         row.api_key = body.api_key
     if body.username is not None:
         row.username = body.username
-    if body.password is not None:
+    if _is_new_secret(body.password):
         row.password = body.password
     if body.enabled is not None:
         row.enabled = body.enabled
@@ -136,12 +155,7 @@ def update_integration(name: str, body: IntegrationConfigUpdate, db: Session = D
 
     db.commit()
     db.refresh(row)
-    return IntegrationConfig(
-        name=row.name, url=row.url, api_key=row.api_key,
-        username=row.username, password=row.password, enabled=row.enabled,
-        remove_from_monitored_on_delete=extra.get("remove_from_monitored_on_delete", True),
-        delete_from_arr_list=extra.get("delete_from_arr_list", False),
-    )
+    return _public_config(row, extra)
 
 
 @router.post("/{name}/test")

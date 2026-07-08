@@ -20,9 +20,11 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
   const meta = INTEGRATION_META[cfg.name] ?? { label: cfg.name, color: "bg-slate-600", description: "" };
 
   const [url, setUrl] = useState(cfg.url ?? "");
-  const [apiKey, setApiKey] = useState(cfg.api_key ?? "");
+  // Secret fields start blank — the stored key/password is never sent to the
+  // browser (masked server-side). Blank on save = leave the stored secret as-is.
+  const [apiKey, setApiKey] = useState("");
   const [username, setUsername] = useState(cfg.username ?? "");
-  const [password, setPassword] = useState(cfg.password ?? "");
+  const [password, setPassword] = useState("");
   const [enabled, setEnabled] = useState(cfg.enabled);
   const [removeMonitored, setRemoveMonitored] = useState(cfg.remove_from_monitored_on_delete);
   const [deleteFromList, setDeleteFromList] = useState(cfg.delete_from_arr_list);
@@ -32,14 +34,22 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
   const isQbit = cfg.name === "qbittorrent";
 
   const saveMut = useMutation({
+    // Only send a secret when the user actually typed one — an empty field means
+    // "keep the stored secret", so a URL-only edit never touches the key/password.
     mutationFn: () =>
       integrationsApi.update(cfg.name, {
         url, enabled,
-        ...(isQbit ? { username, password } : { api_key: apiKey }),
+        ...(isQbit
+          ? { username, ...(password ? { password } : {}) }
+          : (apiKey ? { api_key: apiKey } : {})),
         remove_from_monitored_on_delete: removeMonitored,
         delete_from_arr_list: deleteFromList,
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["integrations"] }),
+    onSuccess: () => {
+      setApiKey("");
+      setPassword("");
+      qc.invalidateQueries({ queryKey: ["integrations"] });
+    },
   });
 
   const handleTest = async () => {
@@ -120,7 +130,7 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
               <label className="text-xs text-slate-400 mb-1 block">Password</label>
               <input
                 type="password"
-                placeholder="••••••••••••••••"
+                placeholder={cfg.password_set ? "•••• saved — leave blank to keep" : "WebUI password"}
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
@@ -132,7 +142,7 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
             <label className="text-xs text-slate-400 mb-1 block">API Key</label>
             <input
               type="password"
-              placeholder="••••••••••••••••"
+              placeholder={cfg.api_key_set ? "•••• saved — leave blank to keep" : "API key"}
               value={apiKey}
               onChange={e => setApiKey(e.target.value)}
               className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
