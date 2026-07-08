@@ -635,6 +635,29 @@ def orphan_fs_state(output_path: str | None) -> str:
         return "error"
 
 
+async def orphan_fs_state_async(output_path: str | None, timeout: float = 5.0) -> str:
+    """orphan_fs_state run off the event loop with a bounded wall-time.
+
+    A hung SMB/NFS mount can make os.stat block indefinitely — filesystem calls
+    ignore httpx-style timeouts — which would freeze the poller AND every other
+    async request sharing this event loop. Running the stat in a worker thread
+    keeps the loop responsive; asyncio.wait bounds how long we wait for it (a stuck
+    kernel stat can't actually be cancelled, so on timeout we abandon the thread to
+    finish on its own and treat the row as un-stat-able — "error", skip the decision
+    this cycle, never "gone")."""
+    if not output_path:
+        return "unknown"
+    task = asyncio.ensure_future(asyncio.to_thread(orphan_fs_state, output_path))
+    done, _pending = await asyncio.wait({task}, timeout=timeout)
+    if task not in done:
+        task.cancel()  # best-effort; a running stat thread ignores it and exits later
+        return "error"
+    try:
+        return task.result()
+    except Exception:
+        return "error"
+
+
 def decide_orphan_status(fs_state: str, auto_purge: bool) -> str | None:
     """Second gate after decide_orphans (pure, unit-tested): fold in the
     filesystem check and the auto-purge toggle. None = leave the row alone."""
@@ -715,7 +738,7 @@ async def _check_orphans(db, cfg: ImportMatchingSettings, summary: dict) -> None
     for row in rows:
         if row.download_id.lower() not in orphaned:
             continue
-        fs = orphan_fs_state(_row_output_path(row))
+        fs = await orphan_fs_state_async(_row_output_path(row))
         new_status = decide_orphan_status(fs, cfg.orphan_auto_purge)
         if new_status is None:
             if fs == "present":
@@ -1079,7 +1102,8 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
         llm_assist.release_slot()
         if _llm_queue:
             next_ids = _llm_queue.pop(0)
-            asyncio.get_event_loop().create_task(llm_rescore(next_ids))
+            from app.services import tasks
+            tasks.spawn_background(llm_rescore(next_ids))
 
 
 async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) -> dict:

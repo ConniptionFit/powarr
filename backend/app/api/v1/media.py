@@ -168,9 +168,8 @@ async def media_llm_run(payload: dict = Body(default={}), db: Session = Depends(
     """On-demand LLM deletion rationales. {"ids": [...]} for specific items; omit
     to process candidates lacking a current cached rationale. Runs in the
     background — an SSE "media_llm_run" event fires when it finishes."""
-    import asyncio
     from app.schemas.settings import OllamaSettings
-    from app.services import llm_assist, media_llm
+    from app.services import llm_assist, media_llm, tasks
     ids = payload.get("ids") or None
     if llm_assist.slot_active():
         raise HTTPException(status_code=409, detail="An LLM run is already in progress")
@@ -178,7 +177,7 @@ async def media_llm_run(payload: dict = Body(default={}), db: Session = Depends(
     if not ollama.enabled:
         raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
     count = len(media_llm.eligible_candidates(db, ollama, ids))
-    asyncio.get_event_loop().create_task(media_llm.llm_media_run(ids))
+    tasks.spawn_background(media_llm.llm_media_run(ids))
     return {"started": count, "total_eligible": count,
             "message": f"LLM run started on {count} candidate(s) — results stream in live"}
 

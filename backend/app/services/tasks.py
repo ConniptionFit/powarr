@@ -8,6 +8,7 @@ Progress fans out over the existing /imports/events SSE bus
 established that convention for a different domain's events, so this is the
 third, not the first, non-imports consumer of that "endpoint" (the name is
 historical; it's the app's general event bus)."""
+import asyncio
 import time
 import uuid
 from typing import Optional
@@ -17,6 +18,21 @@ from pydantic import BaseModel
 from app.services.import_matcher import publish
 
 _GC_AGE_SECONDS = 60  # finished tasks older than this are purged on the next create_task
+
+# Strong references to fire-and-forget background coroutines. asyncio only keeps a
+# weak reference to a bare create_task() result, so without this the loop can GC
+# and silently cancel an in-flight LLM/scan run mid-way.
+_background: set["asyncio.Task"] = set()
+
+
+def spawn_background(coro) -> "asyncio.Task":
+    """Schedule a fire-and-forget coroutine on the running loop, retaining a strong
+    reference until it finishes. Use this instead of
+    asyncio.get_event_loop().create_task (deprecated in 3.12 and GC-unsafe)."""
+    task = asyncio.create_task(coro)
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+    return task
 
 
 class TaskProgress(BaseModel):

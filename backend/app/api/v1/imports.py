@@ -84,6 +84,7 @@ async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db
     one releases the slot (SSE "llm_queued" / "llm_run_started" mark the
     transition)."""
     from app.models.app_setting import AppSetting
+    from app.services import tasks
     from app.services.import_matcher import llm_rescore, llm_run_active, queue_llm_run
     ids = payload.get("ids") or None
     cfg = db.query(AppSetting).filter_by(key="ollama").first()
@@ -101,7 +102,7 @@ async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db
         return {"started": 0, "total_eligible": count, "queued": True, "queue_position": position,
                 "message": f"An LLM run is already in progress — queued (position {position}), "
                            "will start automatically when it finishes"}
-    asyncio.get_event_loop().create_task(llm_rescore(ids))
+    tasks.spawn_background(llm_rescore(ids))
     return {"started": min(count, 50), "total_eligible": count, "queued": False,
             "message": f"LLM run started on {min(count, 50)} item(s) — results stream in live"}
 
