@@ -97,6 +97,7 @@ Then open `http://<host>:7979`:
 | Download clients | qBittorrent (v0.6.0): dedicated **Username/Password** fields (WebUI credentials; SID session cookie handled automatically, works on qBittorrent 4.x and 5.x). Transmission: API key field takes `username:password` |
 | Auto-resolve | Off by default — writes to live *arr apps; enable in Settings → Failed Import Matching once you trust the match quality |
 | Auth | Off by default; enable in Settings → Security. LAN CIDRs bypass login; TOTP works with any authenticator app |
+| Integration secrets | API keys and download-client passwords are **write-only** (v0.23.0): the API never returns a stored secret, so the Integrations form shows a "saved — leave blank to keep" placeholder. Leave a secret field blank to keep the current value; type a new one only to change it |
 | API | Everything at `/api/v1/*`, interactive docs at `/api/docs` |
 
 ## Development
