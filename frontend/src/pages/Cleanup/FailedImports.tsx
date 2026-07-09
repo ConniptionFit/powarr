@@ -7,6 +7,7 @@ import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../l
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
 import { PlatformBadge, PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
+import { SkeletonTable } from "../../components/Skeleton";
 
 /** True when the click landed on (or inside) an interactive control — row-click
  *  select must ignore these so buttons/checkboxes/links keep their own behavior. */
@@ -996,7 +997,7 @@ export default function FailedImports() {
       )}
 
       {isLoading ? (
-        <p className="text-slate-400">Loading…</p>
+        <SkeletonTable rows={8} cols={9} />
       ) : sortedItems.length === 0 ? (
         <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-10 text-center">
           <p className="text-slate-400">

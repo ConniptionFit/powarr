@@ -7,6 +7,7 @@ import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../l
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
 import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
+import { SkeletonTable } from "../../components/Skeleton";
 
 function ScoreBadge({ score }: { score: number }) {
   const color =
@@ -447,7 +448,7 @@ export default function DeletionSuggestions() {
       )}
 
       {isLoading ? (
-        <p className="text-slate-400">Loading…</p>
+        <SkeletonTable rows={8} cols={6} />
       ) : (isShowMode ? showGroups : displayItems).length === 0 ? (
         <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-10 text-center">
           <p className="text-slate-400">No candidates found. Try lowering the minimum score or sync Plex first.</p>

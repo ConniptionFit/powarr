@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity, AlertTriangle } from "lucide-react";
 import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes, type DepHealth } from "../../lib/api";
+import { SkeletonGrid } from "../../components/Skeleton";
 
 function Sparkline({ values, color = "#a78bfa" }: { values: number[]; color?: string }) {
   const w = 160, h = 36, pad = 2;
@@ -206,7 +207,7 @@ export default function Dashboard() {
       )}
 
       {isLoading ? (
-        <p className="text-slate-400">Loading...</p>
+        <SkeletonGrid cols={4} rows={3} />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <StatCard

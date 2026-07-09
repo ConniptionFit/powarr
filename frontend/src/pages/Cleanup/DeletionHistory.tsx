@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Download } from "lucide-react";
 import { mediaApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
+import { SkeletonTable } from "../../components/Skeleton";
 
 const ACTION_LABELS: Record<string, string> = {
   none: "No *arr action",
@@ -91,7 +92,7 @@ export default function DeletionHistory() {
       )}
 
       {isLoading ? (
-        <p className="text-slate-400">Loading…</p>
+        <SkeletonTable rows={8} cols={5} />
       ) : log.length === 0 ? (
         <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-10 text-center">
           <p className="text-slate-400">No deletions recorded yet.</p>
