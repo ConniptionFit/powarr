@@ -10,7 +10,7 @@ You are an LLM IDE agent responsible for reviewing, maintaining, and extending *
 
 | Field | Value |
 |---|---|
-| Version | v0.28.1 (2026-07-09) — gone-at-accept → orphaned; import_batch spinner |
+| Version | v0.28.1 (`022601e`, 2026-07-09) — deployed + verified; gone-at-accept → orphaned; import_batch spinner |
 | Container | `powarr`, port `7979`, Docker host `10.1.1.2` (`ssh docker`, key auth) |
 | Source of truth | Host repo `/mnt/ServerFiles/Docker/composeFiles/powarr` (= build context) |
 | Local working clone | `~/Projects/powarr` on the Mac — **edit here**. Confirmed 2026-07-08: this is the current FastAPI/React app (`backend/`, `frontend/`, `CLAUDE.md`); `origin` = host repo, `github` = public mirror. The legacy Node.js iteration was archived to `~/Projects/powarr-legacy-node` (reference only, not deployed). |
