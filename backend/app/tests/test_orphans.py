@@ -92,12 +92,16 @@ class TestLooksLikeMissingFiles(unittest.TestCase):
             "Server error '500 Internal Server Error' for url '...manualimport...' "
             "Object reference not set to an instance of an object."))
         self.assertTrue(looks_like_missing_files(
+            "Server error '500 Internal Server Error' for url "
+            "'http://x/manualimport?downloadId=ABC&filterExistingFiles=true'"))
+        self.assertTrue(looks_like_missing_files(
             "No files found are eligible for import in /downloads/x; qBittorrent is reporting missing files"))
 
     def test_unrelated(self):
         self.assertFalse(looks_like_missing_files(None))
         self.assertFalse(looks_like_missing_files(""))
         self.assertFalse(looks_like_missing_files("Manual import command queued for 3 file(s)"))
+        # Generic 500 without manualimport context is not assumed to mean gone files
         self.assertFalse(looks_like_missing_files("Import push failed: HTTP 500"))
 
 

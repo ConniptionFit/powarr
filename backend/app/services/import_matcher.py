@@ -730,8 +730,10 @@ def looks_like_missing_files(message: str | None) -> bool:
     m = message.lower()
     if "no importable files" in m or "download files are gone" in m:
         return True
-    # Legacy raw httpx strings from before reason=no_files classification
-    if "500" in m and ("nullreference" in m or "object reference not set" in m):
+    # Legacy raw httpx strings from before reason=no_files classification.
+    # httpx often truncates the Servarr body, leaving only "500 … manualimport?downloadId=".
+    if "500" in m and ("nullreference" in m or "object reference not set" in m
+                       or "manualimport" in m):
         return True
     if "qbit" in m and "missing files" in m:
         return True
