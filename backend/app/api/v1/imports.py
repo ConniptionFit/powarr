@@ -22,6 +22,22 @@ STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "closed_extern
 NEEDS_ATTENTION_STATUSES = ("suggested", "resolve_failed", "orphan_pending")
 # Terminal statuses that can be reopened when the download is still queued
 REOPENABLE_STATUSES = ("accepted", "rejected", "orphaned", "closed_external", "auto_resolved")
+# Still queued "out of scope" leftovers — exclude closed_external (historical noise
+# from pack siblings sharing a downloadId) and Needs attention (already listed).
+STILL_QUEUED_STATUSES = ("accepted", "rejected", "orphaned", "auto_resolved")
+
+
+def _dedupe_still_queued(rows: list) -> list:
+    """One row per download_id (or queue_item_id), newest first — pack siblings share ids."""
+    seen: set[str] = set()
+    out = []
+    for row in rows:
+        key = f"d:{row.download_id}" if row.download_id else f"q:{row.queue_item_id}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
 
 
 @router.get("/notify-action")
@@ -64,16 +80,22 @@ def list_imports(
     if status == "needs_attention":
         q = q.filter(FailedImport.status.in_(NEEDS_ATTENTION_STATUSES))
     elif status == "still_in_queue":
-        # Out-of-scope leftovers: still stuck in *arr but already Accepted/Rejected/etc.
-        q = q.filter(
-            FailedImport.still_in_queue.is_(True),
-            ~FailedImport.status.in_(NEEDS_ATTENTION_STATUSES),
+        # Out-of-scope leftovers: stuck in *arr after Accept/Reject/orphan/auto-resolve.
+        rows = (
+            db.query(FailedImport)
+            .filter(
+                FailedImport.still_in_queue.is_(True),
+                FailedImport.status.in_(STILL_QUEUED_STATUSES),
+            )
+            .order_by(FailedImport.created_at.desc())
+            .limit(5000)
+            .all()
         )
+        deduped = _dedupe_still_queued(rows)
+        return deduped[offset:offset + max(limit, 1000)]
     elif status:
         q = q.filter(FailedImport.status == status)
-    # Still-queued view can exceed the default 200 (many accepted/rejected leftovers)
-    eff_limit = max(limit, 1000) if status == "still_in_queue" else limit
-    return q.order_by(FailedImport.created_at.desc()).offset(offset).limit(eff_limit).all()
+    return q.order_by(FailedImport.created_at.desc()).offset(offset).limit(limit).all()
 
 
 @router.get("/stats", response_model=ImportStats)
@@ -91,10 +113,17 @@ def import_stats(db: Session = Depends(get_db)):
     ).count()
     cfg = load_import_matching(db)
     auto_eligible_count = auto_eligible_query(db, cfg).count() if cfg.auto_resolve_enabled else 0
-    still_in_queue = db.query(FailedImport).filter(
-        FailedImport.still_in_queue.is_(True),
-        ~FailedImport.status.in_(NEEDS_ATTENTION_STATUSES),
-    ).count()
+    still_rows = (
+        db.query(FailedImport)
+        .filter(
+            FailedImport.still_in_queue.is_(True),
+            FailedImport.status.in_(STILL_QUEUED_STATUSES),
+        )
+        .order_by(FailedImport.created_at.desc())
+        .limit(5000)
+        .all()
+    )
+    still_in_queue = len(_dedupe_still_queued(still_rows))
     needs_attention = sum(counts[s] for s in NEEDS_ATTENTION_STATUSES)
     return ImportStats(
         **counts, by_service=by_service, auto_resolved_7d=auto_7d,

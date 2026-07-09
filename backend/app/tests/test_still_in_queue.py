@@ -88,5 +88,14 @@ class TestReopen(unittest.TestCase):
         self.assertEqual(out.get("message"), "Already in triage")
 
 
+class TestDedupeStillQueued(unittest.TestCase):
+    def test_one_row_per_download_id(self):
+        a = _Row(id=1, download_id="same", status="accepted")
+        b = _Row(id=2, download_id="same", status="orphaned")
+        c = _Row(id=3, download_id="other", status="rejected")
+        out = imports_api._dedupe_still_queued([a, b, c])
+        self.assertEqual([r.id for r in out], [1, 3])
+
+
 if __name__ == "__main__":
     unittest.main()
