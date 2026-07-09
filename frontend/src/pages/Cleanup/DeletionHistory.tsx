@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, Download } from "lucide-react";
 import { mediaApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
 
 const ACTION_LABELS: Record<string, string> = {
@@ -36,15 +36,24 @@ export default function DeletionHistory() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
         <p className="text-slate-400 text-sm">What was deleted, when, and how much space it freed</p>
-        {stats && (
-          <p className="text-slate-400 text-sm">
-            Last 30 days: <span className="text-white font-medium">{stats.deleted_30d} items, {fmtBytes(stats.freed_30d_bytes)}</span>
-            <span className="text-slate-600 mx-2">|</span>
-            All time: <span className="text-white font-medium">{stats.deleted_total} items, {fmtBytes(stats.freed_total_bytes)}</span>
-          </p>
-        )}
+        <div className="flex items-center gap-3">
+          {stats && (
+            <p className="text-slate-400 text-sm">
+              Last 30 days: <span className="text-white font-medium">{stats.deleted_30d} items, {fmtBytes(stats.freed_30d_bytes)}</span>
+              <span className="text-slate-600 mx-2">|</span>
+              All time: <span className="text-white font-medium">{stats.deleted_total} items, {fmtBytes(stats.freed_total_bytes)}</span>
+            </p>
+          )}
+          <button
+            onClick={() => mediaApi.exportDeletionLogCsv()}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+          >
+            <Download size={15} />
+            CSV
+          </button>
+        </div>
       </div>
 
       {pending.length > 0 && (

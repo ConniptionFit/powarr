@@ -33,7 +33,14 @@ _JUNK_RE = re.compile(
     r"\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|web[- ]?dl|webrip|bluray|blu-ray|"
     r"remux|hdtv|dvdrip|proper|repack|amzn|dsnp|nf|atvp|hulu|flac|mp3|320|v0|aac|dts|"
     r"truehd|atmos|dv|hdr(10)?|10bit|8bit|multi|vostfr|internal)\b", re.IGNORECASE)
-_DOWNGRADE_RE = re.compile(r"not an upgrade", re.IGNORECASE)
+# Servarr "already have equal-or-better" rejection family (Sonarr episode /
+# Radarr movie / Lidarr album|track). Also Lidarr's "Album already imported"
+# which fires when the album is already in the library at equal-or-better quality.
+_DOWNGRADE_RE = re.compile(
+    r"not an upgrade|album already imported|movie already imported|"
+    r"episode file already imported|already exists on disk",
+    re.IGNORECASE,
+)
 
 # --- SSE fan-out: scan cycles publish events, /imports/events subscribers consume them ---
 _subscribers: set[asyncio.Queue] = set()
@@ -169,19 +176,49 @@ def find_suspicious_files(candidates: list[dict], extensions: list[str]) -> list
 
 
 def is_quality_downgrade(candidates: list[dict]) -> bool:
-    """Pure: True when EVERY file in a manual-import candidate list rejects purely
-    because it's not an upgrade over an existing library file (Sonarr's own
-    "Not an upgrade for existing episode file(s)" rejection family) — a release
-    that will never successfully import as-is, safe to flag/auto-reject rather
-    than clutter triage. A partial result (some files ok, some downgrades)
-    returns False — only a clean all-files-downgrade release counts, since a
-    mixed download may still be worth accepting for its non-downgrade files."""
+    """Pure: True when EVERY file in a manual-import candidate list rejects
+    because the *arr app already has equal-or-better quality in the library.
+
+    Covers Sonarr (\"Not an upgrade for existing episode file(s)\"), Radarr
+    (movie equivalent), and Lidarr (\"Not an upgrade for existing album/track
+    file(s)\" / \"Album already imported …\"). A release that will never
+    successfully import as-is — safe to flag/auto-reject rather than clutter
+    triage. A partial result (some files ok, some already-covered) returns
+    False — only a clean all-files-covered release counts, since a mixed
+    download may still be worth accepting for its new files."""
     if not candidates:
         return False
     for f in candidates:
         reasons = [r.get("reason", "") for r in (f.get("rejections") or [])]
         if not any(_DOWNGRADE_RE.search(r) for r in reasons):
             return False
+    return True
+
+
+def queue_looks_like_quality_covered(message: str | None) -> bool:
+    """True when the *arr queue statusMessages already establish that every
+    track/episode is blocked as equal-or-better / already imported.
+
+    Used as a Lidarr fallback when manualimport returns empty (filter/gone)
+    or only unrelated rejections, but the queue itself says
+    \"Not an upgrade for existing album file(s)\" / \"Album already imported\".
+    Requires at least one upgrade/already-imported phrase and no signal that
+    the failure is a match/parse problem instead."""
+    if not message:
+        return False
+    m = message.lower()
+    if not _DOWNGRADE_RE.search(m):
+        return False
+    # Don't treat match failures as quality-covered just because a sibling
+    # phrase appears somewhere in a long multi-file message blob.
+    blockers = (
+        "couldn't find similar album",
+        "unable to parse",
+        "found multiple artists",
+        "no files found are eligible",
+    )
+    if any(b in m for b in blockers):
+        return False
     return True
 
 
@@ -634,7 +671,8 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             api_style=ollama.api_style, template=ollama.match_prompt,
             verbosity=ollama.verbosity, model_size=ollama.model_size,
             keep_alive_minutes=ollama.keep_alive_minutes,
-            reply_format=ollama.reply_format, confidence_style=ollama.confidence_style)
+            reply_format=ollama.reply_format, confidence_style=ollama.confidence_style,
+            **llm_assist.inference_kwargs(ollama))
         if llm:
             llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
             llm_rationale = llm["rationale"]
@@ -1102,12 +1140,14 @@ async def _scan_once_inner(task_id: str) -> dict:
                     message=q_messages[:500] or None,
                 )
 
-                # Quality-downgrade + suspicious-file checks (v0.17.0/v0.19.0) — one
-                # manual-import call per NEW row, shared by both checks, bounded the
-                # same way as pack coverage/corroboration (never on an existing row's
-                # re-poll). Suspicious-file detection runs for every app (a malicious
-                # file can hide in any download); quality-downgrade is Sonarr-only
-                # (relies on Sonarr's episode-specific "not an upgrade" rejections).
+                # Quality-covered + suspicious-file checks (v0.17.0/v0.19.0/v0.29.0) —
+                # one manual-import call per NEW row, shared by both checks, bounded
+                # the same way as pack coverage/corroboration (never on an existing
+                # row's re-poll). Suspicious-file detection runs for every app; equal-
+                # or-better library coverage (quality_downgrade flag) runs for every
+                # *arr app via manualimport rejections, with a Lidarr/queue-message
+                # fallback when the *arr already said "not an upgrade" / "album
+                # already imported" on the queue record itself.
                 mi_candidates: list[dict] = []
                 if download_id:
                     try:
@@ -1119,8 +1159,9 @@ async def _scan_once_inner(task_id: str) -> dict:
                 if mi_candidates:
                     suspicious = find_suspicious_files(mi_candidates, cfg.suspicious_extensions)
                     item.suspicious_files = json.dumps(suspicious) if suspicious else None
-                    if app_name == "sonarr":
-                        item.quality_downgrade = is_quality_downgrade(mi_candidates)
+                    item.quality_downgrade = is_quality_downgrade(mi_candidates)
+                if not item.quality_downgrade and queue_looks_like_quality_covered(q_messages):
+                    item.quality_downgrade = True
 
                 if item.suspicious_files and cfg.suspicious_extension_auto_reject:
                     matched = json.loads(item.suspicious_files)
@@ -1141,11 +1182,11 @@ async def _scan_once_inner(task_id: str) -> dict:
                     item.status = "rejected"
                     item.resolved_at = datetime.utcnow()
                     item.message = ((item.message + " | ") if item.message else "") + \
-                        "Auto-rejected: every file is a quality downgrade of an existing library file"
+                        "Auto-rejected: library already has equal or better quality for every file"
                     summary["quality_downgrade_auto_rejected"] += 1
                     if queue_item_id and queue_item_id.isdigit():
                         if await client.remove_from_queue(int(queue_item_id)):
-                            logger.info(f"Quality downgrade: removed '{item.raw_title}' from {app_name}'s queue")
+                            logger.info(f"Quality covered: removed '{item.raw_title}' from {app_name}'s queue")
                 elif (cfg.auto_resolve_enabled and match["matched_id"]
                         and match["confidence"] >= cfg.high_confidence_threshold and download_id):
                     result = await client.push_import_command(
@@ -1357,7 +1398,8 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 # safe even on small models.
                 verbosity="verbose", model_size=ollama.model_size,
                 keep_alive_minutes=ollama.keep_alive_minutes,
-                reply_format=ollama.reply_format, confidence_style=ollama.confidence_style)
+                reply_format=ollama.reply_format, confidence_style=ollama.confidence_style,
+                **llm_assist.inference_kwargs(ollama))
             if not llm:
                 skipped += 1
                 tasks.update_task(task_id, current=i, message=f"{scored} scored, {skipped} skipped")

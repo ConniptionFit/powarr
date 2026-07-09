@@ -80,6 +80,72 @@ def import_stats(db: Session = Depends(get_db)):
     )
 
 
+@router.get("/export.csv")
+def export_imports_csv(
+    db: Session = Depends(get_db),
+    status: Optional[str] = Query(None),
+    limit: int = Query(10000),
+):
+    """CSV of failed-import triage rows (Approved Queue #14)."""
+    from app.services.csv_export import streaming_csv, _dt
+    q = db.query(FailedImport)
+    if status:
+        q = q.filter(FailedImport.status == status)
+    items = q.order_by(FailedImport.created_at.desc()).limit(min(limit, 20000)).all()
+    rows = [[
+        i.id, i.source_app, i.raw_title, i.matched_title or "", i.matched_id or "",
+        round(i.confidence or 0, 3) if i.confidence is not None else "",
+        i.status, bool(i.quality_downgrade), i.message or "",
+        _dt(i.created_at), _dt(i.resolved_at),
+    ] for i in items]
+    return streaming_csv(
+        "powarr-failed-imports.csv",
+        ["id", "source_app", "raw_title", "matched_title", "matched_id",
+         "confidence", "status", "quality_covered", "message",
+         "created_at", "resolved_at"],
+        rows,
+    )
+
+
+@router.get("/trends")
+def import_trends(db: Session = Depends(get_db), days: int = Query(30, ge=7, le=90)):
+    """Daily new/resolved failed-import counts for the dashboard sparkline (#18)."""
+    from sqlalchemy import func, cast, Date
+    from app.config import settings as app_settings
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    # Postgres: cast to Date; SQLite: date() via func.date
+    if app_settings.is_sqlite:
+        day_expr_created = func.date(FailedImport.created_at)
+        day_expr_resolved = func.date(FailedImport.resolved_at)
+    else:
+        day_expr_created = cast(FailedImport.created_at, Date)
+        day_expr_resolved = cast(FailedImport.resolved_at, Date)
+
+    new_rows = (db.query(day_expr_created, func.count(FailedImport.id))
+                .filter(FailedImport.created_at >= cutoff)
+                .group_by(day_expr_created).all())
+    resolved_rows = (db.query(day_expr_resolved, func.count(FailedImport.id))
+                     .filter(FailedImport.resolved_at >= cutoff,
+                             FailedImport.status.in_(
+                                 ("auto_resolved", "accepted", "rejected", "orphaned")))
+                     .group_by(day_expr_resolved).all())
+
+    def _key(d):
+        if d is None:
+            return None
+        return d.isoformat() if hasattr(d, "isoformat") else str(d)
+
+    new_map = {_key(d): n for d, n in new_rows if d is not None}
+    res_map = {_key(d): n for d, n in resolved_rows if d is not None}
+    labels, new_vals, res_vals = [], [], []
+    for i in range(days - 1, -1, -1):
+        day = (datetime.utcnow() - timedelta(days=i)).date().isoformat()
+        labels.append(day)
+        new_vals.append(int(new_map.get(day, 0)))
+        res_vals.append(int(res_map.get(day, 0)))
+    return {"days": days, "labels": labels, "new": new_vals, "resolved": res_vals}
+
+
 @router.get("/auto-eligible", response_model=AutoEligibleOut)
 def auto_eligible(db: Session = Depends(get_db)):
     """IDs eligible for the Process N Items button (v0.28.0).
@@ -210,6 +276,7 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
         verbosity=ollama_cfg.verbosity,
         model_size=ollama_cfg.model_size,
         keep_alive_minutes=ollama_cfg.keep_alive_minutes,
+        **llm_assist.inference_kwargs(ollama_cfg),
     )
 
     # Persist results to database

@@ -8,7 +8,10 @@ from datetime import datetime, timedelta
 from app.database import SessionLocal
 from app.models.app_setting import AppSetting
 from app.models.media import MediaItem
-from app.schemas.settings import CleanupSettings, SyncSettings, LlmScheduleSettings, BackupSettings
+from app.schemas.settings import (
+    CleanupSettings, SyncSettings, LlmScheduleSettings, BackupSettings,
+    NotificationSettings,
+)
 
 logger = logging.getLogger("powarr")
 
@@ -127,6 +130,37 @@ async def _scheduled_backup(db) -> None:
     logger.info(f"Scheduled backup: {result['message']}" + (f", pruned {pruned} old backup(s)" if pruned else ""))
 
 
+async def _scheduled_weekly_digest(db) -> None:
+    """One ntfy summary per week when digest_enabled (Approved Queue #15)."""
+    cfg = _get_setting(db, "notifications", NotificationSettings)
+    if not cfg.enabled or not cfg.digest_enabled:
+        return
+    now = datetime.utcnow()
+    if now.weekday() != cfg.digest_weekday % 7 or now.hour != cfg.digest_hour_utc % 24:
+        return
+    row = db.query(AppSetting).filter_by(key="last_digest").first()
+    if row and row.value:
+        try:
+            last = datetime.fromisoformat(row.value)
+            if now - last < timedelta(days=6, hours=12):
+                return  # already sent this week
+        except ValueError:
+            pass
+    from app.services.digest import build_digest_message
+    from app.services import notifier
+    msg = build_digest_message(db)
+    ok = await notifier.notify(db, "Powarr weekly digest", msg, tags="calendar,powarr")
+    if not ok:
+        logger.info("Weekly digest: ntfy push skipped or failed")
+        return
+    if not row:
+        row = AppSetting(key="last_digest")
+        db.add(row)
+    row.value = now.isoformat()
+    db.commit()
+    logger.info("Weekly digest sent")
+
+
 async def maintenance_loop():
     logger.info("Maintenance scheduler started")
     while True:
@@ -137,6 +171,7 @@ async def maintenance_loop():
                 await _scheduled_plex_sync(db)
                 await _scheduled_llm_run(db)
                 await _scheduled_backup(db)
+                await _scheduled_weekly_digest(db)
             finally:
                 db.close()
         except asyncio.CancelledError:

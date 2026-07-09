@@ -1,7 +1,24 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock } from "lucide-react";
+import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity } from "lucide-react";
 import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes } from "../../lib/api";
+
+function Sparkline({ values, color = "#a78bfa" }: { values: number[]; color?: string }) {
+  const w = 160, h = 36, pad = 2;
+  if (!values.length) return null;
+  const max = Math.max(...values, 1);
+  const step = values.length > 1 ? (w - pad * 2) / (values.length - 1) : 0;
+  const pts = values.map((v, i) => {
+    const x = pad + i * step;
+    const y = h - pad - (v / max) * (h - pad * 2);
+    return `${x},${y}`;
+  }).join(" ");
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-9" preserveAspectRatio="none">
+      <polyline fill="none" stroke={color} strokeWidth="1.5" points={pts} />
+    </svg>
+  );
+}
 
 function StatCard({ icon: Icon, label, value, sub, color }: {
   icon: React.ElementType;
@@ -67,6 +84,11 @@ export default function Dashboard() {
   const { data: importStats } = useQuery({
     queryKey: ["import-stats"],
     queryFn: importsApi.stats,
+  });
+
+  const { data: importTrends } = useQuery({
+    queryKey: ["import-trends"],
+    queryFn: () => importsApi.trends(30),
   });
 
   const { data: deletionStats } = useQuery({
@@ -213,6 +235,34 @@ export default function Dashboard() {
             sub="Settings → Sync Interval"
             color="bg-violet-700"
           />
+          {importTrends && (
+            <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-5 sm:col-span-2">
+              <div className="flex items-start gap-4">
+                <div className="p-3 rounded-lg bg-fuchsia-800">
+                  <Activity size={20} className="text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Failed Import Trend (30d)</p>
+                  <div className="flex items-end gap-6">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-violet-300 mb-1">New</p>
+                      <Sparkline values={importTrends.new} color="#a78bfa" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-teal-300 mb-1">Resolved</p>
+                      <Sparkline values={importTrends.resolved} color="#2dd4bf" />
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-2xl font-bold text-white">
+                        {importTrends.new.reduce((a, b) => a + b, 0)}
+                      </p>
+                      <p className="text-slate-500 text-xs">new · {importTrends.resolved.reduce((a, b) => a + b, 0)} resolved</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

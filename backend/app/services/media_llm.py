@@ -52,7 +52,8 @@ async def generate_and_store(item: MediaItem, ollama: OllamaSettings, db) -> str
     rationale = await llm_assist.explain_deletion(
         ollama.host, ollama.model_for("explain"), item_summary(item), ollama.api_style,
         template=ollama.explain_prompt, verbosity=ollama.verbosity,
-        model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes)
+        model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes,
+        **llm_assist.inference_kwargs(ollama))
     if rationale:
         item.llm_rationale = rationale
         item.llm_rationale_at = datetime.utcnow()
@@ -124,6 +125,7 @@ def eligible_candidates(db, ollama: OllamaSettings, ids: list[int] | None,
          .filter(MediaItem.score >= weights.min_score_threshold,
                  MediaItem.ignored.is_(False),
                  MediaItem.protected.isnot(True),
+                 MediaItem.watch_protected.isnot(True),
                  MediaItem.pending_delete_at.is_(None)))
     if cleanup.excluded_libraries:
         q = q.filter(~MediaItem.library_section.in_(cleanup.excluded_libraries))

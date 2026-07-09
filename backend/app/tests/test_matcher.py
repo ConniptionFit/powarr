@@ -270,6 +270,22 @@ class TestIsQualityDowngrade(unittest.TestCase):
         ]
         self.assertTrue(is_quality_downgrade(candidates))
 
+    def test_lidarr_album_already_imported(self):
+        candidates = [
+            {"rejections": [
+                {"reason": "Album already imported at 01/09/2025 00:02:38"},
+                {"reason": "Has missing tracks"},
+            ]},
+            {"rejections": [{"reason": "Not an upgrade for existing album file(s)"}]},
+        ]
+        self.assertTrue(is_quality_downgrade(candidates))
+
+    def test_lidarr_track_not_an_upgrade(self):
+        candidates = [
+            {"rejections": [{"reason": "Not an upgrade for existing track file(s)"}]},
+        ]
+        self.assertTrue(is_quality_downgrade(candidates))
+
     def test_partial_downgrade_false(self):
         candidates = [
             {"rejections": [{"reason": "Not an upgrade for existing episode file(s)."}]},
@@ -287,6 +303,29 @@ class TestIsQualityDowngrade(unittest.TestCase):
 
     def test_empty_candidates_false(self):
         self.assertFalse(is_quality_downgrade([]))
+
+
+class TestQueueLooksLikeQualityCovered(unittest.TestCase):
+    def test_lidarr_not_an_upgrade_message(self):
+        from app.services.import_matcher import queue_looks_like_quality_covered
+        self.assertTrue(queue_looks_like_quality_covered(
+            "Not an upgrade for existing album file(s); 1 Curtains Up.flac"))
+
+    def test_album_already_imported(self):
+        from app.services.import_matcher import queue_looks_like_quality_covered
+        self.assertTrue(queue_looks_like_quality_covered(
+            "Album already imported at 01/09/2025 00:02:38"))
+
+    def test_match_failure_not_covered(self):
+        from app.services.import_matcher import queue_looks_like_quality_covered
+        self.assertFalse(queue_looks_like_quality_covered(
+            "Couldn't find similar album for [/downloads/x]"))
+
+    def test_unrelated(self):
+        from app.services.import_matcher import queue_looks_like_quality_covered
+        self.assertFalse(queue_looks_like_quality_covered(
+            "One or more tracks expected in this release were not imported"))
+        self.assertFalse(queue_looks_like_quality_covered(None))
 
 
 class TestFindSuspiciousFiles(unittest.TestCase):

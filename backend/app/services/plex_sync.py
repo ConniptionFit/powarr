@@ -81,12 +81,19 @@ async def run_plex_sync(db) -> dict:
 
         cleanup = _get_setting(db, "cleanup", CleanupSettings)
         protected = 0
+        watch_protected = 0
         if cleanup.protect_requested:
             tasks.update_task(task_id, message="Refreshing Seerr protection…")
             try:
                 protected = await refresh_seerr_protection(db)
             except Exception as e:
                 logger.warning(f"Seerr protection refresh failed (non-fatal): {e}")
+        if cleanup.protect_other_users:
+            tasks.update_task(task_id, message="Refreshing Tautulli multi-user protection…")
+            try:
+                watch_protected = await refresh_tautulli_watch_protection(db)
+            except Exception as e:
+                logger.warning(f"Tautulli watch protection refresh failed (non-fatal): {e}")
 
         tasks.update_task(task_id, message="Linking *arr IDs…")
         try:
@@ -97,7 +104,8 @@ async def run_plex_sync(db) -> dict:
             linked = {}
 
         tasks.finish_task(task_id, "done", f"Synced {upserted} item(s)")
-        return {"synced": upserted, "protected": protected, "linked": linked}
+        return {"synced": upserted, "protected": protected,
+                "watch_protected": watch_protected, "linked": linked}
     except Exception as e:
         tasks.finish_task(task_id, "failed", str(e))
         raise
@@ -131,4 +139,53 @@ async def refresh_seerr_protection(db) -> int:
         count += q.update({"protected": True}, synchronize_session=False)
     db.commit()
     logger.info(f"Seerr protection: {count} item(s) protected across {len(requested)} request(s)")
+    return count
+
+
+async def refresh_tautulli_watch_protection(db) -> int:
+    """Mark items watched by another Tautulli user within N days as watch_protected.
+
+    Uses one get_history call (not per-item stats). Resets prior watch_protected
+    flags first. Primary user's watches (primary_tautulli_user) never protect.
+    No-op when Tautulli isn't configured or the toggle is off.
+    """
+    cleanup = _get_setting(db, "cleanup", CleanupSettings)
+    if not cleanup.protect_other_users:
+        return 0
+    row = db.query(Integration).filter_by(name="tautulli", enabled=True).first()
+    if not row or not row.url or not row.api_key:
+        return 0
+
+    from app.integrations.tautulli import TautulliIntegration
+    tautulli = TautulliIntegration(row.url, row.api_key)
+    history = await tautulli.get_recent_history(days=cleanup.other_user_watch_days)
+    primary = (cleanup.primary_tautulli_user or "").strip().lower()
+
+    protect_keys: set[str] = set()
+    for h in history:
+        name = (h.get("friendly_name") or h.get("user") or "").strip().lower()
+        if primary and name == primary:
+            continue
+        if not name:
+            continue
+        rk = h.get("rating_key")
+        if rk:
+            protect_keys.add(str(rk))
+
+    db.query(MediaItem).filter(MediaItem.watch_protected.is_(True)).update(
+        {"watch_protected": False}, synchronize_session=False)
+
+    count = 0
+    if protect_keys:
+        # Chunk IN() to keep the query size sane on large libraries
+        keys = list(protect_keys)
+        for i in range(0, len(keys), 500):
+            chunk = keys[i:i + 500]
+            count += (db.query(MediaItem)
+                      .filter(MediaItem.plex_rating_key.in_(chunk))
+                      .update({"watch_protected": True}, synchronize_session=False))
+    db.commit()
+    logger.info(f"Tautulli watch protection: {count} item(s) protected "
+                f"from {len(protect_keys)} rating key(s) in history "
+                f"(last {cleanup.other_user_watch_days}d)")
     return count

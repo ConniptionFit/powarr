@@ -21,6 +21,9 @@ class MediaItem(Base):
     ignored = Column(Boolean, default=False)
     parent_title = Column(String, nullable=True)  # Show name for episodes, artist name for tracks
     protected = Column(Boolean, default=False)  # actively requested in Seerr — hidden from suggestions
+    # Watched by another Tautulli user within the protect window (v0.29.0) —
+    # separate from Seerr `protected` so Seerr refresh can't wipe it.
+    watch_protected = Column(Boolean, default=False)
     pending_delete_at = Column(DateTime, nullable=True)  # soft-delete: when deletion was requested
 
     # Cached LLM deletion rationale. The key hashes the prompt template, model

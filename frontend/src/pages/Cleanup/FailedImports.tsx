@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd, Download, Rows3 } from "lucide-react";
 import { importsApi, settingsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
+import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
 import { PlatformBadge, PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
@@ -382,6 +383,8 @@ export default function FailedImports() {
   const [packFilter, setPackFilter] = usePersistedState<"all" | "packs" | "singles">("powarr.failedImports.packFilter", "all");
   const [search, setSearch] = usePersistedState("powarr.failedImports.search", "");
   const [platformFilter, setPlatformFilter] = usePersistedState<PlatformName | "">("powarr.failedImports.platformFilter", "");
+  const [density, setDensity] = usePersistedState<TableDensity>(DENSITY_STORAGE_KEY, "comfortable");
+  const d = DENSITY_CLASSES[density];
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
@@ -681,7 +684,7 @@ export default function FailedImports() {
                 className="block mt-0.5 px-1.5 py-0.5 rounded bg-orange-900/40 text-orange-300 text-[10px] font-bold uppercase tracking-wide w-fit"
                 title="Every file in this download rejects as not an upgrade over an existing library file — will never import as-is"
               >
-                Downgrade
+                Covered
               </span>
             )}
             {item.suspicious_files && (
@@ -705,6 +708,21 @@ export default function FailedImports() {
       <div className="flex items-center justify-between mb-5">
         <p className="text-slate-400 text-sm">Stuck *arr downloads matched against your library — accept to push the import</p>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setDensity(density === "comfortable" ? "compact" : "comfortable")}
+            title={density === "comfortable" ? "Switch to compact rows" : "Switch to comfortable rows"}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+          >
+            <Rows3 size={15} />
+            {density === "comfortable" ? "Compact" : "Comfortable"}
+          </button>
+          <button
+            onClick={() => importsApi.exportCsv(statusFilter === "all" ? undefined : statusFilter)}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+          >
+            <Download size={15} />
+            CSV
+          </button>
           <div className="relative">
             <button
               onClick={() => setShowColMenu(s => !s)}
@@ -772,7 +790,7 @@ export default function FailedImports() {
             downgradeOnly ? "bg-orange-700 border-orange-700 text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
           }`}
         >
-          Downgrades only
+          Covered only
         </button>
         <button
           onClick={() => setSuspiciousOnly(v => !v)}
@@ -911,16 +929,19 @@ export default function FailedImports() {
         </div>
       ) : (
         <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
-          <table className="text-sm" style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
+          <table
+            className={`text-sm ${density === "compact" ? "[&_td]:!py-1.5 [&_th]:!py-1.5 [&_td]:text-xs" : ""}`}
+            style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}
+          >
             <thead className="border-b border-purple-900/30 text-slate-400 text-xs uppercase tracking-wider">
               <tr>
-                <th className="px-3 py-3" style={{ width: 40 }}>
+                <th className={`${d.head} !px-3`} style={{ width: 40 }}>
                   <input type="checkbox" className="accent-purple-500"
                          checked={selected.size > 0 && selected.size === allSelectable.length}
                          onChange={toggleSelectAll} />
                 </th>
                 {cols.map(c => (
-                  <th key={c.key} className="text-left px-4 py-3 relative select-none group"
+                  <th key={c.key} className={`text-left ${d.head} relative select-none group`}
                       style={{ width: colW(c) }}>
                     <button
                       onClick={() => c.sortField && toggleSort(c.sortField)}

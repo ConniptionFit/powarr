@@ -1,8 +1,9 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search } from "lucide-react";
+import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3 } from "lucide-react";
 import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
+import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
 import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
@@ -91,6 +92,7 @@ export default function DeletionSuggestions() {
   const [order, setOrder] = usePersistedState<"asc" | "desc">("powarr.deletionSuggestions.order", "desc");
   const [search, setSearch] = usePersistedState("powarr.deletionSuggestions.search", "");
   const [platformFilter, setPlatformFilter] = usePersistedState<PlatformName | "">("powarr.deletionSuggestions.platformFilter", "");
+  const [density, setDensity] = usePersistedState<TableDensity>(DENSITY_STORAGE_KEY, "comfortable");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
@@ -310,6 +312,25 @@ export default function DeletionSuggestions() {
         <div className="flex items-center gap-3">
           {syncMsg && <span className="text-sm text-red-400">{syncMsg}</span>}
           {batchMsg && <span className="text-sm text-slate-400">{batchMsg}</span>}
+          <button
+            onClick={() => setDensity(density === "comfortable" ? "compact" : "comfortable")}
+            title={density === "comfortable" ? "Switch to compact rows" : "Switch to comfortable rows"}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+          >
+            <Rows3 size={15} />
+            {density === "comfortable" ? "Compact" : "Comfortable"}
+          </button>
+          <button
+            onClick={() => mediaApi.exportCsv({
+              min_score: minScore,
+              ...(mediaType ? { media_type: mediaType } : {}),
+              limit: 10000,
+            })}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+          >
+            <Download size={15} />
+            CSV
+          </button>
           {!isShowMode && displayItems.length > 0 && (
             <button
               onClick={explainVisible}
@@ -433,7 +454,7 @@ export default function DeletionSuggestions() {
         </div>
       ) : (
         <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className={`w-full text-sm ${density === "compact" ? "[&_td]:!py-1.5 [&_th]:!py-1.5 [&_td]:text-xs" : ""}`}>
             <thead className="border-b border-purple-900/30 text-slate-400 text-xs uppercase tracking-wider">
               <tr>
                 <th className="px-3 py-3 w-10">

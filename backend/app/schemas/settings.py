@@ -38,10 +38,11 @@ class ImportMatchingSettings(BaseModel):
     # LLM share of the confidence blend (v0.12.0, user-confirmed 2026-07-06) —
     # final = (1-w) * deterministic + w * llm. 0 = ignore the LLM entirely.
     llm_blend_weight: float = 0.3
-    # Quality-downgrade handling (v0.17.0) — a suggested row is always flagged/badged
-    # when every file in the download rejects as "not an upgrade"; this additionally
-    # auto-rejects it during the scan instead of leaving it in triage. Off by default —
-    # same positive-opt-in pattern as orphan_auto_purge.
+    # Equal-or-better library coverage (v0.17.0 Sonarr; v0.29.0 all *arr incl. Lidarr) —
+    # a suggested row is always flagged/badged when every file rejects as "not an
+    # upgrade" / "album already imported" (library already has equal-or-better
+    # quality). This additionally auto-rejects during the scan instead of leaving
+    # it in triage. Off by default — same positive-opt-in pattern as orphan_auto_purge.
     quality_downgrade_auto_reject: bool = False
     # Suspicious file-type detection (v0.19.0) — any file in a download matching one
     # of these (case-insensitive) extensions gets the row flagged/badged, across all
@@ -88,6 +89,11 @@ class OllamaSettings(BaseModel):
     # immediately) for the cooldown, then retries normally. 0 disables the breaker.
     breaker_threshold: int = 5
     breaker_cooldown_minutes: int = 10
+    # Inference tuning (v0.29.0, Approved Queue #13) — 0 for max_tokens/timeout
+    # means "use the model_size profile defaults from _limits()".
+    temperature: float = 0.0
+    max_tokens: int = 0
+    timeout_seconds: int = 0
 
     def model_for(self, task: str) -> str:
         override = self.match_model if task == "match" else self.explain_model
@@ -105,6 +111,12 @@ class CleanupSettings(BaseModel):
     excluded_libraries: list[str] = []  # library_section names never suggested for deletion
     soft_delete_days: int = 0  # 0 = delete immediately (current behavior); >0 = pending window
     protect_requested: bool = True  # hide Seerr-requested items from suggestions
+    # Tautulli multi-user protection (v0.29.0, Approved Queue #12) — hide items
+    # another household user watched within N days. Separate from Seerr `protected`
+    # (that flag is wiped on every Seerr refresh). Off by default.
+    protect_other_users: bool = False
+    other_user_watch_days: int = 30
+    primary_tautulli_user: str = ""  # friendly_name whose watches do NOT protect (your own)
 
 
 class SyncSettings(BaseModel):
@@ -146,6 +158,10 @@ class NotificationSettings(BaseModel):
     public_base_url: str = ""  # e.g. https://powarr.pwrs.dev — must be reachable by the ntfy client
     actionable_new_suggestions: bool = False
     actionable_max_per_scan: int = 5  # a scan with more new suggestions than this falls back to the aggregate summary only
+    # Weekly digest (v0.29.0, Approved Queue #15) — one ntfy summary per week.
+    digest_enabled: bool = False
+    digest_weekday: int = 0  # 0=Monday … 6=Sunday (datetime.weekday())
+    digest_hour_utc: int = 9
 
 
 class IntegrationConfig(BaseModel):

@@ -73,6 +73,11 @@ export interface MediaStats {
   last_synced: string | null;
 }
 
+function downloadCsv(path: string) {
+  // Same-origin cookie auth; open as a navigation so the browser saves the file.
+  window.location.assign(`/api/v1${path}`);
+}
+
 export const mediaApi = {
   list: (params?: Record<string, string | number | boolean>) => {
     const qs = params ? "?" + new URLSearchParams(params as Record<string, string>).toString() : "";
@@ -95,6 +100,11 @@ export const mediaApi = {
     }),
   deletionLog: () => req<DeletionLogEntry[]>("/media/deletion-log"),
   deletionStats: () => req<DeletionStats>("/media/deletion-stats"),
+  exportCsv: (params?: Record<string, string | number | boolean>) => {
+    const qs = params ? "?" + new URLSearchParams(params as Record<string, string>).toString() : "";
+    downloadCsv(`/media/export.csv${qs}`);
+  },
+  exportDeletionLogCsv: () => downloadCsv("/media/deletion-log/export.csv"),
 };
 
 // --- Settings ---
@@ -156,6 +166,10 @@ export interface OllamaSettings {
   // Circuit breaker (v0.27.0) — 0 threshold disables
   breaker_threshold: number;
   breaker_cooldown_minutes: number;
+  // Inference tuning (v0.29.0) — 0 max_tokens/timeout = model_size defaults
+  temperature: number;
+  max_tokens: number;
+  timeout_seconds: number;
 }
 
 export interface LlmStats {
@@ -199,6 +213,9 @@ export interface CleanupSettings {
   excluded_libraries: string[];
   soft_delete_days: number;
   protect_requested: boolean;
+  protect_other_users: boolean;
+  other_user_watch_days: number;
+  primary_tautulli_user: string;
 }
 
 export interface SyncSettings {
@@ -212,6 +229,9 @@ export interface NotificationSettings {
   public_base_url: string;
   actionable_new_suggestions: boolean;
   actionable_max_per_scan: number;
+  digest_enabled: boolean;
+  digest_weekday: number;
+  digest_hour_utc: number;
 }
 
 export const settingsApi = {
@@ -315,10 +335,20 @@ export interface ImportFileDetail {
   rejections: string[];
 }
 
+export interface ImportTrends {
+  days: number;
+  labels: string[];
+  new: number[];
+  resolved: number[];
+}
+
 export const importsApi = {
   list: (status?: string) =>
     req<FailedImport[]>(`/imports${status ? `?status=${status}` : ""}`),
   stats: () => req<ImportStats>("/imports/stats"),
+  trends: (days = 30) => req<ImportTrends>(`/imports/trends?days=${days}`),
+  exportCsv: (status?: string) =>
+    downloadCsv(`/imports/export.csv${status ? `?status=${status}` : ""}`),
   autoEligible: () => req<AutoEligible>("/imports/auto-eligible"),
   scan: () => req<Record<string, unknown>>("/imports/scan", { method: "POST" }),
   accept: (id: number) =>

@@ -20,6 +20,7 @@ class MediaItemOut(BaseModel):
     ignored: bool
     parent_title: Optional[str]
     protected: Optional[bool] = False
+    watch_protected: Optional[bool] = False
     pending_delete_at: Optional[datetime] = None
     llm_rationale: Optional[str] = None
     llm_rationale_at: Optional[datetime] = None

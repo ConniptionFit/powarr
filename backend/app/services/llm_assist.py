@@ -338,9 +338,29 @@ def _limits(model_size: str, verbose: bool) -> tuple[int, int]:
     return 160, GENERATE_TIMEOUT
 
 
+def resolve_inference(model_size: str, verbose: bool, *,
+                      temperature: float = 0.0, max_tokens: int = 0,
+                      timeout_seconds: int = 0) -> tuple[int, int, float]:
+    """Apply optional OllamaSettings overrides on top of the model_size profile.
+    max_tokens/timeout_seconds of 0 keep the profile default."""
+    mt, to = _limits(model_size, verbose)
+    return (max_tokens or mt, timeout_seconds or to, float(temperature))
+
+
+def inference_kwargs(cfg) -> dict:
+    """Pull temperature/max_tokens/timeout_seconds from an OllamaSettings-like object."""
+    return {
+        "temperature": getattr(cfg, "temperature", 0.0) or 0.0,
+        "max_tokens": getattr(cfg, "max_tokens", 0) or 0,
+        "timeout_seconds": getattr(cfg, "timeout_seconds", 0) or 0,
+    }
+
+
 async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama",
                     json_format: bool = True, verbose: bool = False,
-                    model_size: str = "medium", keep_alive_minutes: int = 10) -> Optional[str]:
+                    model_size: str = "medium", keep_alive_minutes: int = 10,
+                    temperature: float = 0.0, max_tokens: int = 0,
+                    timeout_seconds: int = 0) -> Optional[str]:
     """Single short completion. Returns raw text or None on any failure."""
     base = _base_url(host)
     if not base or not model:
@@ -348,7 +368,9 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
     if breaker_open():
         logger.info("LLM assist skipped: circuit breaker is open")
         return None
-    max_tokens, timeout = _limits(model_size, verbose)
+    max_tokens, timeout, temperature = resolve_inference(
+        model_size, verbose, temperature=temperature,
+        max_tokens=max_tokens, timeout_seconds=timeout_seconds)
     started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -356,7 +378,7 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
                 body: dict[str, Any] = {
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.0,
+                    "temperature": temperature,
                     "max_tokens": max_tokens,
                 }
                 if json_format:
@@ -369,7 +391,7 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"temperature": 0.0, "num_predict": max_tokens},
+                    "options": {"temperature": temperature, "num_predict": max_tokens},
                 }
                 if keep_alive_minutes and keep_alive_minutes > 0:
                     # Keeps the model loaded between sequential calls in a batch run —
@@ -419,7 +441,8 @@ def _strip_think(text: str) -> str:
 
 async def _generate_stream(host: str, model: str, prompt: str, api_style: str = "ollama",
                            verbose: bool = False, model_size: str = "medium",
-                           keep_alive_minutes: int = 10):
+                           keep_alive_minutes: int = 10, temperature: float = 0.0,
+                           max_tokens: int = 0, timeout_seconds: int = 0):
     """Streaming counterpart of _generate: an async generator of raw text chunks.
     Fail-soft like everything else — any error just ends the stream."""
     base = _base_url(host)
@@ -428,7 +451,9 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
     if breaker_open():
         logger.info("LLM stream skipped: circuit breaker is open")
         return
-    max_tokens, timeout = _limits(model_size, verbose)
+    max_tokens, timeout, temperature = resolve_inference(
+        model_size, verbose, temperature=temperature,
+        max_tokens=max_tokens, timeout_seconds=timeout_seconds)
     started = time.monotonic()
     emitted_any = False
     try:
@@ -437,7 +462,7 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
                 body: dict[str, Any] = {
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.0,
+                    "temperature": temperature,
                     "max_tokens": max_tokens,
                     "stream": True,
                 }
@@ -459,7 +484,7 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
                 "model": model,
                 "prompt": prompt,
                 "stream": True,
-                "options": {"temperature": 0.0, "num_predict": max_tokens},
+                "options": {"temperature": temperature, "num_predict": max_tokens},
             }
             if keep_alive_minutes and keep_alive_minutes > 0:
                 body["keep_alive"] = f"{int(keep_alive_minutes)}m"
@@ -491,7 +516,9 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
 async def explain_deletion_stream(host: str, model: str, item_summary: str,
                                   api_style: str = "ollama", template: str = "",
                                   verbosity: str = "brief", model_size: str = "medium",
-                                  keep_alive_minutes: int = 10):
+                                  keep_alive_minutes: int = 10,
+                                  temperature: float = 0.0, max_tokens: int = 0,
+                                  timeout_seconds: int = 0):
     """Streaming deletion rationale: yields displayable (think-stripped) text
     chunks, honoring the same caps as explain_deletion — brief stops at the first
     line / 300 chars, verbose at 1500. Minimal isn't streamed (a one-word verdict
@@ -503,7 +530,9 @@ async def explain_deletion_stream(host: str, model: str, item_summary: str,
     acc = ""
     async for chunk in _generate_stream(host, model, prompt, api_style, verbose=verbose,
                                         model_size=model_size,
-                                        keep_alive_minutes=keep_alive_minutes):
+                                        keep_alive_minutes=keep_alive_minutes,
+                                        temperature=temperature, max_tokens=max_tokens,
+                                        timeout_seconds=timeout_seconds):
         acc += chunk
         vis = _stream_visible(acc).lstrip()
         done = False
@@ -653,7 +682,9 @@ async def review_match(host: str, model: str, release_title: str,
                        api_style: str = "ollama", template: str = "",
                        verbosity: str = "brief", model_size: str = "medium",
                        keep_alive_minutes: int = 10, reply_format: str = "json",
-                       confidence_style: str = "numeric") -> Optional[dict[str, Any]]:
+                       confidence_style: str = "numeric",
+                       temperature: float = 0.0, max_tokens: int = 0,
+                       timeout_seconds: int = 0) -> Optional[dict[str, Any]]:
     """Single structured LLM review of a deterministic match decision (one call —
     no separate match/explain prompts). Returns
     {"agrees": bool, "confidence_adjustment": float ±0.3, "rationale": str}
@@ -664,7 +695,9 @@ async def review_match(host: str, model: str, release_title: str,
                                  det_summary, verbosity, reply_format, confidence_style)
     raw = await _generate(host, model, prompt, api_style,
                           json_format=reply_format != "simple", verbose=verbose,
-                          model_size=model_size, keep_alive_minutes=keep_alive_minutes)
+                          model_size=model_size, keep_alive_minutes=keep_alive_minutes,
+                          temperature=temperature, max_tokens=max_tokens,
+                          timeout_seconds=timeout_seconds)
     if raw is None:
         return None
     # Whichever format was asked for, accept the other as a fallback — a "json"
@@ -706,7 +739,9 @@ async def review_pack_files(host: str, model: str, release_title: str,
                              candidate_title: str, file_names: list[str],
                              api_style: str = "ollama", template: str = "",
                              verbosity: str = "brief", model_size: str = "medium",
-                             keep_alive_minutes: int = 10) -> Optional[list[dict]]:
+                             keep_alive_minutes: int = 10,
+                             temperature: float = 0.0, max_tokens: int = 0,
+                             timeout_seconds: int = 0) -> Optional[list[dict]]:
     """Per-file episode matching for season/series packs. Returns list of
     [{"file": "...", "season": int, "episode": int, "match_type": one of
     PACK_MATCH_TYPES, "confidence": "high|medium|low", "reason": "..."}]
@@ -718,7 +753,9 @@ async def review_pack_files(host: str, model: str, release_title: str,
                               context, verbosity)
     raw = await _generate(host, model, prompt, api_style, json_format=True,
                          verbose=verbose, model_size=model_size,
-                         keep_alive_minutes=keep_alive_minutes)
+                         keep_alive_minutes=keep_alive_minutes,
+                         temperature=temperature, max_tokens=max_tokens,
+                         timeout_seconds=timeout_seconds)
     if raw is None:
         return None
     parsed = _parse_pack_matches(raw)
@@ -749,13 +786,17 @@ async def review_pack_files(host: str, model: str, release_title: str,
 async def explain_deletion(host: str, model: str, item_summary: str,
                            api_style: str = "ollama", template: str = "",
                            verbosity: str = "brief", model_size: str = "medium",
-                           keep_alive_minutes: int = 10) -> Optional[str]:
+                           keep_alive_minutes: int = 10,
+                           temperature: float = 0.0, max_tokens: int = 0,
+                           timeout_seconds: int = 0) -> Optional[str]:
     """Deletion-candidate rationale. Returns the text or None (= no assist available).
     Minimal verbosity returns a bare KEEP/DELETE verdict."""
     verbose = verbosity == "verbose"
     prompt = build_explain_prompt(template, item_summary, verbosity)
     raw = await _generate(host, model, prompt, api_style, json_format=False, verbose=verbose,
-                          model_size=model_size, keep_alive_minutes=keep_alive_minutes)
+                          model_size=model_size, keep_alive_minutes=keep_alive_minutes,
+                          temperature=temperature, max_tokens=max_tokens,
+                          timeout_seconds=timeout_seconds)
     if not raw:
         return None
     text = _strip_think(raw)

@@ -44,7 +44,8 @@ def list_media(
         if ignored is not None:
             q = q.filter(MediaItem.ignored == ignored)
         if not include_protected:
-            q = q.filter(MediaItem.protected.isnot(True))
+            q = q.filter(MediaItem.protected.isnot(True),
+                         MediaItem.watch_protected.isnot(True))
         cleanup = _get_setting(db, "cleanup", CleanupSettings)
         if cleanup.excluded_libraries:
             q = q.filter(~MediaItem.library_section.in_(cleanup.excluded_libraries))
@@ -94,10 +95,61 @@ def list_libraries(db: Session = Depends(get_db)) -> list[str]:
     return sorted({r[0] for r in rows if r[0]})
 
 
+@router.get("/export.csv")
+def export_media_csv(
+    db: Session = Depends(get_db),
+    media_type: Optional[str] = Query(None),
+    min_score: Optional[float] = Query(None),
+    ignored: Optional[bool] = Query(False),
+    include_protected: bool = Query(False),
+    pending: bool = Query(False),
+    sort_by: str = Query("score"),
+    order: str = Query("desc"),
+    limit: int = Query(10000),
+):
+    """CSV of deletion candidates (same filters as list_media; Approved Queue #14)."""
+    from app.services.csv_export import streaming_csv, _dt
+    items = list_media(
+        db=db, media_type=media_type, min_score=min_score, ignored=ignored,
+        include_protected=include_protected, pending=pending,
+        sort_by=sort_by, order=order, limit=min(limit, 20000), offset=0,
+    )
+    rows = [[
+        i.id, i.title, i.parent_title or "", i.year or "", i.media_type,
+        i.library_section or "", i.file_size, round(i.score or 0, 2),
+        i.watch_count, _dt(i.last_watched_at), i.file_path or "",
+        bool(i.protected), bool(getattr(i, "watch_protected", False)),
+    ] for i in items]
+    return streaming_csv(
+        "powarr-deletion-candidates.csv",
+        ["id", "title", "parent_title", "year", "media_type", "library",
+         "file_size", "score", "watch_count", "last_watched_at", "file_path",
+         "protected", "watch_protected"],
+        rows,
+    )
+
+
 @router.get("/deletion-log", response_model=list[DeletionLogOut])
 def deletion_log(db: Session = Depends(get_db), limit: int = Query(200), offset: int = Query(0)):
     return (db.query(DeletionLog).order_by(DeletionLog.deleted_at.desc())
             .offset(offset).limit(limit).all())
+
+
+@router.get("/deletion-log/export.csv")
+def export_deletion_log_csv(db: Session = Depends(get_db), limit: int = Query(10000)):
+    from app.services.csv_export import streaming_csv, _dt
+    items = (db.query(DeletionLog).order_by(DeletionLog.deleted_at.desc())
+             .limit(min(limit, 20000)).all())
+    rows = [[
+        i.id, i.title, i.parent_title or "", i.media_type,
+        i.library_section or "", i.file_size, i.arr_action or "", _dt(i.deleted_at),
+    ] for i in items]
+    return streaming_csv(
+        "powarr-deletion-log.csv",
+        ["id", "title", "parent_title", "media_type", "library",
+         "file_size", "arr_action", "deleted_at"],
+        rows,
+    )
 
 
 @router.get("/deletion-stats", response_model=DeletionStats)
@@ -247,7 +299,8 @@ async def explain_media_stream(item_id: int, db: Session = Depends(get_db)):
                         ollama.host, ollama.model_for("explain"), media_llm.item_summary(item),
                         ollama.api_style, template=ollama.explain_prompt,
                         verbosity=ollama.verbosity, model_size=ollama.model_size,
-                        keep_alive_minutes=ollama.keep_alive_minutes):
+                        keep_alive_minutes=ollama.keep_alive_minutes,
+                        **llm_assist.inference_kwargs(ollama)):
                     full += chunk
                     yield f"data: {_json.dumps({'delta': chunk})}\n\n"
                 full = full.strip()

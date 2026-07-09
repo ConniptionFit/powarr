@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from typing import Any
 import httpx
 
@@ -52,3 +53,42 @@ class TautulliIntegration(BaseIntegration):
                 return {"watch_count": watch_count}
         except Exception:
             return {"watch_count": 0}
+
+    async def get_recent_history(self, days: int = 30, length: int = 5000) -> list[dict]:
+        """Recent play history rows for multi-user protection (v0.29.0).
+
+        One paginated call instead of per-item get_item_user_stats — returns
+        [{rating_key, user, friendly_name, date}, ...] where date is a unix
+        timestamp (int/str). Fail-soft → [].
+        """
+        after = int((datetime.utcnow() - timedelta(days=max(1, days))).timestamp())
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                r = await client.get(
+                    self._api_url(),
+                    params={
+                        "apikey": self.api_key,
+                        "cmd": "get_history",
+                        "after": after,
+                        "length": min(max(1, length), 10000),
+                    },
+                )
+                r.raise_for_status()
+                data = r.json().get("response", {}).get("data", {})
+                rows = data.get("data") if isinstance(data, dict) else data
+                if not isinstance(rows, list):
+                    return []
+                out = []
+                for row in rows:
+                    rk = row.get("rating_key")
+                    if rk is None:
+                        continue
+                    out.append({
+                        "rating_key": str(rk),
+                        "user": row.get("user") or "",
+                        "friendly_name": row.get("friendly_name") or row.get("user") or "",
+                        "date": row.get("date"),
+                    })
+                return out
+        except Exception:
+            return []

@@ -175,7 +175,7 @@ function ImportMatchingSection() {
       {numRow("Title-Only Cap", "Confidence ceiling when no episode number corroborates a title match — keeps title-only matches below auto-resolve", "title_only_cap", { min: 0, max: 1, step: 0.01 })}
       {toggleRow("Anime Absolute Numbering", "For Sonarr anime series, match by absolute episode number (with season/episode fallback and stale-data guards)", "anime_absolute_numbering")}
       {sliderRow("LLM Blend Weight", "The LLM's share of the final confidence blend: final = (1−w)·deterministic + w·LLM. 0 = ignore the LLM entirely; 0.3 = long-standing default", "llm_blend_weight", { min: 0, max: 1, step: 0.05 })}
-      {toggleRow("Auto-Reject Quality Downgrades", "Skip triage entirely for downloads where every file rejects as 'not an upgrade' over an existing library file — they can never import as-is. Off by default; the Downgrade badge and filter always show these regardless of this setting.", "quality_downgrade_auto_reject")}
+      {toggleRow("Auto-Reject Equal-or-Better Quality", "Skip triage when the *arr app already has equal or better quality for every file in the download (Sonarr/Radarr \"not an upgrade\"; Lidarr \"not an upgrade\" / \"album already imported\"). Off by default; the Downgrade badge and filter always show these regardless of this setting.", "quality_downgrade_auto_reject")}
 
       <div className="py-4 border-b border-purple-900/20">
         <div className="flex items-center justify-between">
@@ -324,6 +324,55 @@ function CleanupSection() {
           className="accent-purple-500 ml-6"
         />
       </label>
+
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Protect Other Users' Watches</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Hide items another Tautulli user watched within N days (refreshed on each Plex sync). Requires Tautulli enabled.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          checked={cfg.protect_other_users}
+          onChange={e => setCfg(c => c ? { ...c, protect_other_users: e.target.checked } : c)}
+          className="accent-purple-500 ml-6"
+        />
+      </label>
+      {cfg.protect_other_users && (
+        <>
+          <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+            <div>
+              <p className="text-white text-sm font-medium">Other-User Watch Window</p>
+              <p className="text-slate-500 text-xs mt-0.5">Days of Tautulli history to protect</p>
+            </div>
+            <div className="flex items-center gap-2 ml-6">
+              <input
+                type="number" min={1} max={365} step={1}
+                value={cfg.other_user_watch_days}
+                onChange={e => setCfg(c => c ? { ...c, other_user_watch_days: Number(e.target.value) } : c)}
+                className="w-24 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white text-right"
+              />
+              <span className="text-slate-500 text-xs">days</span>
+            </div>
+          </div>
+          <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+            <div>
+              <p className="text-white text-sm font-medium">Primary Tautulli User</p>
+              <p className="text-slate-500 text-xs mt-0.5">
+                Friendly name whose watches do <em>not</em> protect (your own). Leave blank to protect every user's watches.
+              </p>
+            </div>
+            <input
+              type="text"
+              placeholder="e.g. Powers"
+              value={cfg.primary_tautulli_user}
+              onChange={e => setCfg(c => c ? { ...c, primary_tautulli_user: e.target.value } : c)}
+              className="w-40 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white ml-6"
+            />
+          </div>
+        </>
+      )}
 
       <div className="py-4">
         <p className="text-white text-sm font-medium mb-1">Excluded Libraries</p>
@@ -844,6 +893,36 @@ function LLMAssistSection() {
           onChange={e => setCfg(c => c ? { ...c, keep_alive_minutes: Math.max(0, Number(e.target.value) || 0) } : c)}
           className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6 w-24"
         />
+      </div>
+
+      <div className="py-4 border-b border-purple-900/20">
+        <p className="text-white text-sm font-medium mb-1">Inference Tuning</p>
+        <p className="text-slate-500 text-xs mb-3">
+          Optional overrides on top of the Model Size Profile. Leave max tokens / timeout at 0 to keep the profile defaults.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs text-slate-400 mb-1 block">Temperature</label>
+            <input type="number" min={0} max={2} step={0.05}
+                   value={cfg.temperature ?? 0}
+                   onChange={e => setCfg(c => c ? { ...c, temperature: Number(e.target.value) } : c)}
+                   className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 mb-1 block">Max Tokens (0 = profile)</label>
+            <input type="number" min={0} max={4096} step={16}
+                   value={cfg.max_tokens ?? 0}
+                   onChange={e => setCfg(c => c ? { ...c, max_tokens: Math.max(0, Number(e.target.value) || 0) } : c)}
+                   className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 mb-1 block">Timeout Seconds (0 = profile)</label>
+            <input type="number" min={0} max={300} step={5}
+                   value={cfg.timeout_seconds ?? 0}
+                   onChange={e => setCfg(c => c ? { ...c, timeout_seconds: Math.max(0, Number(e.target.value) || 0) } : c)}
+                   className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
+          </div>
+        </div>
       </div>
 
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
@@ -1391,6 +1470,37 @@ function NotificationsSection() {
                      className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
             </div>
           </div>
+        </div>
+        <div className="pt-2 border-t border-purple-900/20">
+          <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={cfg.digest_enabled}
+                   onChange={e => setCfg(c => c ? { ...c, digest_enabled: e.target.checked } : c)}
+                   className="accent-purple-500" />
+            Weekly digest summary
+          </label>
+          <p className="text-slate-500 text-xs mt-1 mb-2">
+            One ntfy push per week with open imports, 7-day resolve counts, deletion candidates, and space freed.
+          </p>
+          {cfg.digest_enabled && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-slate-400 mb-1 block">Weekday (UTC)</label>
+                <select value={cfg.digest_weekday}
+                        onChange={e => setCfg(c => c ? { ...c, digest_weekday: Number(e.target.value) } : c)}
+                        className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white">
+                  {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((d, i) => (
+                    <option key={d} value={i}>{d}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 mb-1 block">Hour (UTC, 0–23)</label>
+                <input type="number" min={0} max={23} value={cfg.digest_hour_utc}
+                       onChange={e => setCfg(c => c ? { ...c, digest_hour_utc: Number(e.target.value) } : c)}
+                       className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
+              </div>
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           <button
