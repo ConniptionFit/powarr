@@ -816,3 +816,27 @@ async def reject_import(item_id: int, remove_download: bool = Query(False), db: 
         else:
             result["download_client"] = ["No download id — nothing to remove"]
     return result
+
+
+@router.post("/{item_id}/recover")
+async def recover_series(item_id: int, command: str = Query("RescanSeries"), db: Session = Depends(get_db)):
+    """Trigger a recovery command for a stuck series/media (OPS-01).
+    Usage: after an incident (e.g., v0.6.3 One Piece), rescan library files
+    to rebuild metadata/index. Endpoints: RescanSeries, RetagSeries, RefreshMovie, etc.
+
+    Args:
+        item_id: FailedImport row id
+        command: Sonarr/Radarr command name (RescanSeries, RetagSeries, RefreshMovie, RefreshAlbum, etc)
+    """
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Import not found")
+    if not item.matched_id:
+        raise HTTPException(status_code=400, detail="No matched series/media id available for recovery")
+
+    try:
+        client = _get_client(item.source_app, db)
+        result = await client.run_command(command, item.matched_id)
+        return {"ok": result.get("ok"), "message": result.get("message"), "commandId": result.get("commandId")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Recovery failed: {str(e)}")

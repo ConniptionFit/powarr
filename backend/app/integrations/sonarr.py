@@ -192,3 +192,47 @@ class SonarrIntegration(BaseIntegration):
                 json=series,
             )
             return put_r.status_code == 202
+
+    async def rescan_series(self, series_id: int) -> dict[str, any]:
+        """Trigger a RescanSeries command for a series (recovery operation).
+        Used after an incident (e.g., v0.6.3 One Piece) to rescan library files.
+        Returns {ok: bool, commandId?: int, message: str}."""
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                r = await client.post(
+                    f"{self._base()}/command",
+                    headers=self._headers(),
+                    json={"name": "RescanSeries", "seriesId": series_id},
+                )
+                if r.status_code in (200, 201, 202):
+                    data = r.json()
+                    return {
+                        "ok": True,
+                        "commandId": data.get("id"),
+                        "message": f"RescanSeries command queued for series {series_id}",
+                    }
+                return {"ok": False, "message": f"RescanSeries failed: HTTP {r.status_code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"RescanSeries error: {str(e)}"}
+
+    async def retag_series(self, series_id: int) -> dict[str, any]:
+        """Trigger a RetagSeries command for a series (re-tag metadata).
+        Can help recover metadata after library corruption.
+        Returns {ok: bool, commandId?: int, message: str}."""
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                r = await client.post(
+                    f"{self._base()}/command",
+                    headers=self._headers(),
+                    json={"name": "RetagSeries", "seriesId": series_id},
+                )
+                if r.status_code in (200, 201, 202):
+                    data = r.json()
+                    return {
+                        "ok": True,
+                        "commandId": data.get("id"),
+                        "message": f"RetagSeries command queued for series {series_id}",
+                    }
+                return {"ok": False, "message": f"RetagSeries failed: HTTP {r.status_code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"RetagSeries error: {str(e)}"}

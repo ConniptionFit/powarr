@@ -117,3 +117,35 @@ class BaseIntegration(ABC):
                 return r.status_code in (200, 204)
         except Exception:
             return False
+
+    async def run_command(self, command_name: str, media_id: int | None = None) -> dict[str, Any]:
+        """Generic command runner for *arr recovery operations (OPS-01).
+        Triggers commands like RescanSeries, RetagSeries, RefreshMovie, etc.
+        media_id: seriesId/movieId (varies by *arr + command type).
+        Returns {ok: bool, commandId?: int, message: str}."""
+        try:
+            payload = {"name": command_name}
+            if media_id is not None:
+                # RescanSeries, RetagSeries use seriesId; RefreshMovie uses movieId, etc.
+                # This is a simplification — some commands may need other params.
+                if "Series" in command_name or "Lidarr" in self.name:
+                    payload["seriesId" if "Lidarr" not in self.name else "artistId"] = media_id
+                else:
+                    payload["movieId"] = media_id
+
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                r = await client.post(
+                    f"{self._base()}/command",  # type: ignore[attr-defined]
+                    headers=self._headers(),
+                    json=payload,
+                )
+                if r.status_code in (200, 201, 202):
+                    data = r.json()
+                    return {
+                        "ok": True,
+                        "commandId": data.get("id"),
+                        "message": f"{command_name} command queued (ID: {data.get('id')})",
+                    }
+                return {"ok": False, "message": f"Command failed: HTTP {r.status_code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"Command error: {str(e)}"}
