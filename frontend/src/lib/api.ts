@@ -148,6 +148,29 @@ export interface OllamaSettings {
   batch_delay_ms: number; // pause between sequential batch calls; 0 = none
   match_prompt: string;
   explain_prompt: string;
+  // Per-task control (v0.27.0) — task models default to `model` when blank
+  match_enabled: boolean;
+  explain_enabled: boolean;
+  match_model: string;
+  explain_model: string;
+  // Circuit breaker (v0.27.0) — 0 threshold disables
+  breaker_threshold: number;
+  breaker_cooldown_minutes: number;
+}
+
+export interface LlmStats {
+  calls: number;
+  successes: number;
+  failures: number;
+  consecutive_failures: number;
+  avg_latency_ms: number | null;
+  last_error: string | null;
+  last_error_at: number | null; // unix seconds
+  last_success_at: number | null;
+  breaker_open: boolean;
+  breaker_seconds_remaining: number;
+  breaker_trips: number;
+  breaker_threshold: number;
 }
 
 export interface LlmScheduleSettings {
@@ -228,6 +251,8 @@ export const settingsApi = {
   ollamaPreview: (task: "match" | "explain", useRealData: boolean) =>
     req<{ output: string | null; latency_ms: number; json_valid: boolean | null; message: string }>(
       "/settings/ollama/preview", { method: "POST", body: JSON.stringify({ task, use_real_data: useRealData }) }),
+  llmStats: () => req<LlmStats>("/settings/llm/stats"),
+  llmBreakerReset: () => req<LlmStats>("/settings/llm/breaker/reset", { method: "POST" }),
 };
 
 // --- Failed imports ---

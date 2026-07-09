@@ -73,7 +73,24 @@ def get_ollama(db: Session = Depends(get_db)):
 @router.put("/ollama", response_model=OllamaSettings)
 def update_ollama(body: OllamaSettings, db: Session = Depends(get_db)):
     _put_json_setting(db, "ollama", body)
+    from app.services import llm_assist
+    llm_assist.set_breaker_config(body.breaker_threshold, body.breaker_cooldown_minutes)
     return body
+
+
+@router.get("/llm/stats")
+def llm_stats():
+    """In-memory LLM call stats + circuit-breaker state (reset on restart)."""
+    from app.services import llm_assist
+    return llm_assist.get_stats()
+
+
+@router.post("/llm/breaker/reset")
+def llm_breaker_reset():
+    """Manually close an open circuit breaker and clear the failure streak."""
+    from app.services import llm_assist
+    llm_assist.reset_breaker()
+    return llm_assist.get_stats()
 
 
 @router.get("/llm-schedule", response_model=LlmScheduleSettings)
@@ -228,7 +245,7 @@ async def ollama_preview(body: dict = Body(default={}), db: Session = Depends(ge
             prompt = llm_assist.build_explain_prompt(cfg.explain_prompt, item_summary, cfg.verbosity)
             started = time.monotonic()
             raw = await llm_assist._generate(
-                cfg.host, cfg.model, prompt, cfg.api_style, json_format=False,
+                cfg.host, cfg.model_for("explain"), prompt, cfg.api_style, json_format=False,
                 verbose=cfg.verbosity == "verbose", model_size=cfg.model_size,
                 keep_alive_minutes=cfg.keep_alive_minutes)
             latency_ms = round((time.monotonic() - started) * 1000)
@@ -252,7 +269,7 @@ async def ollama_preview(body: dict = Body(default={}), db: Session = Depends(ge
             fields["det_summary"], cfg.verbosity, cfg.reply_format, cfg.confidence_style)
         started = time.monotonic()
         raw = await llm_assist._generate(
-            cfg.host, cfg.model, prompt, cfg.api_style,
+            cfg.host, cfg.model_for("match"), prompt, cfg.api_style,
             json_format=cfg.reply_format != "simple", verbose=cfg.verbosity == "verbose",
             model_size=cfg.model_size, keep_alive_minutes=cfg.keep_alive_minutes)
         latency_ms = round((time.monotonic() - started) * 1000)

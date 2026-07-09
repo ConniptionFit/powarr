@@ -26,7 +26,9 @@ def rationale_key(ollama: OllamaSettings, item: MediaItem) -> str:
     prompt is built from. Any change to either regenerates on next request."""
     payload = json.dumps({
         "template": ollama.explain_prompt,
-        "model": ollama.model,
+        # Effective model for the explain task (== `model` when no override is
+        # set, so pre-v0.27.0 cached rationales stay valid).
+        "model": ollama.model_for("explain"),
         "api_style": ollama.api_style,
         "verbosity": ollama.verbosity,
         "model_size": ollama.model_size,
@@ -48,7 +50,7 @@ async def generate_and_store(item: MediaItem, ollama: OllamaSettings, db) -> str
     """One LLM call for one item; persists rationale + timestamp + cache key on
     success. Fail-soft: returns None and stores nothing on no-response."""
     rationale = await llm_assist.explain_deletion(
-        ollama.host, ollama.model, item_summary(item), ollama.api_style,
+        ollama.host, ollama.model_for("explain"), item_summary(item), ollama.api_style,
         template=ollama.explain_prompt, verbosity=ollama.verbosity,
         model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes)
     if rationale:
@@ -79,9 +81,9 @@ async def llm_media_run(ids: list[int] | None = None, limit: int = 50) -> dict:
         db = SessionLocal()
         try:
             ollama = _load(db, "ollama", OllamaSettings)
-            if not (ollama.enabled and ollama.host and ollama.model):
-                tasks.finish_task(task_id, "done", "LLM assist is not configured/enabled")
-                return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled"}
+            if not ollama.task_enabled("explain"):
+                tasks.finish_task(task_id, "done", "LLM assist is not configured/enabled for deletion rationales")
+                return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled for deletion rationales"}
             candidates = eligible_candidates(db, ollama, ids, limit)
             tasks.update_task(task_id, total=len(candidates))
             for i, item in enumerate(candidates, 1):
@@ -109,9 +111,13 @@ async def llm_media_run(ids: list[int] | None = None, limit: int = 50) -> dict:
 def eligible_candidates(db, ollama: OllamaSettings, ids: list[int] | None,
                         limit: int = 50) -> list[MediaItem]:
     """Explicit ids as given; otherwise deletion candidates (same filters the
-    Cleanup list applies) whose cached rationale is absent or stale-keyed."""
+    Cleanup list applies). Either way, items with a current-key cached rationale
+    are skipped — regenerating one is the per-item force=true explain path."""
     if ids:
-        return db.query(MediaItem).filter(MediaItem.id.in_(ids)).limit(limit).all()
+        rows = db.query(MediaItem).filter(MediaItem.id.in_(ids)).all()
+        return [r for r in rows
+                if not (r.llm_rationale and r.llm_rationale_key == rationale_key(ollama, r))
+                ][:limit]
     weights = _load(db, "scoring_weights", ScoringWeights)
     cleanup = _load(db, "cleanup", CleanupSettings)
     q = (db.query(MediaItem)

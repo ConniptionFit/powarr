@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd } from "lucide-react";
 import { importsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
+import { usePersistedState } from "../../lib/usePersistedState";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
 
@@ -357,7 +358,9 @@ const FILTERS = ["suggested", "resolve_failed", "orphan_pending", "auto_resolved
 
 export default function FailedImports() {
   const qc = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState<string>("suggested");
+  // Filter/sort choices persist per-browser (v0.27.0, Approved Queue #11) —
+  // column layout below already did since v0.4.0.
+  const [statusFilter, setStatusFilter] = usePersistedState<string>("powarr.failedImports.statusFilter", "suggested");
   const [scanning, setScanning] = useState(false);
   const [confirmAccept, setConfirmAccept] = useState<number | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -369,13 +372,13 @@ export default function FailedImports() {
   const [visibleCols, setVisibleCols] = useState<Set<ColKey>>(loadVisible);
   const [widths, setWidths] = useState<Record<string, number>>(loadWidths);
   const [showColMenu, setShowColMenu] = useState(false);
-  const [sortBy, setSortBy] = useState<keyof FailedImport>("created_at");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [sortBy, setSortBy] = usePersistedState<keyof FailedImport>("powarr.failedImports.sortBy", "created_at");
+  const [sortDir, setSortDir] = usePersistedState<"asc" | "desc">("powarr.failedImports.sortDir", "desc");
   const [packReviewLoading, setPackReviewLoading] = useState(new Set<number>());
   const [packReviewResults, setPackReviewResults] = useState<Record<string, Array<{ file: string; season: number; episode: number; match_type: string; confidence: string; reason: string }>>>({});
-  const [downgradeOnly, setDowngradeOnly] = useState(false);
-  const [suspiciousOnly, setSuspiciousOnly] = useState(false);
-  const [packFilter, setPackFilter] = useState<"all" | "packs" | "singles">("all");
+  const [downgradeOnly, setDowngradeOnly] = usePersistedState<boolean>("powarr.failedImports.downgradeOnly", false);
+  const [suspiciousOnly, setSuspiciousOnly] = usePersistedState<boolean>("powarr.failedImports.suspiciousOnly", false);
+  const [packFilter, setPackFilter] = usePersistedState<"all" | "packs" | "singles">("powarr.failedImports.packFilter", "all");
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {

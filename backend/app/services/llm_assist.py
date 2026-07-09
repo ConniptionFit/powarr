@@ -10,11 +10,98 @@ reply instruction is always appended for match prompts so custom templates still
 import json
 import logging
 import re
+import time
 from typing import Any, Optional
 
 import httpx
 
 logger = logging.getLogger("powarr")
+
+
+# --- Call stats + circuit breaker (v0.27.0, Approved Queue #7) -----------------
+# In-memory only (like services/tasks.py) — resets on restart, no DB. Every real
+# LLM call funnels through _generate/_generate_stream, so recording there covers
+# match review, pack review, rationales, streams, and previews alike. The breaker
+# preserves the fail-soft contract: while open, calls return None immediately
+# instead of hammering a downed/overloaded host on every scan cycle.
+
+_breaker_threshold = 5       # consecutive failures that open the breaker; 0 = disabled
+_breaker_cooldown_s = 600.0  # how long an open breaker rejects calls before retrying
+
+
+def _fresh_stats() -> dict[str, Any]:
+    return {"calls": 0, "successes": 0, "failures": 0, "consecutive_failures": 0,
+            "total_latency_ms": 0, "last_error": None, "last_error_at": None,
+            "last_success_at": None, "breaker_open_until": 0.0, "breaker_trips": 0}
+
+
+_stats = _fresh_stats()
+
+
+def set_breaker_config(threshold: int, cooldown_minutes: int) -> None:
+    """Applied at startup and whenever the LLM settings are saved."""
+    global _breaker_threshold, _breaker_cooldown_s
+    _breaker_threshold = max(0, int(threshold or 0))
+    _breaker_cooldown_s = max(1, int(cooldown_minutes or 0)) * 60.0
+
+
+def breaker_open(now: Optional[float] = None) -> bool:
+    return (now if now is not None else time.monotonic()) < _stats["breaker_open_until"]
+
+
+def record_result(ok: bool, latency_ms: int, error: str = "",
+                  now: Optional[float] = None) -> None:
+    """One call's outcome. A success closes the breaker and resets the failure
+    streak; hitting the threshold-th consecutive failure opens it for the cooldown."""
+    now = now if now is not None else time.monotonic()
+    _stats["calls"] += 1
+    if ok:
+        # Latency is averaged over successes only — a failure's "latency" is
+        # usually just the timeout and would skew the readout meaninglessly.
+        _stats["total_latency_ms"] += latency_ms
+        _stats["successes"] += 1
+        _stats["consecutive_failures"] = 0
+        _stats["breaker_open_until"] = 0.0
+        _stats["last_success_at"] = time.time()
+        return
+    _stats["failures"] += 1
+    _stats["consecutive_failures"] += 1
+    _stats["last_error"] = error[:300] or None
+    _stats["last_error_at"] = time.time()
+    if _breaker_threshold and _stats["consecutive_failures"] >= _breaker_threshold \
+            and not breaker_open(now):
+        _stats["breaker_open_until"] = now + _breaker_cooldown_s
+        _stats["breaker_trips"] += 1
+        logger.warning(
+            f"LLM circuit breaker opened after {_stats['consecutive_failures']} consecutive "
+            f"failures — pausing LLM calls for {_breaker_cooldown_s / 60:.0f} min")
+
+
+def reset_breaker() -> None:
+    """Manual close from the UI: clears the open window and the failure streak
+    (cumulative counters are kept — only a restart zeroes those)."""
+    _stats["breaker_open_until"] = 0.0
+    _stats["consecutive_failures"] = 0
+
+
+def get_stats() -> dict[str, Any]:
+    now = time.monotonic()
+    open_ = breaker_open(now)
+    return {
+        "calls": _stats["calls"],
+        "successes": _stats["successes"],
+        "failures": _stats["failures"],
+        "consecutive_failures": _stats["consecutive_failures"],
+        "avg_latency_ms": round(_stats["total_latency_ms"] / _stats["successes"])
+                          if _stats["successes"] else None,
+        "last_error": _stats["last_error"],
+        "last_error_at": _stats["last_error_at"],
+        "last_success_at": _stats["last_success_at"],
+        "breaker_open": open_,
+        "breaker_seconds_remaining": round(_stats["breaker_open_until"] - now) if open_ else 0,
+        "breaker_trips": _stats["breaker_trips"],
+        "breaker_threshold": _breaker_threshold,
+    }
 
 TAGS_TIMEOUT = 5
 GENERATE_TIMEOUT = 20
@@ -258,7 +345,11 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
     base = _base_url(host)
     if not base or not model:
         return None
+    if breaker_open():
+        logger.info("LLM assist skipped: circuit breaker is open")
+        return None
     max_tokens, timeout = _limits(model_size, verbose)
+    started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             if api_style == "openai":
@@ -272,23 +363,29 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
                     body["response_format"] = {"type": "json_object"}
                 r = await client.post(f"{base}/v1/chat/completions", json=body)
                 r.raise_for_status()
-                return r.json()["choices"][0]["message"]["content"]
-            body = {
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.0, "num_predict": max_tokens},
-            }
-            if keep_alive_minutes and keep_alive_minutes > 0:
-                # Keeps the model loaded between sequential calls in a batch run —
-                # ollama-only; the openai style (LM Studio, llama.cpp) has no equivalent.
-                body["keep_alive"] = f"{int(keep_alive_minutes)}m"
-            if json_format:
-                body["format"] = "json"
-            r = await client.post(f"{base}/api/generate", json=body)
-            r.raise_for_status()
-            return r.json().get("response", "")
+                out = r.json()["choices"][0]["message"]["content"]
+            else:
+                body = {
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.0, "num_predict": max_tokens},
+                }
+                if keep_alive_minutes and keep_alive_minutes > 0:
+                    # Keeps the model loaded between sequential calls in a batch run —
+                    # ollama-only; the openai style (LM Studio, llama.cpp) has no equivalent.
+                    body["keep_alive"] = f"{int(keep_alive_minutes)}m"
+                if json_format:
+                    body["format"] = "json"
+                r = await client.post(f"{base}/api/generate", json=body)
+                r.raise_for_status()
+                out = r.json().get("response", "")
+            record_result(True, round((time.monotonic() - started) * 1000))
+            return out
     except Exception as e:
+        # httpx timeout exceptions often stringify empty — keep the class name.
+        record_result(False, round((time.monotonic() - started) * 1000),
+                      str(e) or type(e).__name__)
         logger.info(f"LLM assist unavailable: {e}")
         return None
 
@@ -328,7 +425,12 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
     base = _base_url(host)
     if not base or not model:
         return
+    if breaker_open():
+        logger.info("LLM stream skipped: circuit breaker is open")
+        return
     max_tokens, timeout = _limits(model_size, verbose)
+    started = time.monotonic()
+    emitted_any = False
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             if api_style == "openai":
@@ -349,7 +451,9 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
                             break
                         delta = (json.loads(data).get("choices") or [{}])[0].get("delta", {}).get("content")
                         if delta:
+                            emitted_any = True
                             yield delta
+                record_result(True, round((time.monotonic() - started) * 1000))
                 return
             body = {
                 "model": model,
@@ -366,10 +470,21 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
                         continue
                     obj = json.loads(line)
                     if obj.get("response"):
+                        emitted_any = True
                         yield obj["response"]
                     if obj.get("done"):
                         break
+            record_result(True, round((time.monotonic() - started) * 1000))
+    except GeneratorExit:
+        # Consumer closed the stream early (hit its display cap) — the call itself
+        # worked; it must never accumulate toward the breaker.
+        record_result(True, round((time.monotonic() - started) * 1000))
+        raise
     except Exception as e:
+        # A stream that already emitted text still counts as a success for the
+        # breaker — only a call that produced nothing is a real failure.
+        record_result(emitted_any, round((time.monotonic() - started) * 1000),
+                      str(e) or type(e).__name__)
         logger.info(f"LLM stream unavailable: {e}")
 
 

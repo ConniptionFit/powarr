@@ -263,6 +263,8 @@ function OllamaCard() {
     verbosity: "brief", model_size: "medium", keep_alive_minutes: 10,
     reply_format: "json", confidence_style: "numeric", batch_delay_ms: 0,
     match_prompt: "", explain_prompt: "",
+    match_enabled: true, explain_enabled: true, match_model: "", explain_model: "",
+    breaker_threshold: 5, breaker_cooldown_minutes: 10,
     ...(cfg ?? {}),
     ...(presetProfile ?? {}), // a chosen model preset overrides the profile fields
     enabled, host, model, api_style: apiStyle,

@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.26.0", docs_url="/api/docs")
+app = FastAPI(title="Powarr", version="0.27.0", docs_url="/api/docs")
 
 # Paths that stay reachable without a session: the auth flow itself, the
 # health endpoint (Docker healthcheck probes from inside the container), and
@@ -47,6 +47,7 @@ async def startup():
     init_db()
     _seed_integrations()
     _seed_settings()
+    _apply_llm_breaker_config()
     from app.services.import_matcher import poller_loop
     from app.services.scheduler import maintenance_loop
     _poller_task = asyncio.create_task(poller_loop())
@@ -71,6 +72,25 @@ def _seed_integrations():
             if not db.query(Integration).filter_by(name=name).first():
                 db.add(Integration(name=name))
         db.commit()
+    finally:
+        db.close()
+
+
+def _apply_llm_breaker_config():
+    """The circuit breaker lives in llm_assist module state (no DB access there by
+    design) — push the saved thresholds in at startup; the PUT /settings/ollama
+    endpoint re-applies them on every save."""
+    from app.database import SessionLocal
+    from app.models.app_setting import AppSetting
+    from app.schemas.settings import OllamaSettings
+    from app.services import llm_assist
+    import json
+
+    db = SessionLocal()
+    try:
+        row = db.query(AppSetting).filter_by(key="ollama").first()
+        cfg = OllamaSettings(**json.loads(row.value)) if row and row.value else OllamaSettings()
+        llm_assist.set_breaker_config(cfg.breaker_threshold, cfg.breaker_cooldown_minutes)
     finally:
         db.close()
 

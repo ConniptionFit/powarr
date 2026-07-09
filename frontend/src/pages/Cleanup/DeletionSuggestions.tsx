@@ -2,6 +2,7 @@ import { Fragment, useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot } from "lucide-react";
 import { mediaApi, integrationsApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
+import { usePersistedState } from "../../lib/usePersistedState";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
 
@@ -61,11 +62,12 @@ function groupByShow(items: MediaItem[]): ShowGroup[] {
 
 export default function DeletionSuggestions() {
   const qc = useQueryClient();
-  const [minScore, setMinScore] = useState(40);
-  const [mediaType, setMediaType] = useState("");
-  const [showMode, setShowMode] = useState<"episode" | "show">("show");
-  const [sortBy, setSortBy] = useState<SortKey>("score");
-  const [order, setOrder] = useState<"asc" | "desc">("desc");
+  // Filters + sort persist per-browser (v0.27.0, Approved Queue #11)
+  const [minScore, setMinScore] = usePersistedState("powarr.deletionSuggestions.minScore", 40);
+  const [mediaType, setMediaType] = usePersistedState("powarr.deletionSuggestions.mediaType", "");
+  const [showMode, setShowMode] = usePersistedState<"episode" | "show">("powarr.deletionSuggestions.showMode", "show");
+  const [sortBy, setSortBy] = usePersistedState<SortKey>("powarr.deletionSuggestions.sortBy", "score");
+  const [order, setOrder] = usePersistedState<"asc" | "desc">("powarr.deletionSuggestions.order", "desc");
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null); // id or "show:title"
@@ -155,7 +157,11 @@ export default function DeletionSuggestions() {
   // Once fresh list data lands, cached rationales are current — drop finished
   // stream buffers so the stored text (with its date stamp) takes over.
   useEffect(() => {
-    if (explainBusy === null) setStreamText({});
+    // Bail out on an already-empty buffer (same reference = no re-render):
+    // while the query is pending, `rawItems` falls back to a fresh [] every
+    // render, and unconditionally setting a fresh {} here looped render → effect
+    // → render until the data arrived ("Maximum update depth exceeded").
+    if (explainBusy === null) setStreamText(s => Object.keys(s).length ? {} : s);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawItems]);
 
@@ -171,6 +177,20 @@ export default function DeletionSuggestions() {
     };
     return () => es.close();
   }, [qc]);
+
+  // Batch "explain all visible" (v0.27.0, Approved Queue #8): one background LLM
+  // run over the currently listed items — progress lands in the Active Processes
+  // tray, and the media_llm_run SSE handler above refreshes rationales as it ends.
+  const [batchMsg, setBatchMsg] = useState<string | null>(null);
+  const explainVisible = async () => {
+    setBatchMsg(null);
+    try {
+      const r = await mediaApi.llmRun(displayItems.map(i => i.id));
+      setBatchMsg(r.message);
+    } catch (e: unknown) {
+      setBatchMsg(`LLM run failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   const handleSync = async () => {
     setSyncing(true);
@@ -205,6 +225,17 @@ export default function DeletionSuggestions() {
         <p className="text-slate-400 text-sm">Deletion candidates sorted by score</p>
         <div className="flex items-center gap-3">
           {syncMsg && <span className="text-sm text-red-400">{syncMsg}</span>}
+          {batchMsg && <span className="text-sm text-slate-400">{batchMsg}</span>}
+          {!isShowMode && displayItems.length > 0 && (
+            <button
+              onClick={explainVisible}
+              title="Generate an LLM deletion rationale for every listed item (cached ones are skipped) — runs in the background"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors"
+            >
+              <Bot size={15} />
+              Explain Visible ({displayItems.length})
+            </button>
+          )}
           <button
             onClick={handleSync}
             disabled={syncing}

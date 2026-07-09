@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { Trash2, DownloadCloud, History } from "lucide-react";
+import { usePersistedState } from "../../lib/usePersistedState";
 import DeletionSuggestions from "./DeletionSuggestions";
 import FailedImports from "./FailedImports";
 import DeletionHistory from "./DeletionHistory";
@@ -13,7 +13,7 @@ const TABS = [
 type TabKey = (typeof TABS)[number]["key"];
 
 export default function Cleanup() {
-  const [tab, setTab] = useState<TabKey>("imports");
+  const [tab, setTab] = usePersistedState<TabKey>("powarr.cleanup.tab", "imports");
 
   return (
     <div className="p-4 sm:p-8">

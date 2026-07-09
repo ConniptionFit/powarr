@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup } from "lucide-react";
+import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup, Activity, RotateCcw } from "lucide-react";
 import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ImportMatchingSettings,
          type CleanupSettings, type SyncSettings, type NotificationSettings, type OllamaSettings,
          type LlmScheduleSettings, type BackupSettings, type BackupFile } from "../../lib/api";
@@ -97,6 +97,29 @@ function ImportMatchingSection() {
     </div>
   );
 
+  // Slider variant for 0-1 mix weights (Approved Queue #9) — same shape as
+  // numRow, but a range input with a live readout beats typing decimals for
+  // "how much should the LLM count" style settings.
+  const sliderRow = (label: string, description: string, field: keyof ImportMatchingSettings,
+                     opts: { min: number; max: number; step: number }) => (
+    <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+      <div>
+        <p className="text-white text-sm font-medium">{label}</p>
+        <p className="text-slate-500 text-xs mt-0.5">{description}</p>
+      </div>
+      <div className="flex items-center gap-3 ml-6">
+        <input
+          type="range"
+          min={opts.min} max={opts.max} step={opts.step}
+          value={cfg[field] as number}
+          onChange={e => set(field, Number(e.target.value) as never)}
+          className="w-40 accent-purple-500"
+        />
+        <span className="text-white text-sm font-mono w-10 text-right">{(cfg[field] as number).toFixed(2)}</span>
+      </div>
+    </div>
+  );
+
   const toggleRow = (label: string, description: string, field: keyof ImportMatchingSettings, nested = false) => (
     <label className={`py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer ${nested ? "pl-6" : ""}`}>
       <div>
@@ -151,7 +174,7 @@ function ImportMatchingSection() {
       {numRow("Episode Number Weight", "Weight of season/episode (or anime absolute) number corroboration", "number_weight", { min: 0, max: 1, step: 0.05 })}
       {numRow("Title-Only Cap", "Confidence ceiling when no episode number corroborates a title match — keeps title-only matches below auto-resolve", "title_only_cap", { min: 0, max: 1, step: 0.01 })}
       {toggleRow("Anime Absolute Numbering", "For Sonarr anime series, match by absolute episode number (with season/episode fallback and stale-data guards)", "anime_absolute_numbering")}
-      {numRow("LLM Blend Weight", "The LLM's share of the final confidence blend: final = (1−w)·deterministic + w·LLM. 0 = ignore the LLM entirely; 0.3 = long-standing default", "llm_blend_weight", { min: 0, max: 1, step: 0.05 })}
+      {sliderRow("LLM Blend Weight", "The LLM's share of the final confidence blend: final = (1−w)·deterministic + w·LLM. 0 = ignore the LLM entirely; 0.3 = long-standing default", "llm_blend_weight", { min: 0, max: 1, step: 0.05 })}
       {toggleRow("Auto-Reject Quality Downgrades", "Skip triage entirely for downloads where every file rejects as 'not an upgrade' over an existing library file — they can never import as-is. Off by default; the Downgrade badge and filter always show these regardless of this setting.", "quality_downgrade_auto_reject")}
 
       <div className="py-4 border-b border-purple-900/20">
@@ -539,6 +562,8 @@ function LLMAssistSection() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["ollama-settings"], queryFn: settingsApi.getOllama });
   const { data: ctx } = useQuery({ queryKey: ["ollama-ctx"], queryFn: settingsApi.ollamaContextLength });
+  // In-memory call stats + breaker state — cheap endpoint, poll while the page is open.
+  const { data: stats } = useQuery({ queryKey: ["llm-stats"], queryFn: settingsApi.llmStats, refetchInterval: 15000 });
   const [cfg, setCfg] = useState<OllamaSettings | null>(null);
   const [task, setTask] = useState<"match" | "explain">("match");
   const [msg, setMsg] = useState<string | null>(null);
@@ -644,6 +669,99 @@ function LLMAssistSection() {
         </button>
       </div>
       {msg && <p className="text-xs text-slate-300 pb-2">{msg}</p>}
+
+      {/* Call stats + circuit breaker readout (v0.27.0, Approved Queue #7).
+          In-memory on the backend — counters reset when the container restarts. */}
+      {stats && (
+        <div className={`rounded-lg border px-4 py-3 mb-2 ${stats.breaker_open ? "border-red-800/60 bg-red-950/30" : "border-purple-900/30 bg-surface"}`}>
+          <div className="flex items-center gap-2 flex-wrap text-xs">
+            <Activity size={13} className={stats.breaker_open ? "text-red-400" : "text-brand-light"} />
+            <span className="text-slate-300">
+              {stats.calls} call{stats.calls === 1 ? "" : "s"} since startup
+              {stats.calls > 0 && <> · <span className="text-green-400">{stats.successes} ok</span> · <span className={stats.failures ? "text-red-400" : "text-slate-500"}>{stats.failures} failed</span></>}
+              {stats.avg_latency_ms !== null && <> · avg {(stats.avg_latency_ms / 1000).toFixed(1)}s</>}
+              {stats.breaker_trips > 0 && <> · breaker tripped {stats.breaker_trips}×</>}
+            </span>
+            {stats.breaker_open ? (
+              <span className="text-red-300 font-medium">
+                Circuit breaker OPEN — LLM calls paused for {Math.ceil(stats.breaker_seconds_remaining / 60)} min
+              </span>
+            ) : stats.consecutive_failures > 0 ? (
+              <span className="text-amber-400">{stats.consecutive_failures} consecutive failure{stats.consecutive_failures === 1 ? "" : "s"}</span>
+            ) : null}
+            {(stats.breaker_open || stats.consecutive_failures > 0) && (
+              <button
+                onClick={async () => { await settingsApi.llmBreakerReset(); qc.invalidateQueries({ queryKey: ["llm-stats"] }); }}
+                className="ml-auto flex items-center gap-1 px-2 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 transition-colors"
+                title="Close the breaker and clear the failure streak — the next call goes through immediately"
+              >
+                <RotateCcw size={11} /> Reset
+              </button>
+            )}
+          </div>
+          {stats.last_error && (
+            <p className="text-slate-500 text-[11px] mt-1 truncate" title={stats.last_error}>last error: {stats.last_error}</p>
+          )}
+        </div>
+      )}
+
+      {/* Per-task toggles + model overrides (v0.27.0, Approved Queue #10) */}
+      {(["match", "explain"] as const).map(t => (
+        <div key={t} className="py-4 border-b border-purple-900/20 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-white text-sm font-medium">{t === "match" ? "Import Matching Task" : "Deletion Rationale Task"}</p>
+            <p className="text-slate-500 text-xs mt-0.5">
+              {t === "match"
+                ? "LLM review of failed-import matches and season-pack files. Untick to keep the deterministic scorer only."
+                : "LLM rationales for Cleanup deletion candidates."}
+              {" "}Model field empty = use the shared model from the Integrations page.
+            </p>
+          </div>
+          <div className="flex items-center gap-3 ml-6 flex-shrink-0">
+            <input
+              type="text"
+              placeholder={cfg.model || "shared model"}
+              value={t === "match" ? cfg.match_model : cfg.explain_model}
+              onChange={e => setCfg(c => c ? { ...c, [t === "match" ? "match_model" : "explain_model"]: e.target.value } : c)}
+              className="w-44 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white placeholder:text-slate-600"
+            />
+            <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400">
+              <input
+                type="checkbox"
+                checked={t === "match" ? cfg.match_enabled : cfg.explain_enabled}
+                onChange={e => setCfg(c => c ? { ...c, [t === "match" ? "match_enabled" : "explain_enabled"]: e.target.checked } : c)}
+                className="accent-purple-500"
+              />
+              enabled
+            </label>
+          </div>
+        </div>
+      ))}
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Circuit Breaker</p>
+          <p className="text-slate-500 text-xs mt-0.5">Auto-pause all LLM calls after this many consecutive failures, for the cooldown period, instead of re-hitting a downed host every scan. 0 = never pause</p>
+        </div>
+        <div className="flex items-center gap-2 ml-6 flex-shrink-0">
+          <input
+            type="number" min={0} max={100}
+            value={cfg.breaker_threshold}
+            onChange={e => setCfg(c => c ? { ...c, breaker_threshold: Math.max(0, Number(e.target.value) || 0) } : c)}
+            className="w-16 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white text-right"
+            title="Consecutive failures before pausing"
+          />
+          <span className="text-slate-500 text-xs">failures →</span>
+          <input
+            type="number" min={1} max={1440}
+            value={cfg.breaker_cooldown_minutes}
+            onChange={e => setCfg(c => c ? { ...c, breaker_cooldown_minutes: Math.max(1, Number(e.target.value) || 1) } : c)}
+            className="w-16 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white text-right"
+            title="Cooldown minutes while paused"
+          />
+          <span className="text-slate-500 text-xs">min pause</span>
+        </div>
+      </div>
 
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>

@@ -113,9 +113,11 @@ async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db
     from app.services import tasks
     from app.services.import_matcher import llm_rescore, llm_run_active, queue_llm_run
     ids = payload.get("ids") or None
+    from app.schemas.settings import OllamaSettings
     cfg = db.query(AppSetting).filter_by(key="ollama").first()
-    if not cfg or not cfg.value or not json.loads(cfg.value).get("enabled"):
-        raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
+    ollama_cfg = OllamaSettings(**json.loads(cfg.value)) if cfg and cfg.value else OllamaSettings()
+    if not ollama_cfg.task_enabled("match"):
+        raise HTTPException(status_code=400, detail="LLM assist is not enabled for import matching — check Settings → LLM Assist")
     if ids:
         count = db.query(FailedImport).filter(FailedImport.id.in_(ids)).count()
     else:
@@ -148,9 +150,11 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
         return {"matches": [], "message": "No matched library entry — run LLM-run first to match this download"}
     if not item.download_id:
         return {"matches": [], "message": "No download id on this item"}
-    cfg = db.query(AppSetting).filter_by(key="ollama").first()
-    if not cfg or not cfg.value or not json.loads(cfg.value).get("enabled"):
-        raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
+    from app.schemas.settings import OllamaSettings
+    row_cfg = db.query(AppSetting).filter_by(key="ollama").first()
+    ollama_cfg = OllamaSettings(**json.loads(row_cfg.value)) if row_cfg and row_cfg.value else OllamaSettings()
+    if not ollama_cfg.task_enabled("match"):
+        raise HTTPException(status_code=400, detail="LLM assist is not enabled for import matching — check Settings → LLM Assist")
 
     # Fetch file list from the download
     row = db.query(Integration).filter_by(name=item.source_app, enabled=True).first()
@@ -172,16 +176,15 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
     if not file_names:
         return {"matches": [], "message": "No files found in this download"}
 
-    ollama_cfg = json.loads(cfg.value) if cfg.value else {}
     matches = await llm_assist.review_pack_files(
-        host=ollama_cfg.get("host"), model=ollama_cfg.get("model"),
+        host=ollama_cfg.host, model=ollama_cfg.model_for("match"),
         release_title=item.raw_title, candidate_title=item.matched_title,
         file_names=file_names,
-        api_style=ollama_cfg.get("api_style", "ollama"),
-        template=ollama_cfg.get("pack_prompt", ""),
-        verbosity=ollama_cfg.get("verbosity", "brief"),
-        model_size=ollama_cfg.get("model_size", "medium"),
-        keep_alive_minutes=ollama_cfg.get("keep_alive_minutes", 10)
+        api_style=ollama_cfg.api_style,
+        template=ollama_cfg.pack_prompt,
+        verbosity=ollama_cfg.verbosity,
+        model_size=ollama_cfg.model_size,
+        keep_alive_minutes=ollama_cfg.keep_alive_minutes,
     )
 
     # Persist results to database

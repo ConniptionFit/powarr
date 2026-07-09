@@ -395,5 +395,152 @@ class TestBlendConfidence(unittest.TestCase):
         self.assertEqual(blend_confidence(1.0, 1.0, 0.5), 1.0)   # never exceeds 1
 
 
+class TestCircuitBreaker(unittest.TestCase):
+    """Breaker/stats logic (v0.27.0, Approved Queue #7). record_result/breaker_open
+    take an explicit `now` so these tests never sleep."""
+
+    def setUp(self):
+        llm_assist._stats = llm_assist._fresh_stats()
+        llm_assist.set_breaker_config(3, 10)
+
+    def tearDown(self):
+        llm_assist._stats = llm_assist._fresh_stats()
+        llm_assist.set_breaker_config(5, 10)
+
+    def test_opens_after_threshold_consecutive_failures(self):
+        for _ in range(2):
+            llm_assist.record_result(False, 100, "boom", now=1000.0)
+        self.assertFalse(llm_assist.breaker_open(1000.0))
+        llm_assist.record_result(False, 100, "boom", now=1000.0)
+        self.assertTrue(llm_assist.breaker_open(1000.0))
+        self.assertEqual(llm_assist._stats["breaker_trips"], 1)
+
+    def test_cooldown_expiry_closes_it(self):
+        for _ in range(3):
+            llm_assist.record_result(False, 100, "boom", now=1000.0)
+        self.assertTrue(llm_assist.breaker_open(1000.0 + 599))
+        self.assertFalse(llm_assist.breaker_open(1000.0 + 601))
+
+    def test_success_resets_streak_and_closes(self):
+        for _ in range(3):
+            llm_assist.record_result(False, 100, "boom", now=1000.0)
+        self.assertTrue(llm_assist.breaker_open(1000.0))
+        llm_assist.record_result(True, 250, now=1000.0)
+        self.assertFalse(llm_assist.breaker_open(1000.0))
+        self.assertEqual(llm_assist._stats["consecutive_failures"], 0)
+
+    def test_interleaved_failures_never_open(self):
+        for _ in range(10):
+            llm_assist.record_result(False, 100, "boom", now=1000.0)
+            llm_assist.record_result(False, 100, "boom", now=1000.0)
+            llm_assist.record_result(True, 250, now=1000.0)
+        self.assertFalse(llm_assist.breaker_open(1000.0))
+        self.assertEqual(llm_assist._stats["breaker_trips"], 0)
+
+    def test_threshold_zero_disables_breaker(self):
+        llm_assist.set_breaker_config(0, 10)
+        for _ in range(50):
+            llm_assist.record_result(False, 100, "boom", now=1000.0)
+        self.assertFalse(llm_assist.breaker_open(1000.0))
+
+    def test_manual_reset_closes_and_clears_streak(self):
+        for _ in range(3):
+            llm_assist.record_result(False, 100, "boom", now=1000.0)
+        llm_assist.reset_breaker()
+        self.assertFalse(llm_assist.breaker_open(1000.0))
+        self.assertEqual(llm_assist._stats["consecutive_failures"], 0)
+        # Cumulative counters survive a manual reset.
+        self.assertEqual(llm_assist._stats["failures"], 3)
+
+    def test_stats_readout_shape_and_latency_avg(self):
+        llm_assist.record_result(True, 200, now=1000.0)
+        llm_assist.record_result(True, 400, now=1000.0)
+        llm_assist.record_result(False, 20000, "timeout", now=1000.0)
+        s = llm_assist.get_stats()
+        self.assertEqual(s["calls"], 3)
+        self.assertEqual(s["successes"], 2)
+        self.assertEqual(s["failures"], 1)
+        # Failure latency (usually just the timeout) never skews the average.
+        self.assertEqual(s["avg_latency_ms"], 300)
+        self.assertEqual(s["last_error"], "timeout")
+        self.assertFalse(s["breaker_open"])
+
+    def test_generate_short_circuits_while_open(self):
+        import asyncio
+        for _ in range(3):
+            llm_assist.record_result(False, 100, "boom")
+        calls = llm_assist._stats["calls"]
+        out = asyncio.run(llm_assist._generate("10.0.0.1:11434", "m", "prompt"))
+        self.assertIsNone(out)
+        # A short-circuited call is not recorded — it never reached the host.
+        self.assertEqual(llm_assist._stats["calls"], calls)
+
+
+class TestPerTaskLlmSettings(unittest.TestCase):
+    """OllamaSettings.model_for/task_enabled (v0.27.0, Approved Queue #10)."""
+
+    def _cfg(self, **kw):
+        from app.schemas.settings import OllamaSettings
+        base = dict(enabled=True, host="10.0.0.1:11434", model="default-model")
+        base.update(kw)
+        return OllamaSettings(**base)
+
+    def test_blank_overrides_fall_back_to_shared_model(self):
+        cfg = self._cfg()
+        self.assertEqual(cfg.model_for("match"), "default-model")
+        self.assertEqual(cfg.model_for("explain"), "default-model")
+        self.assertTrue(cfg.task_enabled("match"))
+        self.assertTrue(cfg.task_enabled("explain"))
+
+    def test_per_task_model_overrides(self):
+        cfg = self._cfg(match_model="fast-model", explain_model="  ")
+        self.assertEqual(cfg.model_for("match"), "fast-model")
+        self.assertEqual(cfg.model_for("explain"), "default-model")  # whitespace = blank
+
+    def test_per_task_toggles_narrow_master_switch(self):
+        cfg = self._cfg(match_enabled=False)
+        self.assertFalse(cfg.task_enabled("match"))
+        self.assertTrue(cfg.task_enabled("explain"))
+
+    def test_master_switch_off_disables_everything(self):
+        cfg = self._cfg(enabled=False, match_enabled=True, explain_enabled=True)
+        self.assertFalse(cfg.task_enabled("match"))
+        self.assertFalse(cfg.task_enabled("explain"))
+
+    def test_no_usable_model_disables_task(self):
+        cfg = self._cfg(model="", match_model="", explain_model="rat-model")
+        self.assertFalse(cfg.task_enabled("match"))
+        self.assertTrue(cfg.task_enabled("explain"))
+
+    def test_pre_upgrade_config_defaults_keep_behavior(self):
+        # A saved pre-v0.27.0 payload has none of the new keys — everything
+        # defaults on, so an upgrade changes nothing.
+        from app.schemas.settings import OllamaSettings
+        cfg = OllamaSettings(**{"enabled": True, "host": "h", "model": "m"})
+        self.assertTrue(cfg.task_enabled("match"))
+        self.assertTrue(cfg.task_enabled("explain"))
+        self.assertEqual(cfg.breaker_threshold, 5)
+
+    def test_rationale_key_uses_effective_explain_model(self):
+        # Same key when no override (pre-upgrade caches stay valid); new key
+        # when an explain-specific model is set.
+        from app.services.media_llm import rationale_key
+
+        class _Item:
+            score = 55.0
+            watch_count = 0
+            last_watched_at = None
+            file_size = 1024
+
+        base = self._cfg()
+        self.assertEqual(rationale_key(base, _Item()),
+                         rationale_key(self._cfg(explain_model=""), _Item()))
+        self.assertNotEqual(rationale_key(base, _Item()),
+                            rationale_key(self._cfg(explain_model="other"), _Item()))
+        # A match-side override never touches rationale caching.
+        self.assertEqual(rationale_key(base, _Item()),
+                         rationale_key(self._cfg(match_model="other"), _Item()))
+
+
 if __name__ == "__main__":
     unittest.main()

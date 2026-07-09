@@ -542,7 +542,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     llm_confidence = None
     llm_rationale = None
     llm_agrees = None
-    if matched_title and ollama.enabled and ollama.host and ollama.model:
+    if matched_title and ollama.task_enabled("match"):
         # Build comprehensive context: triggered series, queue state, pack info
         triggered_id = rec.get(id_key)
         triggered_title = lib_by_id.get(triggered_id, {}).get(title_key) if triggered_id else None
@@ -573,7 +573,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
                 f"mappable file from the pack, not a single episode.")
         llm_context = " | ".join(llm_context_parts)
         llm = await llm_assist.review_match(
-            ollama.host, ollama.model, raw_title, matched_title,
+            ollama.host, ollama.model_for("match"), raw_title, matched_title,
             det_summary=f"{match_rationale} (heuristic confidence {heuristic_confidence})",
             context=llm_context,
             api_style=ollama.api_style, template=ollama.match_prompt,
@@ -1152,8 +1152,8 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
     db = SessionLocal()
     try:
         cfg, ollama = load_settings(db)
-        if not (ollama.enabled and ollama.host and ollama.model):
-            return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled"}
+        if not ollama.task_enabled("match"):
+            return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled for import matching"}
         q = db.query(FailedImport)
         if ids:
             q = q.filter(FailedImport.id.in_(ids))
@@ -1172,7 +1172,7 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
             det_summary = (row.match_rationale or "series/title heuristics only") + \
                 f" (heuristic confidence {row.heuristic_confidence})"
             llm = await llm_assist.review_match(
-                ollama.host, ollama.model, row.raw_title, row.matched_title,
+                ollama.host, ollama.model_for("match"), row.raw_title, row.matched_title,
                 det_summary=det_summary,
                 context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
                 api_style=ollama.api_style, template=ollama.match_prompt,

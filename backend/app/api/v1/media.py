@@ -174,8 +174,8 @@ async def media_llm_run(payload: dict = Body(default={}), db: Session = Depends(
     if llm_assist.slot_active():
         raise HTTPException(status_code=409, detail="An LLM run is already in progress")
     ollama = _get_setting(db, "ollama", OllamaSettings)
-    if not ollama.enabled:
-        raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
+    if not ollama.task_enabled("explain"):
+        raise HTTPException(status_code=400, detail="LLM assist is not enabled for deletion rationales — check Settings → LLM Assist")
     count = len(media_llm.eligible_candidates(db, ollama, ids))
     tasks.spawn_background(media_llm.llm_media_run(ids))
     return {"started": count, "total_eligible": count,
@@ -192,8 +192,8 @@ async def explain_media(item_id: int, force: bool = Query(False), db: Session = 
         raise HTTPException(status_code=404, detail="Media item not found")
     from app.schemas.settings import OllamaSettings
     ollama = _get_setting(db, "ollama", OllamaSettings)
-    if not (ollama.enabled and ollama.host and ollama.model):
-        return {"rationale": None, "message": "LLM assist not configured", "cached": False}
+    if not ollama.task_enabled("explain"):
+        return {"rationale": None, "message": "LLM assist not configured for deletion rationales", "cached": False}
     from app.services import llm_assist, media_llm
     if (not force and item.llm_rationale
             and item.llm_rationale_key == media_llm.rationale_key(ollama, item)):
@@ -226,8 +226,8 @@ async def explain_media_stream(item_id: int, db: Session = Depends(get_db)):
     if not db.query(MediaItem.id).filter_by(id=item_id).first():
         raise HTTPException(status_code=404, detail="Media item not found")
     ollama = _get_setting(db, "ollama", OllamaSettings)
-    if not (ollama.enabled and ollama.host and ollama.model):
-        raise HTTPException(status_code=400, detail="LLM assist not configured")
+    if not ollama.task_enabled("explain"):
+        raise HTTPException(status_code=400, detail="LLM assist not configured for deletion rationales")
     if not llm_assist.acquire_slot():
         raise HTTPException(status_code=409, detail="Another LLM task is already running")
 
@@ -244,7 +244,7 @@ async def explain_media_stream(item_id: int, db: Session = Depends(get_db)):
                     yield f"data: {_json.dumps({'delta': full})}\n\n"
             else:
                 async for chunk in llm_assist.explain_deletion_stream(
-                        ollama.host, ollama.model, media_llm.item_summary(item),
+                        ollama.host, ollama.model_for("explain"), media_llm.item_summary(item),
                         ollama.api_style, template=ollama.explain_prompt,
                         verbosity=ollama.verbosity, model_size=ollama.model_size,
                         keep_alive_minutes=ollama.keep_alive_minutes):

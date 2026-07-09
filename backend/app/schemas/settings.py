@@ -76,6 +76,29 @@ class OllamaSettings(BaseModel):
     explain_prompt: str = ""  # custom template for deletion rationale; "" = built-in default
     pack_prompt: str = ""  # custom template for season pack file matching; "" = built-in default
     verbose_rationales: bool = False  # extended reasoning in rationales (impacts token usage)
+    # Per-task control (v0.27.0, Approved Queue #10) — the global `enabled` stays the
+    # master switch; these narrow it per consumer. Task models default to the shared
+    # `model` when blank, so existing configs behave exactly as before.
+    match_enabled: bool = True    # import-match review + season-pack file matching
+    explain_enabled: bool = True  # deletion-candidate rationales
+    match_model: str = ""    # "" = use `model`
+    explain_model: str = ""  # "" = use `model`
+    # Circuit breaker (v0.27.0, Approved Queue #7) — after this many consecutive
+    # call failures the assist auto-pauses (every call fails soft to None
+    # immediately) for the cooldown, then retries normally. 0 disables the breaker.
+    breaker_threshold: int = 5
+    breaker_cooldown_minutes: int = 10
+
+    def model_for(self, task: str) -> str:
+        override = self.match_model if task == "match" else self.explain_model
+        return (override or "").strip() or self.model
+
+    def task_enabled(self, task: str) -> bool:
+        """Effective on/off for one consumer ("match" | "explain"): the master
+        switch AND the per-task toggle AND a usable host/model."""
+        if not (self.enabled and self.host and self.model_for(task)):
+            return False
+        return self.match_enabled if task == "match" else self.explain_enabled
 
 
 class CleanupSettings(BaseModel):
