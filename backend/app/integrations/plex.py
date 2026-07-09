@@ -105,3 +105,55 @@ class PlexIntegration(BaseIntegration):
             "watch_count": entry.get("viewCount", 0) or 0,
             "last_watched_at": datetime.fromtimestamp(entry["lastViewedAt"]) if entry.get("lastViewedAt") else None,
         }
+
+    async def _machine_id(self, client, headers) -> str:
+        r = await client.get(f"{self.url}/", headers=headers)
+        r.raise_for_status()
+        return (r.json().get("MediaContainer") or {}).get("machineIdentifier") or ""
+
+    async def create_playlist(self, title: str, *, playlist_type: str = "audio") -> str | None:
+        """Create an empty Plex playlist Powarr owns. Returns ratingKey or None."""
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+            r = await client.post(
+                f"{self.url}/playlists",
+                headers=headers,
+                params={"title": title, "type": playlist_type, "smart": 0, "uri": ""},
+            )
+            # Some Plex builds require a seed uri — retry with a no-op library root
+            if r.status_code >= 400:
+                mid = await self._machine_id(client, headers)
+                uri = f"server://{mid}/com.plexapp.plugins.library/library/sections"
+                r = await client.post(
+                    f"{self.url}/playlists",
+                    headers=headers,
+                    params={"title": title, "type": playlist_type, "smart": 0, "uri": uri},
+                )
+            if r.status_code not in (200, 201):
+                return None
+            meta = (r.json().get("MediaContainer") or {}).get("Metadata") or []
+            if not meta:
+                return None
+            return str(meta[0].get("ratingKey") or "") or None
+
+    async def add_to_playlist(self, playlist_rating_key: str, item_rating_keys: list[str]) -> int:
+        """Add library items to a Powarr-owned playlist. Returns count added."""
+        if not item_rating_keys:
+            return 0
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+            mid = await self._machine_id(client, headers)
+            added = 0
+            # Plex accepts comma-joined uris; chunk to stay under URL limits
+            chunk = 25
+            for i in range(0, len(item_rating_keys), chunk):
+                keys = item_rating_keys[i:i + chunk]
+                uris = ",".join(
+                    f"server://{mid}/com.plexapp.plugins.library/library/metadata/{k}"
+                    for k in keys)
+                r = await client.put(
+                    f"{self.url}/playlists/{playlist_rating_key}/items",
+                    headers=headers, params={"uri": uris})
+                if r.status_code in (200, 201, 204):
+                    added += len(keys)
+            return added

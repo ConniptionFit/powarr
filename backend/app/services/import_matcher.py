@@ -89,17 +89,19 @@ def load_settings(db) -> tuple[ImportMatchingSettings, OllamaSettings]:
 
 
 def _get_client(name: str, row: Integration):
+    from app.services.secret_box import decrypt
+    key = decrypt(row.api_key) or ""
     if name == "sonarr":
         from app.integrations.sonarr import SonarrIntegration
-        return SonarrIntegration(row.url, row.api_key)
+        return SonarrIntegration(row.url, key)
     if name == "radarr":
         from app.integrations.radarr import RadarrIntegration
-        return RadarrIntegration(row.url, row.api_key)
+        return RadarrIntegration(row.url, key)
     if name == "readarr":
         from app.integrations.readarr import ReadarrIntegration
-        return ReadarrIntegration(row.url, row.api_key)
+        return ReadarrIntegration(row.url, key)
     from app.integrations.lidarr import LidarrIntegration
-    return LidarrIntegration(row.url, row.api_key)
+    return LidarrIntegration(row.url, key)
 
 
 _QUALITY_GROUP_TAIL_RE = re.compile(
@@ -634,12 +636,99 @@ def extract_output_path(rec: dict | None = None, messages: str | None = None,
 
 
 # Per-app field names: (queue/history media-id key, library fetch method, library title key)
+# Lidarr/Readarr use album/book libraries (v0.34.0) — artist/author name alone made the
+# LLM disagree on every music row (release = album, candidate was only the artist).
 APP_FIELDS = {
     "sonarr": ("seriesId", "get_series", "title"),
     "radarr": ("movieId", "get_movies", "title"),
-    "lidarr": ("artistId", "get_artists", "artistName"),
-    "readarr": ("authorId", "get_authors", "authorName"),
+    "lidarr": ("albumId", "get_albums", "title"),
+    "readarr": ("bookId", "get_books", "title"),
 }
+
+
+def _album_display_title(item: dict) -> str:
+    """'Artist - Album' for Lidarr album objects (artist may be nested or absent)."""
+    album = (item.get("title") or "").strip()
+    artist = ((item.get("artist") or {}).get("artistName")
+              or item.get("artistName") or "").strip()
+    if artist and album:
+        return f"{artist} - {album}"
+    return album or artist
+
+
+def _book_display_title(item: dict) -> str:
+    book = (item.get("title") or "").strip()
+    author = ((item.get("author") or {}).get("authorName")
+              or item.get("authorName") or "").strip()
+    if author and book:
+        return f"{author} - {book}"
+    return book or author
+
+
+def _lidarr_readarr_match(app_name: str, rec: dict, history: list[dict],
+                          library: list[dict]) -> tuple[int | None, str | None, float, list[str]]:
+    """Album/book-aware identity match for Lidarr/Readarr (v0.34.0).
+
+    Queue often has artistId/authorId but not albumId/bookId; history usually has
+    both. Prefer history album/book → artist-scoped fuzzy album → global fuzzy.
+    """
+    raw_title = rec.get("title") or ""
+    id_key = "albumId" if app_name == "lidarr" else "bookId"
+    parent_key = "artistId" if app_name == "lidarr" else "authorId"
+    display = _album_display_title if app_name == "lidarr" else _book_display_title
+    lib_by_id = {item["id"]: item for item in library}
+    parts: list[str] = []
+
+    download_id = rec.get("downloadId")
+    hist = next((h for h in history if download_id and h.get("downloadId") == download_id), None)
+
+    # 1. History album/book id — strongest for music/books
+    if hist and hist.get(id_key) and hist[id_key] in lib_by_id:
+        item = lib_by_id[hist[id_key]]
+        title = display(item)
+        sim = title_similarity(raw_title, title, source_app=app_name)
+        # Also score against bare album/book title (release often omits artist prefix)
+        sim = max(sim, title_similarity(raw_title, item.get("title") or "", source_app=app_name))
+        parts.append(f"grab history links this downloadId to the library "
+                     f"{'album' if app_name == 'lidarr' else 'book'} "
+                     f"(title similarity {round(sim * 100)}%)")
+        return hist[id_key], title, 0.55 + 0.45 * sim, parts
+
+    # 2. Queue/history parent id → fuzzy among that artist's/author's works
+    parent_id = rec.get(parent_key) or (hist.get(parent_key) if hist else None)
+    pool = library
+    scoped = False
+    if parent_id is not None:
+        scoped_pool = [i for i in library
+                       if i.get(parent_key) == parent_id
+                       or (i.get("artist") or {}).get("id") == parent_id
+                       or (i.get("author") or {}).get("id") == parent_id]
+        if scoped_pool:
+            pool = scoped_pool
+            scoped = True
+
+    best, best_score = None, 0.0
+    for item in pool:
+        s = max(
+            title_similarity(raw_title, display(item), source_app=app_name),
+            title_similarity(raw_title, item.get("title") or "", source_app=app_name),
+        )
+        if s > best_score:
+            best, best_score = item, s
+    if best and best_score > 0:
+        title = display(best)
+        if scoped:
+            confidence = 0.55 + 0.45 * best_score
+            parts.append(f"{app_name} queue maps artist/author; best "
+                         f"{'album' if app_name == 'lidarr' else 'book'} match "
+                         f"({round(best_score * 100)}% similarity)")
+        else:
+            confidence = 0.75 * best_score
+            parts.append(f"fuzzy library {'album' if app_name == 'lidarr' else 'book'} "
+                         f"match only ({round(best_score * 100)}% similarity)")
+        return best["id"], title, confidence, parts
+
+    return None, None, 0.0, parts
 
 
 async def _match_record(app_name: str, rec: dict, history: list[dict], library: list[dict],
@@ -658,8 +747,13 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     confidence = 0.0
     parts: list[str] = []
 
-    # 1. Queue record already mapped by the *arr app itself — strongest signal
-    if rec.get(id_key) and rec[id_key] in lib_by_id:
+    if app_name in ("lidarr", "readarr"):
+        matched_id, matched_title, confidence, parts = _lidarr_readarr_match(
+            app_name, rec, history, library)
+        if not matched_id:
+            parts.append("no library match found")
+    elif rec.get(id_key) and rec[id_key] in lib_by_id:
+        # 1. Queue record already mapped by the *arr app itself — strongest signal
         matched_id = rec[id_key]
         matched_title = lib_by_id[matched_id].get(title_key, "")
         sim = title_similarity(raw_title, matched_title, source_app=app_name)
@@ -689,9 +783,8 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
                 matched_title = best.get(title_key, "")
                 confidence = 0.75 * best_score  # fuzzy-only match caps below auto-resolve range
                 parts.append(f"fuzzy library title match only ({round(best_score * 100)}% similarity)")
-
-    if not matched_id:
-        parts.append("no library match found")
+            else:
+                parts.append("no library match found")
 
     # Year hard-fail (v0.31.0): when both sides expose a year and they differ,
     # the match is the wrong movie/show remake — zero confidence, skip LLM.
@@ -1215,9 +1308,18 @@ async def _scan_once_inner(task_id: str) -> dict:
             tasks.update_task(task_id, current=scanned_apps, message=f"Scanning {app_name}…")
             row = db.query(Integration).filter_by(name=app_name, enabled=True).first()
             client = _get_client(app_name, row)
+            from app.services import circuit_breaker, dep_health
+            if circuit_breaker.breaker_open(app_name):
+                logger.warning(f"Import scan: {app_name} skipped — circuit breaker open")
+                dep_health.record(app_name, False, "circuit breaker open", source="scan")
+                continue
             try:
                 queue = await client.get_queue()
+                circuit_breaker.record_result(app_name, True)
+                dep_health.record(app_name, True, "queue ok", source="scan")
             except Exception as e:
+                circuit_breaker.record_result(app_name, False, str(e))
+                dep_health.record(app_name, False, str(e), source="scan")
                 logger.warning(f"Import scan: {app_name} queue fetch failed: {e}")
                 continue
 
@@ -1231,13 +1333,17 @@ async def _scan_once_inner(task_id: str) -> dict:
 
             try:
                 history = await client.get_history()
+                circuit_breaker.record_result(app_name, True)
             except Exception as e:
+                circuit_breaker.record_result(app_name, False, str(e))
                 logger.warning(f"Import scan: {app_name} history fetch failed: {e}")
                 history = []
             _, lib_method, _ = APP_FIELDS[app_name]
             try:
                 library = await getattr(client, lib_method)()
+                circuit_breaker.record_result(app_name, True)
             except Exception as e:
+                circuit_breaker.record_result(app_name, False, str(e))
                 logger.warning(f"Import scan: {app_name} library fetch failed: {e}")
                 library = []
 
@@ -1289,6 +1395,9 @@ async def _scan_once_inner(task_id: str) -> dict:
                         "alternate_titles": format_alternate_titles(
                             next((x for x in library if x.get("id") == match["matched_id"]), None)
                         ) if match.get("matched_id") else "",
+                        # Parent ids for Lidarr/Readarr rematch (v0.34.0)
+                        **({"artistId": rec.get("artistId")} if app_name == "lidarr" and rec.get("artistId") else {}),
+                        **({"authorId": rec.get("authorId")} if app_name == "readarr" and rec.get("authorId") else {}),
                     }),
                     matched_title=match["matched_title"],
                     matched_id=match["matched_id"],
@@ -1596,8 +1705,55 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
         elif t and not t.total:
             tasks.update_task(task_id, total=len(rows),
                               label=f"Scoring {len(rows)} import(s) with the LLM")
+        # Cache album/book libraries once per app for rematch (v0.34.0)
+        _lib_cache: dict[str, list] = {}
+        _hist_cache: dict[str, list] = {}
+
+        async def _rematch_music_row(row: FailedImport) -> None:
+            """Upgrade artist-only Lidarr/Readarr matches to album/book before LLM."""
+            if row.source_app not in ("lidarr", "readarr"):
+                return
+            arr_row = db.query(Integration).filter_by(
+                name=row.source_app, enabled=True).first()
+            if not arr_row:
+                return
+            client = _get_client(row.source_app, arr_row)
+            if row.source_app not in _lib_cache:
+                _, lib_method, _ = APP_FIELDS[row.source_app]
+                try:
+                    _lib_cache[row.source_app] = await getattr(client, lib_method)()
+                    _hist_cache[row.source_app] = await client.get_history()
+                except Exception as e:
+                    logger.info(f"LLM rematch library fetch failed ({row.source_app}): {e}")
+                    _lib_cache[row.source_app] = []
+                    _hist_cache[row.source_app] = []
+            rec = {"title": row.raw_title, "downloadId": row.download_id}
+            try:
+                meta = json.loads(row.raw_metadata or "{}")
+            except (ValueError, TypeError):
+                meta = {}
+            # Preserve parent id if we stored it
+            if row.source_app == "lidarr" and meta.get("artistId"):
+                rec["artistId"] = meta["artistId"]
+            if row.source_app == "readarr" and meta.get("authorId"):
+                rec["authorId"] = meta["authorId"]
+            mid, title, conf, parts = _lidarr_readarr_match(
+                row.source_app, rec, _hist_cache.get(row.source_app) or [],
+                _lib_cache.get(row.source_app) or [])
+            if mid and title:
+                row.matched_id = mid
+                row.matched_title = title
+                row.heuristic_confidence = round(min(1.0, conf), 3)
+                row.confidence = row.heuristic_confidence
+                meta["match_rationale"] = "; ".join(parts)
+                row.raw_metadata = json.dumps(meta)
+
         for i, row in enumerate(rows, 1):
             cur = base_current + i
+            try:
+                await _rematch_music_row(row)
+            except Exception as e:
+                logger.info(f"LLM rematch skipped for {row.id}: {e}")
             if not row.matched_title:
                 skipped += 1
                 _llm_tray_skipped += 1

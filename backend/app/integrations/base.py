@@ -3,6 +3,8 @@ from typing import Any, Optional
 
 import httpx
 
+from app.services import circuit_breaker
+
 
 class BaseIntegration(ABC):
     """All integrations extend this. Adding a new service = subclass + register in integrations API."""
@@ -25,6 +27,17 @@ class BaseIntegration(ABC):
     def _headers(self) -> dict[str, str]:
         return {"X-Api-Key": self.api_key, "Content-Type": "application/json"}
 
+    def _check_breaker(self) -> None:
+        """Raise BreakerOpenError when this integration's breaker is open (v0.34.0)."""
+        if circuit_breaker.breaker_open(self.name):
+            raise circuit_breaker.BreakerOpenError(self.name)
+
+    def _record_ok(self) -> None:
+        circuit_breaker.record_result(self.name, True)
+
+    def _record_err(self, exc: Exception | str) -> None:
+        circuit_breaker.record_result(self.name, False, str(exc))
+
     async def _fetch_manual_import(self, download_id: str, *,
                                    filter_existing: bool = True,
                                    folder: Optional[str] = None) -> list[dict]:
@@ -38,29 +51,39 @@ class BaseIntegration(ABC):
         downloadId on the retry (that still 500s). Never pass seriesId/movieId
         (library-folder incident, 2026-07-05).
         """
+        self._check_breaker()
         params: dict[str, str] = {
             "downloadId": download_id,
             "filterExistingFiles": "true" if filter_existing else "false",
         }
-        async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
-            r = await client.get(f"{self._base()}/manualimport",  # type: ignore[attr-defined]
-                                 headers=self._headers(), params=params)
-            if r.status_code == 200:
-                data = r.json()
-                return data if isinstance(data, list) else []
-            # Folder-only fallback for the known NullReference crash
-            if r.status_code >= 500 and folder:
-                fr = await client.get(
-                    f"{self._base()}/manualimport",  # type: ignore[attr-defined]
-                    headers=self._headers(),
-                    params={"folder": folder,
-                            "filterExistingFiles": "true" if filter_existing else "false"},
-                )
-                if fr.status_code == 200:
-                    data = fr.json()
+        try:
+            async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
+                r = await client.get(f"{self._base()}/manualimport",  # type: ignore[attr-defined]
+                                     headers=self._headers(), params=params)
+                if r.status_code == 200:
+                    self._record_ok()
+                    data = r.json()
                     return data if isinstance(data, list) else []
-            r.raise_for_status()
-            return []
+                # Folder-only fallback for the known NullReference crash
+                if r.status_code >= 500 and folder:
+                    fr = await client.get(
+                        f"{self._base()}/manualimport",  # type: ignore[attr-defined]
+                        headers=self._headers(),
+                        params={"folder": folder,
+                                "filterExistingFiles": "true" if filter_existing else "false"},
+                    )
+                    if fr.status_code == 200:
+                        self._record_ok()
+                        data = fr.json()
+                        return data if isinstance(data, list) else []
+                r.raise_for_status()
+                self._record_ok()
+                return []
+        except circuit_breaker.BreakerOpenError:
+            raise
+        except Exception as e:
+            self._record_err(e)
+            raise
 
     @staticmethod
     def _manual_import_error_result(exc: Exception) -> dict:

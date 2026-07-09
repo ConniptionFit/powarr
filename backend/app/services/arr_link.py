@@ -7,6 +7,7 @@ import logging
 from app.models.integration import Integration
 from app.models.media import MediaItem
 from app.services.import_matcher import _normalize
+from app.services.secret_box import decrypt
 
 logger = logging.getLogger("powarr")
 
@@ -19,7 +20,7 @@ async def link_arr_ids(db) -> dict:
     if row and row.url and row.api_key:
         try:
             from app.integrations.radarr import RadarrIntegration
-            movies = await RadarrIntegration(row.url, row.api_key).get_movies()
+            movies = await RadarrIntegration(row.url, decrypt(row.api_key) or "").get_movies()
             index = {(_normalize(m.get("title", "")), m.get("year")): m["id"] for m in movies}
             for item in db.query(MediaItem).filter(MediaItem.media_type == "movie",
                                                    MediaItem.radarr_id.is_(None)).all():
@@ -37,7 +38,7 @@ async def link_arr_ids(db) -> dict:
     if row and row.url and row.api_key:
         try:
             from app.integrations.sonarr import SonarrIntegration
-            series = await SonarrIntegration(row.url, row.api_key).get_series()
+            series = await SonarrIntegration(row.url, decrypt(row.api_key) or "").get_series()
             index = {_normalize(s.get("title", "")): s["id"] for s in series}
             for item in db.query(MediaItem).filter(MediaItem.media_type == "episode",
                                                    MediaItem.sonarr_id.is_(None),
@@ -54,7 +55,7 @@ async def link_arr_ids(db) -> dict:
     if row and row.url and row.api_key:
         try:
             from app.integrations.lidarr import LidarrIntegration
-            artists = await LidarrIntegration(row.url, row.api_key).get_artists()
+            artists = await LidarrIntegration(row.url, decrypt(row.api_key) or "").get_artists()
             index = {_normalize(a.get("artistName", "")): a["id"] for a in artists}
             for item in db.query(MediaItem).filter(MediaItem.media_type == "track",
                                                    MediaItem.lidarr_id.is_(None),

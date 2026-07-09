@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from "react-router-dom";
-import { Zap, LayoutDashboard, Trash2, Settings, Plug, ScrollText, Menu, X } from "lucide-react";
+import { Zap, LayoutDashboard, Trash2, Settings, Plug, ScrollText, Menu, X, ListMusic } from "lucide-react";
 import Dashboard from "./pages/Dashboard";
 import Cleanup from "./pages/Cleanup";
 import SettingsPage from "./pages/Settings";
 import IntegrationsPage from "./pages/Integrations";
 import LogsPage from "./pages/Logs";
+import SmartPlaylists from "./pages/SmartPlaylists";
 import AuthGate from "./components/AuthGate";
 import ActiveProcessesTray from "./components/ActiveProcessesTray";
 import { TaskProvider } from "./context/TaskContext";
@@ -13,6 +14,7 @@ import { TaskProvider } from "./context/TaskContext";
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/cleanup", icon: Trash2, label: "Cleanup" },
+  { to: "/playlists", icon: ListMusic, label: "Playlists" },
   { to: "/integrations", icon: Plug, label: "Integrations" },
   { to: "/settings", icon: Settings, label: "Settings" },
   { to: "/logs", icon: ScrollText, label: "Logs" },
@@ -46,7 +48,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         ))}
       </nav>
       <div className="px-5 py-3 text-xs text-slate-600 border-t border-purple-900/40">
-        v0.33.0
+        v0.34.0
       </div>
     </>
   );
@@ -102,6 +104,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/cleanup" element={<Cleanup />} />
+              <Route path="/playlists" element={<SmartPlaylists />} />
               <Route path="/integrations" element={<IntegrationsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/logs" element={<LogsPage />} />

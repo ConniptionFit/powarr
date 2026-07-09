@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity } from "lucide-react";
-import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes } from "../../lib/api";
+import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity, AlertTriangle } from "lucide-react";
+import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes, type DepHealth } from "../../lib/api";
 
 function Sparkline({ values, color = "#a78bfa" }: { values: number[]; color?: string }) {
   const w = 160, h = 36, pad = 2;
@@ -20,22 +20,25 @@ function Sparkline({ values, color = "#a78bfa" }: { values: number[]; color?: st
   );
 }
 
-function StatCard({ icon: Icon, label, value, sub, color }: {
+function StatCard({ icon: Icon, label, value, sub, color, error }: {
   icon: React.ElementType;
   label: string;
   value: string;
   sub?: string;
   color: string;
+  error?: boolean;
 }) {
   return (
-    <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-5 flex items-start gap-4">
-      <div className={`p-3 rounded-lg ${color}`}>
+    <div className={`bg-surface-raised rounded-xl border p-5 flex items-start gap-4 ${
+      error ? "border-red-700/50" : "border-purple-900/30"
+    }`}>
+      <div className={`p-3 rounded-lg ${error ? "bg-red-900/60" : color}`}>
         <Icon size={20} className="text-white" />
       </div>
-      <div>
+      <div className="min-w-0">
         <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">{label}</p>
-        <p className="text-2xl font-bold text-white">{value}</p>
-        {sub && <p className="text-slate-500 text-xs mt-0.5">{sub}</p>}
+        <p className={`text-2xl font-bold ${error ? "text-red-300" : "text-white"}`}>{value}</p>
+        {sub && <p className={`text-xs mt-0.5 ${error ? "text-red-400/80" : "text-slate-500"}`}>{sub}</p>}
       </div>
     </div>
   );
@@ -52,16 +55,14 @@ function fmtCountdown(ms: number): string {
   return `${s}s`;
 }
 
-// Ticks its own display every second without re-rendering the rest of the
-// dashboard — the target time comes from the server (next_scan_at etc.),
-// this just formats "time remaining" and re-formats on each tick.
-function CountdownStat({ icon, label, color, targetIso, disabledLabel, sub }: {
+function CountdownStat({ icon, label, color, targetIso, disabledLabel, sub, error }: {
   icon: React.ElementType;
   label: string;
   color: string;
-  targetIso: string | null;
+  targetIso: string | null | undefined;
   disabledLabel: string;
   sub?: string;
+  error?: boolean;
 }) {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -70,42 +71,71 @@ function CountdownStat({ icon, label, color, targetIso, disabledLabel, sub }: {
     return () => clearInterval(id);
   }, [targetIso]);
 
-  const value = targetIso ? fmtCountdown(new Date(targetIso).getTime() - Date.now()) : disabledLabel;
-  return <StatCard icon={icon} label={label} value={value} sub={sub} color={color} />;
+  const value = error
+    ? "—"
+    : targetIso
+      ? fmtCountdown(new Date(targetIso).getTime() - Date.now())
+      : disabledLabel;
+  return (
+    <StatCard
+      icon={icon}
+      label={label}
+      value={value}
+      sub={error ? "schedule unavailable" : sub}
+      color={color}
+      error={error}
+    />
+  );
+}
+
+function cardValue(error: boolean, loading: boolean, formatted: string): string {
+  if (error) return "—";
+  if (loading) return "…";
+  return formatted;
 }
 
 export default function Dashboard() {
   const qc = useQueryClient();
-  const { data: stats, isLoading, refetch } = useQuery({
+  const { data: stats, isLoading, isError: statsErr, refetch } = useQuery({
     queryKey: ["stats"],
     queryFn: mediaApi.stats,
   });
 
-  const { data: importStats } = useQuery({
+  const { data: importStats, isError: importErr, isLoading: importLoading } = useQuery({
     queryKey: ["import-stats"],
     queryFn: importsApi.stats,
   });
 
-  const { data: importTrends } = useQuery({
+  const { data: importTrends, isError: trendsErr } = useQuery({
     queryKey: ["import-trends"],
     queryFn: () => importsApi.trends(30),
   });
 
-  const { data: deletionStats } = useQuery({
+  const { data: deletionStats, isError: delErr, isLoading: delLoading } = useQuery({
     queryKey: ["deletion-stats"],
     queryFn: mediaApi.deletionStats,
   });
 
-  const { data: schedule } = useQuery({
+  const { data: schedule, isError: schedErr } = useQuery({
     queryKey: ["schedule"],
     queryFn: systemApi.schedule,
-    refetchInterval: 60_000, // periodically resync with the server in case a scan/sync just ran elsewhere
+    refetchInterval: 60_000,
+  });
+
+  const { data: deps } = useQuery({
+    queryKey: ["dependencies"],
+    queryFn: () => systemApi.dependencies(false),
+    refetchInterval: 60_000,
   });
 
   const byService = importStats?.by_service ?? {};
-  const byServiceLabel = Object.entries(byService)
-    .map(([app, n]) => `${app} ${n}`)
-    .join(" · ") || "none pending";
+  const byServiceLabel = importErr
+    ? "unavailable"
+    : Object.entries(byService).map(([app, n]) => `${app} ${n}`).join(" · ") || "none pending";
+
+  const downIntegrations = (deps?.integrations ?? []).filter(
+    (d: DepHealth) => d.ok === false || d.breaker_open,
+  );
 
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
@@ -161,6 +191,20 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {downIntegrations.length > 0 && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-700/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+          <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="font-medium">Integration issue{downIntegrations.length > 1 ? "s" : ""}</p>
+            <p className="text-amber-200/80 text-xs mt-0.5">
+              {downIntegrations.map(d =>
+                `${d.name}${d.breaker_open ? " (breaker open)" : ""}: ${d.message || "unreachable"}`
+              ).join(" · ")}
+            </p>
+          </div>
+        </div>
+      )}
+
       {isLoading ? (
         <p className="text-slate-400">Loading...</p>
       ) : (
@@ -168,56 +212,66 @@ export default function Dashboard() {
           <StatCard
             icon={Film}
             label="Total Media Items"
-            value={stats?.total_items.toLocaleString() ?? "0"}
+            value={cardValue(statsErr, false, stats?.total_items.toLocaleString() ?? "0")}
             color="bg-blue-600"
+            error={statsErr}
+            sub={statsErr ? "stats unavailable" : undefined}
           />
           <StatCard
             icon={HardDrive}
             label="Total Library Size"
-            value={fmtBytes(stats?.total_size_bytes ?? 0)}
+            value={cardValue(statsErr, false, fmtBytes(stats?.total_size_bytes ?? 0))}
             color="bg-indigo-600"
+            error={statsErr}
+            sub={statsErr ? "stats unavailable" : undefined}
           />
           <StatCard
             icon={Trash2}
             label="Deletion Candidates"
-            value={stats?.candidates_above_threshold.toLocaleString() ?? "0"}
-            sub="above score threshold"
+            value={cardValue(statsErr, false, stats?.candidates_above_threshold.toLocaleString() ?? "0")}
+            sub={statsErr ? "stats unavailable" : "above score threshold"}
             color="bg-red-700"
+            error={statsErr}
           />
           <StatCard
             icon={TrendingDown}
             label="Potential Savings"
-            value={fmtBytes(stats?.potential_savings_bytes ?? 0)}
-            sub="if candidates deleted"
+            value={cardValue(statsErr, false, fmtBytes(stats?.potential_savings_bytes ?? 0))}
+            sub={statsErr ? "stats unavailable" : "if candidates deleted"}
             color="bg-emerald-700"
+            error={statsErr}
           />
           <StatCard
             icon={DownloadCloud}
             label="Failed Imports"
-            value={(importStats?.suggested ?? 0).toLocaleString()}
+            value={cardValue(importErr, importLoading, (importStats?.suggested ?? 0).toLocaleString())}
             sub={byServiceLabel}
             color="bg-purple-700"
+            error={importErr}
           />
           <StatCard
             icon={CheckCircle}
             label="Auto-Resolved (7d)"
-            value={(importStats?.auto_resolved_7d ?? 0).toLocaleString()}
-            sub="imports pushed automatically"
+            value={cardValue(importErr, importLoading, (importStats?.auto_resolved_7d ?? 0).toLocaleString())}
+            sub={importErr ? "unavailable" : "imports pushed automatically"}
             color="bg-teal-700"
+            error={importErr}
           />
           <StatCard
             icon={Recycle}
             label="Space Freed (30d)"
-            value={fmtBytes(deletionStats?.freed_30d_bytes ?? 0)}
-            sub={`${deletionStats?.deleted_30d ?? 0} items deleted`}
+            value={cardValue(delErr, delLoading, fmtBytes(deletionStats?.freed_30d_bytes ?? 0))}
+            sub={delErr ? "unavailable" : `${deletionStats?.deleted_30d ?? 0} items deleted`}
             color="bg-green-800"
+            error={delErr}
           />
           <StatCard
             icon={Trash2}
             label="Push Failures"
-            value={(importStats?.resolve_failed ?? 0).toLocaleString()}
-            sub="imports needing re-triage"
+            value={cardValue(importErr, importLoading, (importStats?.resolve_failed ?? 0).toLocaleString())}
+            sub={importErr ? "unavailable" : "imports needing re-triage"}
             color="bg-red-800"
+            error={importErr}
           />
           <CountdownStat
             icon={Clock}
@@ -226,6 +280,7 @@ export default function Dashboard() {
             disabledLabel="Disabled"
             sub="Failed Import Matching → Detection Enabled"
             color="bg-cyan-700"
+            error={schedErr}
           />
           <CountdownStat
             icon={CalendarClock}
@@ -234,8 +289,13 @@ export default function Dashboard() {
             disabledLabel="Manual only"
             sub="Settings → Sync Interval"
             color="bg-violet-700"
+            error={schedErr}
           />
-          {importTrends && (
+          {trendsErr ? (
+            <div className="bg-surface-raised rounded-xl border border-red-700/40 p-5 sm:col-span-2">
+              <p className="text-red-300 text-sm">Failed import trend unavailable</p>
+            </div>
+          ) : importTrends ? (
             <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-5 sm:col-span-2">
               <div className="flex items-start gap-4">
                 <div className="p-3 rounded-lg bg-fuchsia-800">
@@ -262,7 +322,7 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       )}
     </div>

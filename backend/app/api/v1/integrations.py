@@ -19,36 +19,39 @@ DOWNLOAD_CLIENT_NAMES = ("qbittorrent", "transmission")
 
 
 def _get_client(integration: Integration):
+    from app.services.secret_box import decrypt
     extra = json.loads(integration.extra_config) if integration.extra_config else {}
+    api_key = decrypt(integration.api_key) or ""
+    password = decrypt(integration.password) or ""
     if integration.name == "plex":
         from app.integrations.plex import PlexIntegration
-        return PlexIntegration(integration.url, integration.api_key, extra)
+        return PlexIntegration(integration.url, api_key, extra)
     if integration.name == "tautulli":
         from app.integrations.tautulli import TautulliIntegration
-        return TautulliIntegration(integration.url, integration.api_key, extra)
+        return TautulliIntegration(integration.url, api_key, extra)
     if integration.name == "sonarr":
         from app.integrations.sonarr import SonarrIntegration
-        return SonarrIntegration(integration.url, integration.api_key, extra)
+        return SonarrIntegration(integration.url, api_key, extra)
     if integration.name == "radarr":
         from app.integrations.radarr import RadarrIntegration
-        return RadarrIntegration(integration.url, integration.api_key, extra)
+        return RadarrIntegration(integration.url, api_key, extra)
     if integration.name == "lidarr":
         from app.integrations.lidarr import LidarrIntegration
-        return LidarrIntegration(integration.url, integration.api_key, extra)
+        return LidarrIntegration(integration.url, api_key, extra)
     if integration.name == "readarr":
         from app.integrations.readarr import ReadarrIntegration
-        return ReadarrIntegration(integration.url, integration.api_key, extra)
+        return ReadarrIntegration(integration.url, api_key, extra)
     if integration.name == "seerr":
         from app.integrations.seerr import SeerrIntegration
-        return SeerrIntegration(integration.url, integration.api_key, extra)
+        return SeerrIntegration(integration.url, api_key, extra)
     if integration.name == "qbittorrent":
         from app.integrations.qbittorrent import QbittorrentIntegration
-        return QbittorrentIntegration(integration.url, integration.api_key, extra,
+        return QbittorrentIntegration(integration.url, api_key, extra,
                                       username=integration.username or "",
-                                      password=integration.password or "")
+                                      password=password)
     if integration.name == "transmission":
         from app.integrations.transmission import TransmissionIntegration
-        return TransmissionIntegration(integration.url, integration.api_key, extra)
+        return TransmissionIntegration(integration.url, api_key, extra)
     raise HTTPException(status_code=404, detail=f"Unknown integration: {integration.name}")
 
 
@@ -138,11 +141,13 @@ def update_integration(name: str, body: IntegrationConfigUpdate, db: Session = D
     if body.url is not None:
         row.url = body.url
     if _is_new_secret(body.api_key):
-        row.api_key = body.api_key
+        from app.services.secret_box import encrypt
+        row.api_key = encrypt(body.api_key)
     if body.username is not None:
         row.username = body.username
     if _is_new_secret(body.password):
-        row.password = body.password
+        from app.services.secret_box import encrypt
+        row.password = encrypt(body.password)
     if body.enabled is not None:
         row.enabled = body.enabled
 

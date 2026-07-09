@@ -102,15 +102,20 @@ async def run_plex_sync(db) -> dict:
     task_id = tasks.create_task("plex_sync", "Syncing Plex library")
     try:
         from app.integrations.plex import PlexIntegration
-        plex = PlexIntegration(row.url, row.api_key)
+        from app.services.secret_box import decrypt
+        plex = PlexIntegration(row.url, decrypt(row.api_key) or "")
         weights = _get_setting(db, "scoring_weights", ScoringWeights)
         profiles = load_scoring_profiles(db)
 
         items = await plex.fetch_media_items()
         tasks.update_task(task_id, total=len(items))
-        upserted = upsert_media_items(
-            db, items, weights, profiles=profiles,
-            progress=lambda n: tasks.update_task(task_id, current=n))
+        # SCAL-02 (v0.34.0): bulk upsert is sync ORM — run off the event loop so
+        # a 100k+ library doesn't freeze every async request mid-sync.
+        # Progress callback omitted inside the thread (not loop-safe); one update after.
+        import asyncio
+        upserted = await asyncio.to_thread(
+            upsert_media_items, db, items, weights, profiles, None)
+        tasks.update_task(task_id, current=upserted)
 
         _set_setting(db, "last_synced", datetime.utcnow().isoformat())
         db.commit()
@@ -156,7 +161,8 @@ async def refresh_seerr_protection(db) -> int:
         return 0
 
     from app.integrations.seerr import SeerrIntegration
-    seerr = SeerrIntegration(row.url, row.api_key)
+    from app.services.secret_box import decrypt
+    seerr = SeerrIntegration(row.url, decrypt(row.api_key) or "")
     requested = await seerr.get_requested_titles()
 
     db.query(MediaItem).filter(MediaItem.protected.is_(True)).update({"protected": False})
@@ -187,7 +193,8 @@ async def refresh_tautulli_watch_protection(db) -> int:
         return 0
 
     from app.integrations.tautulli import TautulliIntegration
-    tautulli = TautulliIntegration(row.url, row.api_key)
+    from app.services.secret_box import decrypt
+    tautulli = TautulliIntegration(row.url, decrypt(row.api_key) or "")
     history = await tautulli.get_recent_history(days=cleanup.other_user_watch_days)
     primary = (cleanup.primary_tautulli_user or "").strip().lower()
 

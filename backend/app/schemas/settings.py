@@ -168,6 +168,21 @@ class BackupSettings(BaseModel):
     retention_count: int = 7  # keep the most recent N backup files; 0 = unlimited
 
 
+class SmartPlaylistSettings(BaseModel):
+    """MOD-01 Smart Playlists (v0.34.0) — read-only Qdrant → Plex genre playlists."""
+    enabled: bool = False
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""  # optional; masked in UI via separate handling if needed
+    collection: str = "music_affinity_space"
+    auto_create_playlists: bool = False
+    auto_add_tracks_default: bool = False
+    min_artists_per_genre: int = 3
+    excluded_genres: list[str] = []
+    max_tracks_per_playlist: int = 200
+    schedule_enabled: bool = False
+    schedule_interval_hours: int = 24
+
+
 class NotificationSettings(BaseModel):
     enabled: bool = False
     ntfy_url: str = ""  # e.g. http://10.1.1.2:8091

@@ -26,6 +26,18 @@ class LidarrIntegration(BaseIntegration):
             r.raise_for_status()
             return r.json()
 
+    async def get_albums(self, artist_id: int | None = None) -> list[dict]:
+        """Album library for match scoring (v0.34.0). Releases are albums; artist
+        name alone made the LLM disagree on every Lidarr row."""
+        params = {}
+        if artist_id is not None:
+            params["artistId"] = artist_id
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/album", headers=self._headers(),
+                                 params=params or None)
+            r.raise_for_status()
+            return r.json()
+
     async def delete_artist(self, artist_id: int, delete_files: bool = True) -> bool:
         params = {"deleteFiles": str(delete_files).lower()}
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
@@ -69,11 +81,16 @@ class LidarrIntegration(BaseIntegration):
     async def get_manual_import(self, download_id: str, folder: str | None = None) -> list[dict]:
         return await self._fetch_manual_import(download_id, filter_existing=False, folder=folder)
 
-    async def push_import_command(self, download_id: str, artist_id: int | None = None,
+    async def push_import_command(self, download_id: str, matched_id: int | None = None,
                                   folder: str | None = None) -> dict:
         """Fetch manual-import candidates for a download and execute a ManualImport
         command for the importable ones. Imports MUST go through POST /command —
-        the bare POST /manualimport route is the reprocess endpoint and never imports."""
+        the bare POST /manualimport route is the reprocess endpoint and never imports.
+
+        matched_id (v0.34.0): preferred albumId from Powarr's matcher; falls back to
+        per-candidate album/artist ids. Legacy callers that passed artistId still work
+        when candidates already carry albumId.
+        """
         try:
             # downloadId only (+ optional folder fallback) — never widen the scan
             # beyond the download (see the Sonarr seriesId incident, 2026-07-05)
@@ -83,8 +100,14 @@ class LidarrIntegration(BaseIntegration):
             importable, covered = partition_import_candidates(candidates)
             files = []
             for f in importable:
-                aid = (f.get("artist") or {}).get("id") or f.get("artistId") or artist_id
-                album_id = (f.get("album") or {}).get("id") or f.get("albumId")
+                aid = (f.get("artist") or {}).get("id") or f.get("artistId")
+                album_id = ((f.get("album") or {}).get("id") or f.get("albumId")
+                            or matched_id)
+                if not aid and matched_id and album_id == matched_id:
+                    # matched_id was album — pull artist from the candidate album object
+                    aid = (f.get("artist") or {}).get("id") or f.get("artistId")
+                if not aid:
+                    aid = matched_id  # legacy: matched_id was artistId
                 if not aid or not album_id or not f.get("path"):
                     continue
                 entry = {

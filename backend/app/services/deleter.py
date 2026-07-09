@@ -29,20 +29,21 @@ async def propagate_and_delete(item: MediaItem, db) -> str:
             await unmonitor_fn(client, arr_id)
             arr_action = "unmonitored"
 
+    from app.services.secret_box import decrypt
     if item.radarr_id:
         from app.integrations.radarr import RadarrIntegration
         await _handle("radarr", item.radarr_id,
-                      lambda row: RadarrIntegration(row.url, row.api_key),
+                      lambda row: RadarrIntegration(row.url, decrypt(row.api_key) or ""),
                       lambda c, i: c.delete_movie(i), lambda c, i: c.unmonitor_movie(i))
     if item.sonarr_id:
         from app.integrations.sonarr import SonarrIntegration
         await _handle("sonarr", item.sonarr_id,
-                      lambda row: SonarrIntegration(row.url, row.api_key),
+                      lambda row: SonarrIntegration(row.url, decrypt(row.api_key) or ""),
                       lambda c, i: c.delete_series(i), lambda c, i: c.unmonitor_series(i))
     if item.lidarr_id:
         from app.integrations.lidarr import LidarrIntegration
         await _handle("lidarr", item.lidarr_id,
-                      lambda row: LidarrIntegration(row.url, row.api_key),
+                      lambda row: LidarrIntegration(row.url, decrypt(row.api_key) or ""),
                       lambda c, i: c.delete_artist(i), lambda c, i: c.unmonitor_artist(i))
 
     db.add(DeletionLog(

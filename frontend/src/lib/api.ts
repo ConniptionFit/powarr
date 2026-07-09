@@ -1,6 +1,6 @@
 const BASE = "/api/v1";
 
-async function req<T>(path: string, opts?: RequestInit): Promise<T> {
+export async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const r = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...opts,
@@ -430,8 +430,22 @@ export interface ScheduleInfo {
   next_sync_at: string | null; // null = manual sync only
 }
 
+export interface DepHealth {
+  name: string;
+  ok: boolean | null;
+  message: string;
+  source: string | null;
+  checked_at: number | null;
+  breaker_open: boolean;
+  breaker_seconds_remaining: number;
+  last_error: string | null;
+}
+
 export const systemApi = {
   health: () => req<{ status: string; db: string }>("/system/health"),
+  dependencies: (probe = false) =>
+    req<{ integrations: DepHealth[]; breakers: unknown }>(
+      `/system/dependencies${probe ? "?probe=true" : ""}`),
   logs: (lines = 200) => req<{ lines: string[] }>(`/system/logs?lines=${lines}`),
   schedule: () => req<ScheduleInfo>("/system/schedule"),
 };

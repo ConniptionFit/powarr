@@ -3,5 +3,7 @@ from app.models.integration import Integration
 from app.models.app_setting import AppSetting
 from app.models.failed_import import FailedImport
 from app.models.deletion_log import DeletionLog
+from app.models.smart_playlist import SmartPlaylist, SmartPlaylistCandidate
 
-__all__ = ["MediaItem", "Integration", "AppSetting", "FailedImport", "DeletionLog"]
+__all__ = ["MediaItem", "Integration", "AppSetting", "FailedImport", "DeletionLog",
+           "SmartPlaylist", "SmartPlaylistCandidate"]

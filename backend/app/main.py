@@ -4,24 +4,43 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 import asyncio
 import logging
+import time
+import uuid
 
 from fastapi.responses import JSONResponse
 
 from app.database import init_db
-from app.api.v1 import media, settings, integrations, imports, system, auth, tasks
+from app.api.v1 import media, settings, integrations, imports, system, auth, tasks, playlists
 from app import log_buffer
 
 logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.33.0", docs_url="/api/docs")
+app = FastAPI(title="Powarr", version="0.34.0", docs_url="/api/docs")
 
 # Paths that stay reachable without a session: the auth flow itself, the
 # health endpoint (Docker healthcheck probes from inside the container), and
 # the ntfy click-to-act notification target (v0.26.0) — gated by its own
 # signed, expiring, single-action token instead of a session.
 _AUTH_EXEMPT = ("/api/v1/auth/", "/api/v1/system/health", "/api/v1/imports/notify-action")
+
+
+@app.middleware("http")
+async def request_id_middleware(request, call_next):
+    """TEL-02 (v0.34.0): correlate logs across the async boundary."""
+    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    log_buffer.set_request_id(rid)
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        if request.url.path.startswith("/api/"):
+            ms = int((time.perf_counter() - started) * 1000)
+            logger.info(f"{request.method} {request.url.path} → {response.status_code} {ms}ms")
+        return response
+    finally:
+        log_buffer.set_request_id(None)
 
 
 @app.middleware("http")
@@ -100,7 +119,7 @@ def _seed_settings():
     from app.models.app_setting import AppSetting
     from app.schemas.settings import (ScoringWeights, ScoringProfiles, ImportMatchingSettings,
                                       OllamaSettings, CleanupSettings, SyncSettings,
-                                      NotificationSettings)
+                                      NotificationSettings, SmartPlaylistSettings)
     import json
 
     defaults = {
@@ -111,6 +130,7 @@ def _seed_settings():
         "cleanup": CleanupSettings,
         "sync": SyncSettings,
         "notifications": NotificationSettings,
+        "smart_playlists": SmartPlaylistSettings,
     }
     db = SessionLocal()
     try:
@@ -133,6 +153,7 @@ app.include_router(imports.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(tasks.router, prefix="/api/v1")
+app.include_router(playlists.router, prefix="/api/v1")
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 

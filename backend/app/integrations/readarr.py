@@ -26,6 +26,17 @@ class ReadarrIntegration(BaseIntegration):
             r.raise_for_status()
             return r.json()
 
+    async def get_books(self, author_id: int | None = None) -> list[dict]:
+        """Book library for match scoring (v0.34.0) — parallel to Lidarr albums."""
+        params = {}
+        if author_id is not None:
+            params["authorId"] = author_id
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/book", headers=self._headers(),
+                                 params=params or None)
+            r.raise_for_status()
+            return r.json()
+
     async def get_queue(self, page_size: int = 100, max_records: int = 500) -> list[dict]:
         return await self._paged(f"{self._base()}/queue",
                                  {"includeUnknownAuthorItems": "true"}, page_size, max_records)
@@ -59,7 +70,7 @@ class ReadarrIntegration(BaseIntegration):
     async def get_manual_import(self, download_id: str, folder: str | None = None) -> list[dict]:
         return await self._fetch_manual_import(download_id, filter_existing=False, folder=folder)
 
-    async def push_import_command(self, download_id: str, author_id: int | None = None,
+    async def push_import_command(self, download_id: str, matched_id: int | None = None,
                                   folder: str | None = None) -> dict:
         """Fetch manual-import candidates for a download and execute a ManualImport
         command for the importable ones. Imports MUST go through POST /command —
@@ -73,8 +84,11 @@ class ReadarrIntegration(BaseIntegration):
             importable, covered = partition_import_candidates(candidates)
             files = []
             for f in importable:
-                aid = (f.get("author") or {}).get("id") or f.get("authorId") or author_id
-                book_id = (f.get("book") or {}).get("id") or f.get("bookId")
+                aid = (f.get("author") or {}).get("id") or f.get("authorId")
+                book_id = ((f.get("book") or {}).get("id") or f.get("bookId")
+                           or matched_id)
+                if not aid:
+                    aid = matched_id  # legacy: matched_id was authorId
                 if not aid or not book_id or not f.get("path"):
                     continue
                 entry = {

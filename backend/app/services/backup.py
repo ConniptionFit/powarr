@@ -18,6 +18,20 @@ def backup_dir() -> Path:
     return Path(settings.data_dir) / "backups"
 
 
+def safe_backup_path(name: str) -> Path:
+    """CONTROL-04 (v0.34.0): resolve a backup filename under backup_dir only.
+    Rejects path separators, '..', and anything that escapes the backups root."""
+    base = backup_dir().resolve()
+    if not name or "/" in name or "\\" in name or name in (".", "..") or ".." in name:
+        raise ValueError("invalid backup name")
+    if not name.startswith("powarr-"):
+        raise ValueError("backup name must start with powarr-")
+    target = (base / name).resolve()
+    if not str(target).startswith(str(base) + "/") and target != base:
+        raise ValueError("backup path escapes backups directory")
+    return target
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
