@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd, Download, Rows3 } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd, Download, Rows3, Split } from "lucide-react";
 import { importsApi, settingsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
@@ -305,9 +305,30 @@ function FileDetails({ importId, sourceApp, matchedId, packFileMatches }: {
           const isEditing = editable && !!f.raw_path && editingPath === f.raw_path;
           const label = f.mapped_to ? `${f.mapped_to}${f.detail ? ` (${f.detail})` : ""}` : "unmapped";
           const match = f.path ? matchByFile.get(basename(f.path)) : undefined;
+          const status = f.import_status ?? (f.rejections.length ? "blocked" : "ok");
+          const rowCls = status === "covered"
+            ? "bg-red-950/25 text-red-200/90"
+            : status === "ok"
+              ? "bg-green-950/20"
+              : "";
+          const statusTitle = status === "covered"
+            ? "Already in library at equal-or-better quality — skipped on import"
+            : status === "ok"
+              ? "Will import (missing or upgrade)"
+              : f.rejections.join("; ") || "Blocked by *arr rejections";
           return (
-            <tr key={i}>
-              <td className="px-4 py-1.5 max-w-xs truncate" title={f.path ?? ""}>{f.path ?? "—"}</td>
+            <tr key={i} className={rowCls} title={statusTitle}>
+              <td className="px-4 py-1.5 max-w-xs truncate" title={f.path ?? ""}>
+                <span className="inline-flex items-center gap-1.5">
+                  {status === "covered" && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0" title={statusTitle} />
+                  )}
+                  {status === "ok" && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" title={statusTitle} />
+                  )}
+                  {f.path ?? "—"}
+                </span>
+              </td>
               <td className="px-4 py-1.5">{f.size ? fmtBytes(f.size) : "—"}</td>
               <td className="px-4 py-1.5">{f.quality ?? "—"}</td>
               <td className="px-4 py-1.5 relative">
@@ -687,6 +708,14 @@ export default function FailedImports() {
                 Covered
               </span>
             )}
+            {item.partial_import && !item.quality_downgrade && (
+              <span
+                className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded bg-sky-900/40 text-sky-300 text-[10px] font-bold uppercase tracking-wide w-fit"
+                title="Gap-fill: some files are missing/upgrades (will import) and some are already covered (skipped). Expand the row for green/red per file."
+              >
+                <Split size={10} /> Partial
+              </span>
+            )}
             {item.suspicious_files && (
               <span
                 className="block mt-0.5 px-1.5 py-0.5 rounded bg-red-900/60 text-red-300 text-[10px] font-bold uppercase tracking-wide w-fit"
@@ -1020,7 +1049,11 @@ export default function FailedImports() {
                                   disabled={acceptMut.isPending}
                                   className="px-2 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-xs disabled:opacity-50"
                                 >
-                                  {acceptMut.isPending ? "Pushing…" : "Confirm Import"}
+                                  {acceptMut.isPending
+                                    ? "Pushing…"
+                                    : item.partial_import
+                                      ? "Import Missing/Upgrades"
+                                      : "Confirm Import"}
                                 </button>
                                 <button onClick={() => setConfirmAccept(null)} className="px-2 py-1 bg-surface-overlay hover:bg-white/10 text-slate-300 rounded text-xs">Cancel</button>
                               </div>
@@ -1029,7 +1062,11 @@ export default function FailedImports() {
                                 <button
                                   onClick={() => setConfirmAccept(item.id)}
                                   disabled={!item.matched_id}
-                                  title={item.matched_id ? "Accept — push import to the *arr app" : "No match to import"}
+                                  title={item.matched_id
+                                    ? (item.partial_import
+                                      ? "Accept — import only missing/upgrade files; already-covered files are skipped"
+                                      : "Accept — push import to the *arr app")
+                                    : "No match to import"}
                                   className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300 transition-colors disabled:opacity-30"
                                 >
                                   <Check size={15} />

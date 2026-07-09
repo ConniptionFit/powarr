@@ -320,6 +320,7 @@ async def ollama_preview(body: dict = Body(default={}), db: Session = Depends(ge
                     "json_valid": ok, "message": message}
 
         fields = dict(_BENCH_MATCH)
+        preview_app = "sonarr"
         if use_real:
             from app.models.failed_import import FailedImport
             row = (db.query(FailedImport).filter(FailedImport.matched_title.isnot(None))
@@ -334,12 +335,12 @@ async def ollama_preview(body: dict = Body(default={}), db: Session = Depends(ge
                 fields = {"release": row.raw_title, "candidate": row.matched_title,
                           "context": f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
                           "det_summary": det}
+                preview_app = row.source_app or "sonarr"
                 source = f"failed import #{row.id}"
-        # Reply envelope is fixed to markdown-capable JSON (v0.30.0).
         prompt = llm_assist.build_review_prompt(
             cfg.match_prompt, fields["release"], fields["candidate"], fields["context"],
             fields["det_summary"], cfg.verbosity, llm_assist.REPLY_FORMAT, cfg.confidence_style,
-            **pk)
+            source_app=preview_app, **pk)
         started = time.monotonic()
         raw = await llm_assist._generate(
             cfg.host, cfg.model_for("match"), prompt, cfg.api_style,

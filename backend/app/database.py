@@ -50,6 +50,7 @@ def _migrate():
             "pack_file_matches": "TEXT",
             "mapping_overrides": "TEXT",
             "quality_downgrade": "BOOLEAN",
+            "partial_import": "BOOLEAN",
             "suspicious_files": "TEXT",
             "llm_agrees": "BOOLEAN",
         },

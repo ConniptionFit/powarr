@@ -8,7 +8,9 @@ from app.services.import_matcher import (_normalize, title_similarity, _is_stuck
                                          score_pack_match, find_corroborating_episodes,
                                          is_quality_downgrade, find_suspicious_files,
                                          strip_release_junk, extract_release_year,
-                                         candidate_year, format_alternate_titles)
+                                         candidate_year, format_alternate_titles,
+                                         file_is_covered, is_partial_import,
+                                         partition_import_candidates)
 
 CFG = ImportMatchingSettings()  # defaults: title 0.6 / number 0.4, anime numbering on
 
@@ -48,6 +50,37 @@ class TestStripReleaseJunk(unittest.TestCase):
     def test_strips_trailing_group(self):
         self.assertNotIn("megusta", strip_release_junk(
             "Show.Name.S01E01.1080p.WEB-DL-MeGusta").lower())
+
+    def test_music_strips_deluxe_and_cd(self):
+        out = strip_release_junk(
+            "Tech_N9ne_Collabos-Strange_Reign-DELUXE_EDITION-2CD-FLAC-2017", music=True)
+        low = out.lower()
+        self.assertNotIn("deluxe", low)
+        self.assertNotIn("2cd", low)
+        self.assertNotIn("flac", low)
+        self.assertIn("strange", low)
+        self.assertIn("reign", low)
+
+    def test_music_similarity_ignores_edition(self):
+        s = title_similarity(
+            "Two.Door.Cinema.Club.Tourist.History.DELUXE.CD.FLAC.2010",
+            "Tourist History", source_app="lidarr")
+        self.assertGreaterEqual(s, 0.85)
+
+
+class TestPartialImport(unittest.TestCase):
+    def test_partition_and_partial_flag(self):
+        covered = {"path": "/a.flac", "rejections": [{"reason": "Not an upgrade for existing album file(s)"}]}
+        ok = {"path": "/b.flac", "rejections": []}
+        blocked = {"path": "/c.flac", "rejections": [{"reason": "Unable to parse"}]}
+        self.assertTrue(file_is_covered(covered))
+        self.assertFalse(file_is_covered(ok))
+        imp, cov = partition_import_candidates([covered, ok, blocked])
+        self.assertEqual(len(cov), 1)
+        self.assertEqual(len(imp), 2)
+        self.assertTrue(is_partial_import([covered, ok]))
+        self.assertFalse(is_partial_import([covered, covered]))
+        self.assertFalse(is_partial_import([ok, ok]))
 
 
 class TestYearHardFail(unittest.TestCase):

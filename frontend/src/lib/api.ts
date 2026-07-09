@@ -306,6 +306,7 @@ export interface FailedImport {
   pack_file_matches: string | null; // JSON: per-file episode suggestions from LLM review
   mapping_overrides: string | null; // JSON: user-corrected per-file episode mappings, keyed by raw path
   quality_downgrade: boolean | null; // every file in the download rejects as "not an upgrade"
+  partial_import: boolean | null; // some importable + some already covered (gap-fill)
   suspicious_files: string | null; // JSON list of filenames matching a suspicious extension
   status: string;
   verified: boolean | null;
@@ -345,6 +346,7 @@ export interface ImportFileDetail {
   detail: string;
   overridden: boolean;
   rejections: string[];
+  import_status?: "ok" | "covered" | "blocked"; // v0.32.0 gap-fill highlighting
 }
 
 export interface ImportTrends {

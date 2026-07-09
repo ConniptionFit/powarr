@@ -407,6 +407,8 @@ async def import_files(item_id: int, db: Session = Depends(get_db)):
             detail = f["album"].get("title", "")
         else:
             detail = ""
+        rejections = [r.get("reason") for r in (f.get("rejections") or [])]
+        covered = import_matcher.file_is_covered(f)
         files.append({
             "path": f.get("relativePath") or f.get("path"),
             "raw_path": raw_path,
@@ -415,7 +417,9 @@ async def import_files(item_id: int, db: Session = Depends(get_db)):
             "mapped_to": mapped,
             "detail": detail,
             "overridden": override is not None,
-            "rejections": [r.get("reason") for r in (f.get("rejections") or [])],
+            "rejections": rejections,
+            # v0.32.0 — green/red row highlighting for gap-fill packs/albums
+            "import_status": "covered" if covered else ("ok" if not rejections else "blocked"),
         })
     return {"files": files, "message": None}
 
@@ -498,6 +502,14 @@ async def _accept(item_id: int, db: Session) -> dict:
     if result["ok"]:
         item.status = "accepted"
         item.resolved_at = datetime.utcnow()
+        if result.get("partial"):
+            item.partial_import = True
+    elif result.get("reason") == "all_covered":
+        # Every file already in the library — treat like Covered auto-reject.
+        item.status = "rejected"
+        item.resolved_at = datetime.utcnow()
+        item.quality_downgrade = True
+        item.partial_import = False
     elif result.get("reason") == "no_files" or import_matcher.looks_like_missing_files(result.get("message")):
         # *arr returned zero importable candidates for this downloadId — the
         # files are gone (removed/imported elsewhere). Don't leave the row in

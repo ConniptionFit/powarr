@@ -5,12 +5,18 @@ from app.integrations.base import BaseIntegration
 
 
 def build_manual_import_files(candidates: list[dict], movie_id: int | None,
-                              download_id: str) -> list[dict]:
+                              download_id: str, *, skip_covered: bool = True) -> list[dict]:
     """Map GET /manualimport candidates to ManualImport-command file entries
     (pure, unit-tested). Mirrors Radarr's interactive import: flat movieId,
-    never the nested movie object."""
+    never the nested movie object.
+
+    skip_covered (v0.32.0): omit equal-or-better / already-imported files.
+    """
+    from app.services.import_matcher import file_is_covered
     files = []
     for f in candidates:
+        if skip_covered and file_is_covered(f):
+            continue
         mid = (f.get("movie") or {}).get("id") or f.get("movieId") or movie_id
         if not mid or not f.get("path"):
             continue
@@ -103,17 +109,26 @@ class RadarrIntegration(BaseIntegration):
             # beyond the download (see the Sonarr seriesId incident, 2026-07-05)
             candidates = await self._fetch_manual_import(
                 download_id, filter_existing=True, folder=folder)
+            from app.services.import_matcher import partition_import_candidates
+            _, covered = partition_import_candidates(candidates)
             files = build_manual_import_files(candidates, movie_id, download_id)
+            skipped = len(covered)
             if not files:
-                return {"ok": False, "reason": "no_files", "imported": 0,
+                if skipped and candidates:
+                    return {"ok": False, "reason": "all_covered", "imported": 0, "skipped": skipped,
+                            "message": f"All {skipped} file(s) already in library at equal-or-better quality"}
+                return {"ok": False, "reason": "no_files", "imported": 0, "skipped": skipped,
                         "message": "Download files are gone — nothing left to import"}
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
                 pr = await client.post(f"{self._base()}/command", headers=self._headers(),
                                        json={"name": "ManualImport", "files": files, "importMode": "move"})
                 if pr.status_code in (200, 201, 202):
-                    return {"ok": True, "imported": len(files),
-                            "message": f"Manual import command queued for {len(files)} file(s) — "
-                                       "confirmed against history afterward"}
+                    msg = f"Manual import command queued for {len(files)} file(s)"
+                    if skipped:
+                        msg += f" ({skipped} already covered — skipped)"
+                    msg += " — confirmed against history afterward"
+                    return {"ok": True, "imported": len(files), "skipped": skipped,
+                            "partial": bool(skipped), "message": msg}
                 return {"ok": False, "message": f"Import push failed: HTTP {pr.status_code}", "imported": 0}
         except Exception as e:
             return self._manual_import_error_result(e)

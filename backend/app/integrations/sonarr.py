@@ -5,7 +5,8 @@ from app.integrations.base import BaseIntegration
 
 
 def build_manual_import_files(candidates: list[dict], series_id: int | None,
-                              download_id: str, overrides: dict | None = None) -> list[dict]:
+                              download_id: str, overrides: dict | None = None,
+                              *, skip_covered: bool = True) -> list[dict]:
     """Map GET /manualimport candidates to ManualImport-command file entries
     (pure, unit-tested). Mirrors what Sonarr's own interactive import sends:
     flat seriesId + episodeIds, never the nested series/episodes objects.
@@ -13,10 +14,17 @@ def build_manual_import_files(candidates: list[dict], series_id: int | None,
     overrides: {raw_path: {"episode_id": int, ...}} — a user correction saved
     via the triage UI's editable Mapped To column. When a candidate's path has
     an override, its episodeIds are replaced with the corrected episode before
-    building the command, so accept actually imports what the user picked."""
+    building the command, so accept actually imports what the user picked.
+
+    skip_covered (v0.32.0): omit files that reject as equal-or-better / already
+    imported so gap-fill packs only push missing/upgrade episodes.
+    """
+    from app.services.import_matcher import file_is_covered
     overrides = overrides or {}
     files = []
     for f in candidates:
+        if skip_covered and file_is_covered(f):
+            continue
         sid = (f.get("series") or {}).get("id") or f.get("seriesId") or series_id
         override = overrides.get(f.get("path"))
         episode_ids = [override["episode_id"]] if override else (
@@ -136,9 +144,15 @@ class SonarrIntegration(BaseIntegration):
             # series_id is applied later, as a mapping fallback per file entry.
             candidates = await self._fetch_manual_import(
                 download_id, filter_existing=True, folder=folder)
+            from app.services.import_matcher import partition_import_candidates
+            _, covered = partition_import_candidates(candidates)
             files = build_manual_import_files(candidates, series_id, download_id, overrides)
+            skipped = len(covered)
             if not files:
-                return {"ok": False, "reason": "no_files", "imported": 0,
+                if skipped and candidates:
+                    return {"ok": False, "reason": "all_covered", "imported": 0, "skipped": skipped,
+                            "message": f"All {skipped} file(s) already in library at equal-or-better quality"}
+                return {"ok": False, "reason": "no_files", "imported": 0, "skipped": skipped,
                         "message": "Download files are gone — nothing left to import"}
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
                 # Hard guard: never import files that already live inside the series'
@@ -156,9 +170,12 @@ class SonarrIntegration(BaseIntegration):
                 pr = await client.post(f"{self._base()}/command", headers=self._headers(),
                                        json={"name": "ManualImport", "files": files, "importMode": "move"})
                 if pr.status_code in (200, 201, 202):
-                    return {"ok": True, "imported": len(files),
-                            "message": f"Manual import command queued for {len(files)} file(s) — "
-                                       "confirmed against history afterward"}
+                    msg = f"Manual import command queued for {len(files)} file(s)"
+                    if skipped:
+                        msg += f" ({skipped} already covered — skipped)"
+                    msg += " — confirmed against history afterward"
+                    return {"ok": True, "imported": len(files), "skipped": skipped,
+                            "partial": bool(skipped), "message": msg}
                 return {"ok": False, "message": f"Import push failed: HTTP {pr.status_code}", "imported": 0}
         except Exception as e:
             return self._manual_import_error_result(e)

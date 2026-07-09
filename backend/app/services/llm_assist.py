@@ -199,16 +199,70 @@ def compact_det_summary(match_rationale: str, heuristic_confidence: float | None
     return " | ".join(parts) if parts else "heuristic=unknown"
 
 
+# Per-*arr judging guidance (v0.32.0) — anime/TV rules must not appear on Lidarr, etc.
+_APP_MATCH_GUIDANCE = {
+    "sonarr": (
+        "\nStrip from the release name before judging: resolution, source (WEB-DL/BluRay), "
+        "codec, audio, HDR, encoder, and uploader/release-group tags — never evidence "
+        "for/against a match."
+        "\nAnime & foreign titles: absolute episode numbers, romaji/native/English "
+        "translations, and alternate titles of the same work count as matches. Prefer "
+        "the triggered series in Context over string similarity alone."
+        "\nYear: DISAGREE on year only when BOTH the release and the candidate have a "
+        "known year and they differ. A missing year on either side is NOT a mismatch."
+        "\nDefault to AGREE with the scorer. Reply DISAGREE only for a concrete "
+        "contradiction (wrong series, wrong episode/absolute number, or wrong year "
+        "when both years are known). Cosmetic filename differences are not contradictions."
+    ),
+    "radarr": (
+        "\nStrip from the release name before judging: resolution, source (WEB-DL/BluRay), "
+        "codec, audio, HDR, encoder, and uploader/release-group tags — never evidence "
+        "for/against a match. Alternate titles / translations of the same film count."
+        "\nYear: DISAGREE on year only when BOTH the release and the candidate have a "
+        "known year and they differ. A missing year on either side is NOT a mismatch."
+        "\nDefault to AGREE with the scorer. Reply DISAGREE only for a concrete "
+        "contradiction (wrong movie or wrong year when both years are known). "
+        "Edition/cut tags alone are not contradictions unless the candidate is a "
+        "clearly different work."
+    ),
+    "lidarr": (
+        "\nThis is a MUSIC (Lidarr) match — artist/album identity only. Do NOT mention "
+        "anime, episodes, absolute numbers, seasons, or TV series."
+        "\nStrip before judging: audio format (FLAC/MP3/AAC), bitrate, CD/2CD/DISC/vinyl/"
+        "LP, DELUXE/Expanded/Remaster/Special Edition, uploader/group tags, and folder "
+        "noise — these are NEVER evidence for/against a match."
+        "\nYear: many album releases omit a library year. A missing year on the candidate "
+        "is NOT a mismatch. Only DISAGREE on year when BOTH sides have a known year and "
+        "they differ."
+        "\nDefault to AGREE with the scorer. Reply DISAGREE only for a concrete "
+        "contradiction (wrong artist or clearly wrong album). Deluxe/CD/format tags "
+        "are not contradictions."
+    ),
+    "readarr": (
+        "\nThis is a BOOK (Readarr) match — author/book identity only. Do NOT mention "
+        "anime, episodes, or TV series."
+        "\nStrip before judging: format tags (ebook/audiobook/epub/mobi), edition labels, "
+        "and uploader tags — never evidence for/against a match."
+        "\nYear: a missing year on either side is NOT a mismatch."
+        "\nDefault to AGREE with the scorer. Reply DISAGREE only for a concrete "
+        "contradiction (wrong author or wrong book)."
+    ),
+}
+_DEFAULT_MATCH_GUIDANCE = _APP_MATCH_GUIDANCE["sonarr"]
+
+
 def build_review_prompt(template: str, release: str, candidate: str, context: str,
                         det_summary: str, verbosity: str = "brief",
                         reply_format: str = "markdown",
                         confidence_style: str = "numeric",
-                        forbid_thinking: bool = True) -> str:
+                        forbid_thinking: bool = True,
+                        source_app: str | None = None) -> str:
     """Static scaffold around the (optionally user-templated) match prompt.
 
     v0.30.0: reframed as \"disagree only with a concrete contradiction\"; answer-only
     (no CoT); reason = brief verdict + Markdown bullets. reply_format is fixed to
     markdown-capable JSON at call sites (Settings no longer exposes a picker).
+    v0.32.0: judging guidance is per-*arr app (no anime rules on Lidarr).
     """
     # Force rich-text-capable envelope; keep "simple" only if an old caller passes it
     # for tiny models that can't emit JSON at all.
@@ -217,20 +271,10 @@ def build_review_prompt(template: str, release: str, candidate: str, context: st
                  .replace("{candidate}", _truncate(candidate, CAP_CANDIDATE))
                  .replace("{context}", _truncate(context, CAP_CONTEXT)))
     prompt += (
-        f"\nScorer result (title/season/episode/absolute comparisons): "
-        f"{_truncate(det_summary, CAP_DET_SUMMARY)}"
+        f"\nScorer result: {_truncate(det_summary, CAP_DET_SUMMARY)}"
     )
-    prompt += (
-        "\nStrip from the release name before judging: resolution, source (WEB-DL/BluRay), "
-        "codec, audio, HDR, encoder, and uploader/release-group tags (e.g. MeGusta, "
-        "FLUX, SubsPlease) — never evidence for/against a match."
-        "\nAnime & foreign titles: absolute episode numbers, romaji/native/English "
-        "translations, and alternate titles of the same work count as matches. Prefer "
-        "the triggered series in Context over string similarity alone."
-        "\nDefault to AGREE with the scorer. Reply DISAGREE only if you can cite a "
-        "concrete contradiction (wrong series/movie, wrong episode/absolute number, "
-        "or wrong year). Cosmetic filename differences are not contradictions."
-    )
+    app = (source_app or "").lower().strip()
+    prompt += _APP_MATCH_GUIDANCE.get(app, _DEFAULT_MATCH_GUIDANCE)
     if forbid_thinking:
         prompt += _NO_THINK_INSTRUCTION
 
@@ -755,6 +799,7 @@ async def review_match(host: str, model: str, release_title: str,
                        keep_alive_minutes: int = 10, reply_format: str = "markdown",
                        confidence_style: str = "numeric",
                        forbid_thinking: bool = True,
+                       source_app: str | None = None,
                        temperature: float = 0.0, max_tokens: int = 0,
                        timeout_seconds: int = 0) -> Optional[dict[str, Any]]:
     """Single structured LLM review of a deterministic match decision (one call —
@@ -768,7 +813,7 @@ async def review_match(host: str, model: str, release_title: str,
     eff_format = reply_format if reply_format == "simple" else REPLY_FORMAT
     prompt = build_review_prompt(template, release_title, candidate_title, context,
                                  det_summary, verbosity, eff_format, confidence_style,
-                                 forbid_thinking=forbid_thinking)
+                                 forbid_thinking=forbid_thinking, source_app=source_app)
     raw = await _generate(host, model, prompt, api_style,
                           json_format=eff_format != "simple", verbose=verbose,
                           model_size=model_size, keep_alive_minutes=keep_alive_minutes,

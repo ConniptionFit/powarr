@@ -73,6 +73,19 @@ class TestSonarrManualImportFiles(unittest.TestCase):
         f = sonarr_files([self.CANDIDATE], None, "abc", None)[0]
         self.assertEqual(f["episodeIds"], [501, 502])
 
+    def test_covered_files_skipped_by_default(self):
+        covered = {**self.CANDIDATE, "path": "/d/covered.mkv",
+                   "rejections": [{"reason": "Not an upgrade for existing episode file(s)"}]}
+        files = sonarr_files([self.CANDIDATE, covered], None, "abc")
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["path"], self.CANDIDATE["path"])
+
+    def test_skip_covered_can_be_disabled(self):
+        covered = {**self.CANDIDATE, "path": "/d/covered.mkv",
+                   "rejections": [{"reason": "Not an upgrade for existing episode file(s)"}]}
+        files = sonarr_files([covered], None, "abc", skip_covered=False)
+        self.assertEqual(len(files), 1)
+
 
 class TestRadarrManualImportFiles(unittest.TestCase):
     def test_flat_movie_id(self):

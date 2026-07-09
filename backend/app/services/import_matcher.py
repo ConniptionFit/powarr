@@ -33,9 +33,21 @@ _JUNK_RE = re.compile(
     r"\b(2160p|1080p|720p|480p|576p|4k|uhd|x264|x265|h264|h265|hevc|avc|av1|"
     r"web[- ]?dl|webrip|bluray|blu[- ]?ray|bdrip|brrip|remux|hdtv|dvdrip|hdrip|"
     r"proper|repack|real|amzn|dsnp|nf|atvp|hulu|hmax|pmtv|itunes|"
-    r"flac|mp3|320|v0|aac|dts|ac3|eac3|ddp?5\.?1|truehd|atmos|"
+    r"flac|alac|ape|wav|mp3|320|v0|v2|aac|dts|ac3|eac3|ddp?5\.?1|truehd|atmos|"
     r"dv|hdr(10)?(\+)?|dolby|vision|10bit|8bit|multi|dual|vostfr|internal|"
     r"sample|nfo|readnfo)\b", re.IGNORECASE)
+# Music/book edition & media-format tags (v0.32.0) — never evidence for/against a match.
+# Applied on Lidarr/Readarr release names (and optionally all apps for CD/vinyl noise).
+# Separators include space/underscore/dot/hyphen so DELUXE_EDITION / Deluxe.Edition match.
+_ED = r"[_\s.-]+"  # edition-phrase separator
+_EDITION_JUNK_RE = re.compile(
+    rf"\b(deluxe({_ED}edition)?|expanded({_ED}edition)?|limited({_ED}edition)?|"
+    rf"special({_ED}edition)?|collector'?s?({_ED}edition)?|anniversary({_ED}edition)?|"
+    rf"remaster(ed)?|remix|bonus|explicit|clean|instrumental|"
+    rf"2cd|2disc|disc{_ED}?\d+|cd{_ED}?\d+|cd|dvd|bluray|vinyl|lp|ep|single|"
+    rf"box{_ED}?set|digipak|japan(ese)?|eu|uk|us|fn|fathead)\b",
+    re.IGNORECASE,
+)
 # Servarr "already have equal-or-better" rejection family (Sonarr episode /
 # Radarr movie / Lidarr album|track). Also Lidarr's "Album already imported"
 # which fires when the album is already in the library at equal-or-better quality.
@@ -97,14 +109,17 @@ _QUALITY_GROUP_TAIL_RE = re.compile(
 )
 
 
-def strip_release_junk(title: str) -> str:
-    """Deterministic release-name cleaner (v0.31.0): quality/source/codec tags plus
+def strip_release_junk(title: str, *, music: bool = False) -> str:
+    """Deterministic release-name cleaner (v0.31.0+): quality/source/codec tags plus
     common uploader/release-group wrappers. Used before title similarity so groups
     like MeGusta / SubsPlease don't dilute the match.
 
     Conservative on trailing groups: only strip a hyphen/dot suffix when it follows
     a known quality token (e.g. ``1080p-MeGusta``), never a bare title word — that
     would eat episode titles like ``The.Winds.of.Winter``.
+
+    ``music=True`` (Lidarr/Readarr) also strips edition/media-format tags
+    (DELUXE, CD, 2CD, remaster, vinyl, …) that are not album-identity signals.
     """
     t = title or ""
     # Bracket tags: [SubsPlease], [A1B2C3D4], [1080p]
@@ -116,13 +131,15 @@ def strip_release_junk(title: str) -> str:
     t = _QUALITY_GROUP_TAIL_RE.sub(
         lambda m: re.split(r"[-.]", m.group(0))[0], t)
     t = _JUNK_RE.sub(" ", t)
+    if music:
+        t = _EDITION_JUNK_RE.sub(" ", t)
     return re.sub(r"\s+", " ", t).strip()
 
 
-def _normalize(title: str, *, is_release: bool = False) -> str:
+def _normalize(title: str, *, is_release: bool = False, music: bool = False) -> str:
     t = title or ""
     if is_release:
-        t = strip_release_junk(t)
+        t = strip_release_junk(t, music=music)
     t = t.lower()
     t = re.sub(r"[._\-\[\]()+]", " ", t)
     # *arr library titles keep punctuation (commas, colons, apostrophes) that release
@@ -131,13 +148,17 @@ def _normalize(title: str, *, is_release: bool = False) -> str:
     # Larry..." from a dot-separated filename).
     t = re.sub(r"[,;:'’!?]", "", t)
     t = _JUNK_RE.sub(" ", t)
+    if music and is_release:
+        t = _EDITION_JUNK_RE.sub(" ", t)
     t = _SEASON_EP_RE.sub(" ", t)
     t = _YEAR_RE.sub(" ", t)
     return re.sub(r"\s+", " ", t).strip()
 
 
-def title_similarity(release_title: str, library_title: str) -> float:
-    a, b = _normalize(release_title, is_release=True), _normalize(library_title)
+def title_similarity(release_title: str, library_title: str, *,
+                     source_app: str | None = None) -> float:
+    music = source_app in ("lidarr", "readarr")
+    a, b = _normalize(release_title, is_release=True, music=music), _normalize(library_title)
     if not a or not b:
         return 0.0
     ratio = SequenceMatcher(None, a, b).ratio()
@@ -260,6 +281,37 @@ def find_suspicious_files(candidates: list[dict], extensions: list[str]) -> list
     return matches
 
 
+def file_is_covered(candidate: dict) -> bool:
+    """True when this manual-import candidate rejects as equal-or-better /
+    already imported (not an upgrade). Pure, unit-tested."""
+    reasons = [r.get("reason", "") for r in (candidate.get("rejections") or [])]
+    return any(_DOWNGRADE_RE.search(r) for r in reasons)
+
+
+def partition_import_candidates(candidates: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split manual-import candidates into (importable, covered).
+
+    Importable = not covered by equal-or-better / already-imported rejections.
+    Covered files are skipped at accept time (v0.32.0 partial import).
+    """
+    importable, covered = [], []
+    for f in candidates:
+        if file_is_covered(f):
+            covered.append(f)
+        else:
+            importable.append(f)
+    return importable, covered
+
+
+def is_partial_import(candidates: list[dict]) -> bool:
+    """True when some files are importable and some are already covered —
+    a gap-fill pack/album (v0.32.0)."""
+    if not candidates:
+        return False
+    importable, covered = partition_import_candidates(candidates)
+    return bool(importable) and bool(covered)
+
+
 def is_quality_downgrade(candidates: list[dict]) -> bool:
     """Pure: True when EVERY file in a manual-import candidate list rejects
     because the *arr app already has equal-or-better quality in the library.
@@ -274,8 +326,7 @@ def is_quality_downgrade(candidates: list[dict]) -> bool:
     if not candidates:
         return False
     for f in candidates:
-        reasons = [r.get("reason", "") for r in (f.get("rejections") or [])]
-        if not any(_DOWNGRADE_RE.search(r) for r in reasons):
+        if not file_is_covered(f):
             return False
     return True
 
@@ -611,7 +662,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     if rec.get(id_key) and rec[id_key] in lib_by_id:
         matched_id = rec[id_key]
         matched_title = lib_by_id[matched_id].get(title_key, "")
-        sim = title_similarity(raw_title, matched_title)
+        sim = title_similarity(raw_title, matched_title, source_app=app_name)
         confidence = 0.55 + 0.45 * sim
         parts.append(f"{app_name} queue already maps this download to the library entry "
                      f"(series/media title similarity {round(sim * 100)}%)")
@@ -622,7 +673,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         if hist and hist.get(id_key) and hist[id_key] in lib_by_id:
             matched_id = hist[id_key]
             matched_title = lib_by_id[matched_id].get(title_key, "")
-            sim = title_similarity(raw_title, matched_title)
+            sim = title_similarity(raw_title, matched_title, source_app=app_name)
             confidence = 0.45 + 0.45 * sim
             parts.append(f"grab history links this downloadId to the library entry "
                          f"(title similarity {round(sim * 100)}%)")
@@ -630,7 +681,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             # 3. Fuzzy title match against the library
             best, best_score = None, 0.0
             for item in library:
-                s = title_similarity(raw_title, item.get(title_key, ""))
+                s = title_similarity(raw_title, item.get(title_key, ""), source_app=app_name)
                 if s > best_score:
                     best, best_score = item, s
             if best and best_score > 0:
@@ -676,7 +727,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         if mapped is None and total and sibling_seasons:
             mapped = len([s for s in sibling_seasons
                           if not parsed["pack_seasons"] or s in parsed["pack_seasons"]])
-        title_sim = title_similarity(raw_title, matched_title)
+        title_sim = title_similarity(raw_title, matched_title, source_app=app_name)
         pack_score, has_numeric, pack_parts, pack_label = score_pack_match(
             title_sim, parsed["pack_seasons"], parsed["complete"],
             sibling_seasons, mapped, total, cfg)
@@ -741,15 +792,6 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         llm_context_parts = [
             f"Source app: {app_name}",
             f"Queue status: {_queue_messages(rec)[:150]}",
-            # Weak local models sometimes report a "year mismatch" between two
-            # numerically identical years (observed live: "year mismatch (2025 vs
-            # 2025)") — the candidate title occasionally carries a disambiguating
-            # "(YYYY)" suffix (e.g. "Paradise (2025)"), so a year comparison is
-            # sometimes genuinely possible; the instruction only needs to rule out
-            # a self-contradictory verdict, not the comparison itself.
-            "Never report a year mismatch between two years that are the same "
-            "number — only flag a year mismatch if the release year and the "
-            "candidate's year (when the candidate's title includes one) actually differ.",
         ]
         if triggered_title and triggered_title != matched_title:
             llm_context_parts.append(
@@ -784,6 +826,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             verbosity=ollama.verbosity, model_size=ollama.model_size,
             keep_alive_minutes=ollama.keep_alive_minutes,
             reply_format="markdown", confidence_style=ollama.confidence_style,
+            source_app=app_name,
             **llm_assist.prompt_kwargs(ollama),
             **llm_assist.inference_kwargs(ollama))
         if llm:
@@ -1278,8 +1321,10 @@ async def _scan_once_inner(task_id: str) -> dict:
                     suspicious = find_suspicious_files(mi_candidates, cfg.suspicious_extensions)
                     item.suspicious_files = json.dumps(suspicious) if suspicious else None
                     item.quality_downgrade = is_quality_downgrade(mi_candidates)
+                    item.partial_import = is_partial_import(mi_candidates)
                 if not item.quality_downgrade and queue_looks_like_quality_covered(q_messages):
                     item.quality_downgrade = True
+                    item.partial_import = False
 
                 if item.suspicious_files and cfg.suspicious_extension_auto_reject:
                     matched = json.loads(item.suspicious_files)
@@ -1531,6 +1576,7 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 verbosity="verbose", model_size=ollama.model_size,
                 keep_alive_minutes=ollama.keep_alive_minutes,
                 reply_format="markdown", confidence_style=ollama.confidence_style,
+                source_app=row.source_app,
                 **llm_assist.prompt_kwargs(ollama),
                 **llm_assist.inference_kwargs(ollama))
             if not llm:

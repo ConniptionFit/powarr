@@ -147,12 +147,23 @@ class TestPromptShapes(unittest.TestCase):
         self.assertIn("KEEP or DELETE", p)
 
     def test_review_defaults_to_agree_and_strips_junk(self):
-        p = build_review_prompt("", "r", "c", "x", "d")
+        p = build_review_prompt("", "r", "c", "x", "d", source_app="sonarr")
         self.assertIn("Default to AGREE", p)
         self.assertIn("Strip from the release name", p)
         self.assertIn("Anime & foreign titles", p)
         self.assertIn("Do NOT write chain-of-thought", p)
         self.assertIn("bullet reasons", p)
+
+    def test_lidarr_guidance_has_no_anime(self):
+        p = build_review_prompt("", "r", "c", "x", "d", source_app="lidarr")
+        self.assertIn("MUSIC (Lidarr)", p)
+        self.assertNotIn("Anime & foreign titles", p)
+        self.assertIn("missing year", p.lower())
+        self.assertIn("DELUXE", p)
+
+    def test_year_missing_not_mismatch_in_sonarr_guidance(self):
+        p = build_review_prompt("", "r", "c", "x", "d", source_app="sonarr")
+        self.assertIn("missing year on either side is NOT a mismatch", p)
 
     def test_forbid_thinking_can_be_disabled(self):
         p = build_review_prompt("", "r", "c", "x", "d", forbid_thinking=False)

@@ -26,6 +26,8 @@ class FailedImport(Base):
     pack_file_matches = Column(Text, nullable=True)  # JSON: per-file episode suggestions from LLM review
     mapping_overrides = Column(Text, nullable=True)  # JSON: {raw_path: {episode_id, season, episode, title}} user corrections
     quality_downgrade = Column(Boolean, nullable=True)  # every file rejects as "not an upgrade" — never importable as-is
+    # Some files importable + some already covered (gap-fill pack/album) — v0.32.0
+    partial_import = Column(Boolean, nullable=True)
     suspicious_files = Column(Text, nullable=True)  # JSON list of filenames matching a suspicious extension (empty/null = clean)
     # suggested | auto_resolved | accepted | rejected | closed_external | resolve_failed
     status = Column(String, default="suggested")
