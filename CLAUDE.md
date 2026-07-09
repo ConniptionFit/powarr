@@ -1,6 +1,6 @@
 # Powarr — Master Prompt (LLM IDE Agent)
 
-> **This is the authoritative agent context for Powarr.** Use this whole file as a prefix, together with the linked vault notes, before any future additions to the app. Supersedes [[LLM Context]] (legacy stub). Canonical copy: `Powarr/Master Prompt.md` in the Obsidian vault — keep this mirror identical. Last updated: 2026-07-09 (v0.27.0 committed locally — **deploy pending**, live container still runs v0.26.0).
+> **This is the authoritative agent context for Powarr.** Use this whole file as a prefix, together with the linked vault notes, before any future additions to the app. Supersedes [[LLM Context]] (legacy stub). Canonical copy: `Powarr/Master Prompt.md` in the Obsidian vault — keep this mirror identical. Last updated: 2026-07-09 (v0.27.0 pushed to `origin` + `github` — **container rebuild pending**, live container still runs v0.26.0).
 
 ## Identity & Purpose
 
@@ -10,7 +10,7 @@ You are an LLM IDE agent responsible for reviewing, maintaining, and extending *
 
 | Field | Value |
 |---|---|
-| Version | v0.27.0 committed locally (`235bba9` + `d3ebd39`, 2026-07-09) — **not yet pushed/deployed**; live container = v0.26.0 |
+| Version | v0.27.0 pushed to `origin` + `github` (`b8c71af`, 2026-07-09) — **container rebuild + container test suite + live verify pending**; live container = v0.26.0 |
 | Container | `powarr`, port `7979`, Docker host `10.1.1.2` (`ssh docker`, key auth) |
 | Source of truth | Host repo `/mnt/ServerFiles/Docker/composeFiles/powarr` (= build context) |
 | Local working clone | `~/Projects/powarr` on the Mac — **edit here**. Confirmed 2026-07-08: this is the current FastAPI/React app (`backend/`, `frontend/`, `CLAUDE.md`); `origin` = host repo, `github` = public mirror. The legacy Node.js iteration was archived to `~/Projects/powarr-legacy-node` (reference only, not deployed). |
