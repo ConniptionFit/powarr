@@ -924,7 +924,7 @@ export default function FailedImports() {
             key: "still_in_queue" as const,
             label: "Still queued",
             count: stats?.still_in_queue ?? null,
-            title: "Downloads still present in an *arr queue — including ones you already Accepted/Rejected that never left the queue",
+            title: "Stuck in an *arr queue but already Accepted/Rejected/orphaned in Powarr (out of the Needs attention list)",
           },
           {
             key: "history" as const,
@@ -987,9 +987,10 @@ export default function FailedImports() {
         <div className="flex items-start gap-2 mb-3 px-3 py-2 rounded-lg bg-amber-900/20 border border-amber-800/40 text-amber-200/90 text-xs">
           <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
           <p>
-            These downloads are still stuck in Sonarr/Radarr/Lidarr even if Powarr already marked them
-            Accepted or Rejected. Use <span className="font-semibold text-amber-100">Reopen</span> to
-            put a row back in triage, then Accept again or Reject &amp; remove from the download client.
+            Out of scope for Needs attention: still stuck in Sonarr/Radarr/Lidarr after Powarr already
+            Accepted, Rejected, or orphaned them. Use{" "}
+            <span className="font-semibold text-amber-100">Reopen</span> to triage again, or Reject &amp;
+            remove to clear the download client.
           </p>
         </div>
       )}

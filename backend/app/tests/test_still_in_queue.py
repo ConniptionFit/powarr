@@ -52,7 +52,12 @@ class TestCloseStaleStillInQueue(unittest.TestCase):
         db.query.side_effect = query_side_effect
 
         summary = {"closed_external": 0}
-        queue = [{"id": 1, "downloadId": "bbb"}]
+        # bbb is stuck (importFailed); aaa/ccc absent from queue entirely
+        queue = [
+            {"id": 1, "downloadId": "bbb", "trackedDownloadState": "importFailed"},
+            {"id": 2, "downloadId": "ddd", "status": "downloading",
+             "trackedDownloadState": "downloading"},  # not stuck — must not mark
+        ]
         _close_stale_rows(db, "sonarr", queue, summary)
 
         self.assertEqual(suggested_gone.status, "closed_external")

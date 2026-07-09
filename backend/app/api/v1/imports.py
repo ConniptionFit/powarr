@@ -64,7 +64,11 @@ def list_imports(
     if status == "needs_attention":
         q = q.filter(FailedImport.status.in_(NEEDS_ATTENTION_STATUSES))
     elif status == "still_in_queue":
-        q = q.filter(FailedImport.still_in_queue.is_(True))
+        # Out-of-scope leftovers: still stuck in *arr but already Accepted/Rejected/etc.
+        q = q.filter(
+            FailedImport.still_in_queue.is_(True),
+            ~FailedImport.status.in_(NEEDS_ATTENTION_STATUSES),
+        )
     elif status:
         q = q.filter(FailedImport.status == status)
     # Still-queued view can exceed the default 200 (many accepted/rejected leftovers)
@@ -87,7 +91,10 @@ def import_stats(db: Session = Depends(get_db)):
     ).count()
     cfg = load_import_matching(db)
     auto_eligible_count = auto_eligible_query(db, cfg).count() if cfg.auto_resolve_enabled else 0
-    still_in_queue = db.query(FailedImport).filter(FailedImport.still_in_queue.is_(True)).count()
+    still_in_queue = db.query(FailedImport).filter(
+        FailedImport.still_in_queue.is_(True),
+        ~FailedImport.status.in_(NEEDS_ATTENTION_STATUSES),
+    ).count()
     needs_attention = sum(counts[s] for s in NEEDS_ATTENTION_STATUSES)
     return ImportStats(
         **counts, by_service=by_service, auto_resolved_7d=auto_7d,

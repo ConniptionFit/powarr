@@ -1156,51 +1156,59 @@ def _orphan_known_missing_files(db, summary: dict) -> None:
         db.commit()
 
 
-def _row_still_queued(row, queue_download_ids: set, queue_item_ids: set) -> bool:
+def _row_in_id_sets(row, download_ids: set, item_ids: set) -> bool:
     if row.download_id:
-        return row.download_id in queue_download_ids
-    return bool(row.queue_item_id) and row.queue_item_id in queue_item_ids
+        return row.download_id in download_ids
+    return bool(row.queue_item_id) and row.queue_item_id in item_ids
 
 
-def _close_stale_rows(db, app_name: str, queue: list[dict], summary: dict) -> None:
+def _close_stale_rows(db, app_name: str, queue: list[dict], summary: dict,
+                      include_stalled: bool = False) -> None:
     """Suggested rows whose download left the queue on its own → closed_external.
-    Also refreshes still_in_queue (v0.35.0) so the Still queued triage view can
-    surface accepted/rejected/orphaned downloads that never left the *arr queue.
+    Also refreshes still_in_queue (v0.35.0) from **stuck** queue records only
+    (importPending/Failed/Blocked, etc.) so Still queued surfaces Accepted/
+    Rejected leftovers that never cleared — not every actively-downloading item.
 
     Scoped queries only — never loads the full history table for the app."""
     from sqlalchemy import or_
 
-    queue_download_ids = {rec.get("downloadId") for rec in queue if rec.get("downloadId")}
-    queue_item_ids = {str(rec.get("id", "")) for rec in queue if rec.get("id") is not None}
+    all_download_ids = {rec.get("downloadId") for rec in queue if rec.get("downloadId")}
+    all_item_ids = {str(rec.get("id", "")) for rec in queue if rec.get("id") is not None}
+    stuck = [rec for rec in queue if _is_stuck(rec, include_stalled)]
+    stuck_download_ids = {rec.get("downloadId") for rec in stuck if rec.get("downloadId")}
+    stuck_item_ids = {str(rec.get("id", "")) for rec in stuck if rec.get("id") is not None}
 
-    # Clear / close rows currently marked in-queue (or still suggested)
+    # Clear / close rows currently marked in-queue (or still suggested).
+    # Suggested→closed_external uses the full queue (left entirely); still_in_queue
+    # uses the stuck subset only.
     tracked = db.query(FailedImport).filter(
         FailedImport.source_app == app_name,
         or_(FailedImport.still_in_queue.is_(True), FailedImport.status == "suggested"),
     ).all()
     for row in tracked:
-        still = _row_still_queued(row, queue_download_ids, queue_item_ids)
-        if row.still_in_queue != still:
-            row.still_in_queue = still
-        if row.status == "suggested" and not still:
+        in_queue = _row_in_id_sets(row, all_download_ids, all_item_ids)
+        stuck_now = _row_in_id_sets(row, stuck_download_ids, stuck_item_ids)
+        if row.still_in_queue != stuck_now:
+            row.still_in_queue = stuck_now
+        if row.status == "suggested" and not in_queue:
             row.status = "closed_external"
             row.resolved_at = datetime.utcnow()
             row.message = ((row.message + " | ") if row.message else "") + "Left the queue on its own"
             summary["closed_external"] += 1
 
-    # Mark rows whose download_id / queue_item_id is in the live queue
-    if queue_download_ids:
+    # Mark rows matching stuck downloads
+    if stuck_download_ids:
         for row in db.query(FailedImport).filter(
             FailedImport.source_app == app_name,
-            FailedImport.download_id.in_(queue_download_ids),
+            FailedImport.download_id.in_(stuck_download_ids),
             or_(FailedImport.still_in_queue.is_(False), FailedImport.still_in_queue.is_(None)),
         ).all():
             row.still_in_queue = True
-    if queue_item_ids:
+    if stuck_item_ids:
         for row in db.query(FailedImport).filter(
             FailedImport.source_app == app_name,
             FailedImport.download_id.is_(None),
-            FailedImport.queue_item_id.in_(queue_item_ids),
+            FailedImport.queue_item_id.in_(stuck_item_ids),
             or_(FailedImport.still_in_queue.is_(False), FailedImport.still_in_queue.is_(None)),
         ).all():
             row.still_in_queue = True
@@ -1355,7 +1363,7 @@ async def _scan_once_inner(task_id: str) -> dict:
                 logger.warning(f"Import scan: {app_name} queue fetch failed: {e}")
                 continue
 
-            _close_stale_rows(db, app_name, queue, summary)
+            _close_stale_rows(db, app_name, queue, summary, include_stalled=cfg.include_stalled)
             await _verify_resolved(db, app_name, client, cfg, summary)
 
             stuck = [rec for rec in queue if _is_stuck(rec, cfg.include_stalled)]
