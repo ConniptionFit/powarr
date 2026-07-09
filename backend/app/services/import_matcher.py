@@ -424,28 +424,38 @@ def extract_output_path(rec: dict | None = None, messages: str | None = None,
     Sonarr often nulls `outputPath` once qBittorrent reports missing files, but
     the path still appears inside statusMessages (\"No files found are eligible
     for import in /downloads/...\"). Prefer the structured field, then parse
-    messages / stored raw_metadata.
+    stored raw_metadata messages, then any caller-supplied message string.
+
+    Important: Accept may pass `messages=item.message` which is often a prior
+    httpx 500 string with no path — never let that skip reading raw_metadata.
     """
+    candidates: list[str] = []
     if rec:
         path = rec.get("outputPath")
         if path:
             return path
-        messages = messages or _queue_messages(rec)
-    if raw_metadata and not messages:
+        qmsg = _queue_messages(rec)
+        if qmsg:
+            candidates.append(qmsg)
+    if raw_metadata:
         try:
             meta = json.loads(raw_metadata)
             path = meta.get("outputPath")
             if path:
                 return path
-            messages = meta.get("messages") or ""
+            meta_msg = meta.get("messages") or ""
+            if meta_msg:
+                candidates.append(meta_msg)
         except (ValueError, TypeError):
             pass
     if messages:
-        m = _OUTPUT_PATH_IN_MSG_RE.search(messages)
+        candidates.append(messages)
+
+    for text in candidates:
+        m = _OUTPUT_PATH_IN_MSG_RE.search(text)
         if m:
             return m.group(1).rstrip("/.,;")
-        # Broader fallback: first absolute path-looking token under /downloads or /media
-        for tok in re.findall(r"(/downloads/[^\s;]+|/media/[^\s;]+)", messages):
+        for tok in re.findall(r"(/downloads/[^\s;]+|/media/[^\s;]+)", text):
             return tok.rstrip("/.,;")
     return None
 

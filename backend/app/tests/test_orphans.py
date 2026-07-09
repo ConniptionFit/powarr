@@ -116,6 +116,15 @@ class TestExtractOutputPath(unittest.TestCase):
         raw = '{"outputPath": null, "messages": "No files found are eligible for import in /downloads/X/Y"}'
         self.assertEqual(extract_output_path(raw_metadata=raw), "/downloads/X/Y")
 
+    def test_raw_metadata_wins_over_httpx_500_message(self):
+        """Accept passes item.message (often a prior 500) — must still recover the path."""
+        raw = ('{"outputPath": null, "messages": "No files found are eligible for import in '
+               '/downloads/ActiveSeeds/Foo.S01; qBittorrent is reporting missing files"}')
+        err = ("Server error '500 Internal Server Error' for url "
+               "'http://x/manualimport?downloadId=ABC&filterExistingFiles=true'")
+        self.assertEqual(extract_output_path(raw_metadata=raw, messages=err),
+                         "/downloads/ActiveSeeds/Foo.S01")
+
 
 class TestManualImportErrorResult(unittest.TestCase):
     def test_nullreference_500_is_no_files(self):
