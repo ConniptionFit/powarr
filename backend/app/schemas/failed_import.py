@@ -24,6 +24,7 @@ class FailedImportOut(BaseModel):
     partial_import: Optional[bool] = None  # some importable + some already covered (gap-fill)
     suspicious_files: Optional[str] = None  # JSON list of filenames matching a suspicious extension
     status: str
+    still_in_queue: Optional[bool] = None  # download still present in the *arr queue (v0.35.0)
     verified: Optional[bool] = None
     message: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -42,10 +43,13 @@ class ImportStats(BaseModel):
     resolve_failed: int = 0
     orphan_pending: int = 0
     orphaned: int = 0
+    still_in_queue: int = 0  # rows whose download is still in the *arr queue (v0.35.0)
     by_service: dict[str, int] = {}  # suggested count per source app
     auto_resolved_7d: int = 0
     # Process N Items (v0.28.0) — 0 when auto_resolve is off
     auto_eligible_count: int = 0
+    # suggested + resolve_failed + orphan_pending (v0.35.0 Needs attention view)
+    needs_attention: int = 0
 
 
 class AutoEligibleOut(BaseModel):

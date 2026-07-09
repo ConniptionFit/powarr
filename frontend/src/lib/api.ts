@@ -309,6 +309,7 @@ export interface FailedImport {
   partial_import: boolean | null; // some importable + some already covered (gap-fill)
   suspicious_files: string | null; // JSON list of filenames matching a suspicious extension
   status: string;
+  still_in_queue: boolean | null; // download still present in the *arr queue (v0.35.0)
   verified: boolean | null;
   message: string | null;
   created_at: string | null;
@@ -325,6 +326,8 @@ export interface ImportStats {
   resolve_failed: number;
   orphan_pending: number;
   orphaned: number;
+  still_in_queue: number;
+  needs_attention: number;
   by_service: Record<string, number>;
   auto_resolved_7d: number;
   auto_eligible_count: number;
@@ -372,13 +375,16 @@ export const importsApi = {
   reject: (id: number, removeDownload = false) =>
     req<{ id: number; status: string; download_client?: string[] }>(
       `/imports/${id}/reject?remove_download=${removeDownload}`, { method: "POST" }),
-  batch: (ids: number[], action: "accept" | "reject" | "confirm_orphan") =>
+  batch: (ids: number[], action: "accept" | "reject" | "confirm_orphan" | "reopen") =>
     req<{ async?: boolean; task_id?: string; total?: number; added?: number; coalesced?: boolean;
           results: Array<Record<string, unknown>> }>("/imports/batch", {
       method: "POST", body: JSON.stringify({ ids, action }),
     }),
   confirmOrphan: (id: number) =>
     req<{ id: number; status: string }>(`/imports/${id}/confirm-orphan`, { method: "POST" }),
+  reopen: (id: number) =>
+    req<{ id: number; status: string; previous_status?: string; message?: string }>(
+      `/imports/${id}/reopen`, { method: "POST" }),
   keep: (id: number) =>
     req<{ id: number; status: string }>(`/imports/${id}/keep`, { method: "POST" }),
   files: (id: number) =>

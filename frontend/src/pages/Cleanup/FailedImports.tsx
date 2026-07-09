@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd, Download, Rows3, Split } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd, Download, Rows3, Split, Filter, RotateCcw, AlertTriangle } from "lucide-react";
 import { importsApi, settingsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
@@ -377,13 +377,38 @@ function FileDetails({ importId, sourceApp, matchedId, packFileMatches }: {
   );
 }
 
-const FILTERS = ["suggested", "resolve_failed", "orphan_pending", "auto_resolved", "accepted", "rejected", "orphaned", ""] as const;
+/** Primary triage views (v0.35.0). Legacy single-status values still work via History. */
+type ViewKey = "needs_attention" | "still_in_queue" | "history";
+const HISTORY_STATUSES = [
+  "suggested", "resolve_failed", "orphan_pending", "auto_resolved",
+  "accepted", "rejected", "orphaned", "closed_external", "",
+] as const;
+const REOPENABLE = new Set(["accepted", "rejected", "orphaned", "closed_external", "auto_resolved"]);
+
+function initialView(): ViewKey {
+  try {
+    const v = localStorage.getItem("powarr.failedImports.view");
+    if (v) {
+      const parsed = JSON.parse(v) as ViewKey;
+      if (parsed === "needs_attention" || parsed === "still_in_queue" || parsed === "history") return parsed;
+    }
+    const old = localStorage.getItem("powarr.failedImports.statusFilter");
+    if (old) {
+      const s = JSON.parse(old) as string;
+      if (s === "suggested" || s === "resolve_failed" || s === "orphan_pending" || s === "") {
+        return s === "" ? "history" : "needs_attention";
+      }
+      if (s) return "history";
+    }
+  } catch { /* ignore */ }
+  return "needs_attention";
+}
 
 export default function FailedImports() {
   const qc = useQueryClient();
-  // Filter/sort choices persist per-browser (v0.27.0, Approved Queue #11) —
-  // column layout below already did since v0.4.0.
-  const [statusFilter, setStatusFilter] = usePersistedState<string>("powarr.failedImports.statusFilter", "suggested");
+  // Primary view + optional History status (v0.35.0)
+  const [view, setView] = usePersistedState<ViewKey>("powarr.failedImports.view", initialView());
+  const [historyStatus, setHistoryStatus] = usePersistedState<string>("powarr.failedImports.historyStatus", "");
   const [scanning, setScanning] = useState(false);
   const [confirmAccept, setConfirmAccept] = useState<number | null>(null);
   const [acceptingIds, setAcceptingIds] = useState<Set<number>>(new Set()); // per-item Pushing… (v0.33.0)
@@ -391,6 +416,7 @@ export default function FailedImports() {
   const [llmQueued, setLlmQueued] = useState<number | null>(null); // queue position, null = not queued
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // table view state (persisted per-browser)
   const [visibleCols, setVisibleCols] = useState<Set<ColKey>>(loadVisible);
@@ -408,6 +434,9 @@ export default function FailedImports() {
   const [density, setDensity] = usePersistedState<TableDensity>(DENSITY_STORAGE_KEY, "comfortable");
   const d = DENSITY_CLASSES[density];
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
+
+  // API status param for the active view
+  const listStatus = view === "history" ? (historyStatus || undefined) : view;
 
   useEffect(() => {
     localStorage.setItem(LS_VISIBLE, JSON.stringify([...visibleCols]));
@@ -438,8 +467,8 @@ export default function FailedImports() {
   };
 
   const { data: items = [], isLoading } = useQuery({
-    queryKey: ["imports", statusFilter],
-    queryFn: () => importsApi.list(statusFilter || undefined),
+    queryKey: ["imports", listStatus ?? ""],
+    queryFn: () => importsApi.list(listStatus),
   });
 
   const { data: stats } = useQuery({
@@ -561,8 +590,17 @@ export default function FailedImports() {
     },
   });
 
+  const reopenMut = useMutation({
+    mutationFn: (id: number) => importsApi.reopen(id),
+    onSuccess: r => {
+      setActionMsg(`Reopened #${r.id} into triage`);
+      invalidate();
+    },
+    onError: (e: Error) => setActionMsg(`Reopen failed: ${e.message}`),
+  });
+
   const batchMut = useMutation({
-    mutationFn: ({ ids, action }: { ids: number[]; action: "accept" | "reject" | "confirm_orphan" }) => importsApi.batch(ids, action),
+    mutationFn: ({ ids, action }: { ids: number[]; action: "accept" | "reject" | "confirm_orphan" | "reopen" }) => importsApi.batch(ids, action),
     onMutate: (vars) => {
       if (vars.action === "accept") {
         setAcceptingIds(prev => {
@@ -666,11 +704,14 @@ export default function FailedImports() {
     });
   };
   const allSelectable = sortedItems.filter(i =>
-    i.status === "suggested" || i.status === "resolve_failed" || i.status === "orphan_pending");
+    i.status === "suggested" || i.status === "resolve_failed" || i.status === "orphan_pending"
+    || (view === "still_in_queue" && REOPENABLE.has(i.status)));
   // Orphan-pending rows take confirm/keep, not accept/reject — the batch bar
   // switches wholesale when the selection is entirely orphan-pending.
   const selectedOrphanCount = sortedItems.filter(i => selected.has(i.id) && i.status === "orphan_pending").length;
+  const selectedReopenCount = sortedItems.filter(i => selected.has(i.id) && REOPENABLE.has(i.status)).length;
   const orphanBatch = selected.size > 0 && selectedOrphanCount === selected.size;
+  const reopenBatch = selected.size > 0 && selectedReopenCount === selected.size && !orphanBatch;
   const toggleSelectAll = () => {
     setSelected(prev => prev.size === allSelectable.length && allSelectable.length > 0
       ? new Set() : new Set(allSelectable.map(i => i.id)));
@@ -681,12 +722,24 @@ export default function FailedImports() {
     else { setSortBy(field); setSortDir("desc"); }
   };
 
-  const filterLabel = (f: string) => f === "" ? "All" : STATUS_META[f]?.label ?? f;
-  const filterCount = (f: string): number | null => {
+  const historyLabel = (f: string) => f === "" ? "All statuses" : STATUS_META[f]?.label ?? f;
+  const historyCount = (f: string): number | null => {
     if (!stats) return null;
-    if (f === "") return stats.suggested + stats.auto_resolved + stats.accepted + stats.rejected
-      + stats.closed_external + stats.resolve_failed + stats.orphan_pending + stats.orphaned;
+    if (f === "") {
+      return stats.suggested + stats.auto_resolved + stats.accepted + stats.rejected
+        + stats.closed_external + stats.resolve_failed + stats.orphan_pending + stats.orphaned;
+    }
     return (stats as unknown as Record<string, number>)[f] ?? null;
+  };
+  const activeFilterCount = [
+    downgradeOnly, suspiciousOnly, packFilter !== "all", !!platformFilter, !!search.trim(),
+  ].filter(Boolean).length;
+  const clearNarrowFilters = () => {
+    setDowngradeOnly(false);
+    setSuspiciousOnly(false);
+    setPackFilter("all");
+    setPlatformFilter("");
+    setSearch("");
   };
 
   const cols = COLUMNS.filter(c => visibleCols.has(c.key));
@@ -747,6 +800,14 @@ export default function FailedImports() {
         return (
           <>
             <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${status.cls}`}>{status.label}</span>
+            {item.still_in_queue && (
+              <span
+                className="block mt-0.5 px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200 text-[10px] font-bold uppercase tracking-wide w-fit"
+                title="This download is still present in the *arr queue"
+              >
+                In queue
+              </span>
+            )}
             {item.verified === true && <span className="block text-green-500 text-xs mt-0.5">verified</span>}
             {item.quality_downgrade && (
               <span
@@ -794,7 +855,11 @@ export default function FailedImports() {
             {density === "comfortable" ? "Compact" : "Comfortable"}
           </button>
           <button
-            onClick={() => importsApi.exportCsv(statusFilter === "all" ? undefined : statusFilter)}
+            onClick={() => importsApi.exportCsv(
+              view === "history" ? (historyStatus || undefined)
+                : view === "needs_attention" ? undefined
+                  : undefined,
+            )}
             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
           >
             <Download size={15} />
@@ -846,96 +911,65 @@ export default function FailedImports() {
         </div>
       </div>
 
-      {/* Status filter chips */}
-      <div className="flex items-center gap-2 mb-5 flex-wrap">
-        {FILTERS.map(f => (
+      {/* Primary views (v0.35.0) — Needs attention / Still queued / History */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        {([
+          {
+            key: "needs_attention" as const,
+            label: "Needs attention",
+            count: stats?.needs_attention ?? ((stats?.suggested ?? 0) + (stats?.resolve_failed ?? 0) + (stats?.orphan_pending ?? 0)),
+            title: "Suggested, push-failed, and orphan-confirm rows awaiting action",
+          },
+          {
+            key: "still_in_queue" as const,
+            label: "Still queued",
+            count: stats?.still_in_queue ?? null,
+            title: "Downloads still present in an *arr queue — including ones you already Accepted/Rejected that never left the queue",
+          },
+          {
+            key: "history" as const,
+            label: "History",
+            count: null,
+            title: "Browse by status (accepted, rejected, self-resolved, …)",
+          },
+        ]).map(v => (
           <button
-            key={f}
-            onClick={() => { setStatusFilter(f); setSelected(new Set()); setExpanded(null); }}
+            key={v.key}
+            onClick={() => { setView(v.key); setSelected(new Set()); setExpanded(null); }}
+            title={v.title}
             className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              statusFilter === f ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border border-purple-900/40"
+              view === v.key ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border border-purple-900/40"
             }`}
           >
-            {filterLabel(f)}
-            {filterCount(f) !== null && <span className="ml-1.5 text-xs opacity-70">{filterCount(f)}</span>}
+            {v.label}
+            {v.count !== null && <span className="ml-1.5 text-xs opacity-70">{v.count}</span>}
           </button>
         ))}
         <button
-          onClick={() => setDowngradeOnly(v => !v)}
-          title="Show only items where every file rejects as not an upgrade over an existing library file"
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
-            downgradeOnly ? "bg-orange-700 border-orange-700 text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
+          onClick={() => setFiltersOpen(o => !o)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+            filtersOpen || activeFilterCount > 0
+              ? "bg-surface-overlay border-brand/50 text-brand-light"
+              : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
           }`}
         >
-          Covered only
+          <Filter size={14} />
+          Filters
+          {activeFilterCount > 0 && (
+            <span className="ml-0.5 px-1.5 py-0.5 rounded bg-brand/30 text-[10px] font-bold">{activeFilterCount}</span>
+          )}
         </button>
-        <button
-          onClick={() => setSuspiciousOnly(v => !v)}
-          title="Show only items with a suspicious file type (e.g. .exe) in the download"
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
-            suspiciousOnly ? "bg-red-700 border-red-700 text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
-          }`}
-        >
-          Suspicious only
-        </button>
-        <button
-          onClick={() => setPackFilter(f => f === "packs" ? "all" : "packs")}
-          title="Show only season-pack downloads"
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
-            packFilter === "packs" ? "bg-brand border-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
-          }`}
-        >
-          Packs only
-        </button>
-        <button
-          onClick={() => setPackFilter(f => f === "singles" ? "all" : "singles")}
-          title="Show only single-episode (non-pack) downloads"
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
-            packFilter === "singles" ? "bg-brand border-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
-          }`}
-        >
-          Singles only
-        </button>
+        {activeFilterCount > 0 && (
+          <button onClick={clearNarrowFilters} className="text-xs text-slate-500 hover:text-white">
+            Clear filters
+          </button>
+        )}
         {llmQueued !== null && (
           <span className="flex items-center gap-1.5 px-2 py-1 rounded bg-indigo-900/40 text-indigo-300 text-xs">
             <ListEnd size={13} /> LLM run queued (position {llmQueued})
           </span>
         )}
         {actionMsg && <span className="text-sm text-slate-300 ml-2">{actionMsg}</span>}
-      </div>
-
-      {/* Search + platform filters (v0.28.0) */}
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <div className="relative">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-          <input
-            type="search"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search title / release…"
-            className="pl-8 pr-3 py-1.5 w-56 bg-surface-raised border border-purple-900/40 rounded-lg text-sm text-white placeholder:text-slate-500"
-          />
-        </div>
-        {enabledPlatforms.map(p => {
-          const meta = PLATFORM_META[p];
-          const Icon = meta.Icon;
-          const active = platformFilter === p;
-          return (
-            <button
-              key={p}
-              onClick={() => setPlatformFilter(active ? "" : p)}
-              title={`Filter by ${meta.label}`}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors border ${
-                active
-                  ? `${meta.badge} border-transparent text-white`
-                  : `bg-surface-raised hover:text-white border-purple-900/40 ${meta.chip}`
-              }`}
-            >
-              <Icon size={13} />
-              {meta.label}
-            </button>
-          );
-        })}
         {matchSettings?.auto_resolve_enabled && (autoEligible?.count ?? stats?.auto_eligible_count ?? 0) > 0 && (
           <button
             onClick={processEligible}
@@ -949,6 +983,108 @@ export default function FailedImports() {
         )}
       </div>
 
+      {view === "still_in_queue" && (
+        <div className="flex items-start gap-2 mb-3 px-3 py-2 rounded-lg bg-amber-900/20 border border-amber-800/40 text-amber-200/90 text-xs">
+          <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+          <p>
+            These downloads are still stuck in Sonarr/Radarr/Lidarr even if Powarr already marked them
+            Accepted or Rejected. Use <span className="font-semibold text-amber-100">Reopen</span> to
+            put a row back in triage, then Accept again or Reject &amp; remove from the download client.
+          </p>
+        </div>
+      )}
+
+      {view === "history" && (
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <span className="text-xs text-slate-500 uppercase tracking-wide mr-1">Status</span>
+          {HISTORY_STATUSES.map(f => (
+            <button
+              key={f || "all"}
+              onClick={() => { setHistoryStatus(f); setSelected(new Set()); setExpanded(null); }}
+              className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
+                historyStatus === f ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border border-purple-900/40"
+              }`}
+            >
+              {historyLabel(f)}
+              {historyCount(f) !== null && <span className="ml-1 opacity-70">{historyCount(f)}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Narrowing filters — collapsed by default (v0.35.0) */}
+      {filtersOpen && (
+        <div className="flex items-center gap-2 mb-4 flex-wrap px-3 py-2.5 rounded-lg bg-surface-raised/60 border border-purple-900/30">
+          <div className="relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="search"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search title / release…"
+              className="pl-8 pr-3 py-1.5 w-56 bg-surface border border-purple-900/40 rounded-lg text-sm text-white placeholder:text-slate-500"
+            />
+          </div>
+          {enabledPlatforms.map(p => {
+            const meta = PLATFORM_META[p];
+            const Icon = meta.Icon;
+            const active = platformFilter === p;
+            return (
+              <button
+                key={p}
+                onClick={() => setPlatformFilter(active ? "" : p)}
+                title={`Filter by ${meta.label}`}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+                  active
+                    ? `${meta.badge} border-transparent text-white`
+                    : `bg-surface hover:text-white border-purple-900/40 ${meta.chip}`
+                }`}
+              >
+                <Icon size={13} />
+                {meta.label}
+              </button>
+            );
+          })}
+          <span className="w-px h-5 bg-purple-900/40 mx-1 hidden sm:block" />
+          <button
+            onClick={() => setDowngradeOnly(v => !v)}
+            title="Show only items where every file rejects as not an upgrade"
+            className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+              downgradeOnly ? "bg-orange-700 border-orange-700 text-white" : "bg-surface text-slate-400 hover:text-white border-purple-900/40"
+            }`}
+          >
+            Covered
+          </button>
+          <button
+            onClick={() => setSuspiciousOnly(v => !v)}
+            title="Show only items with a suspicious file type"
+            className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+              suspiciousOnly ? "bg-red-700 border-red-700 text-white" : "bg-surface text-slate-400 hover:text-white border-purple-900/40"
+            }`}
+          >
+            Suspicious
+          </button>
+          <button
+            onClick={() => setPackFilter(f => f === "packs" ? "all" : "packs")}
+            title="Show only season-pack downloads"
+            className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+              packFilter === "packs" ? "bg-brand border-brand text-white" : "bg-surface text-slate-400 hover:text-white border-purple-900/40"
+            }`}
+          >
+            Packs
+          </button>
+          <button
+            onClick={() => setPackFilter(f => f === "singles" ? "all" : "singles")}
+            title="Show only single-episode (non-pack) downloads"
+            className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+              packFilter === "singles" ? "bg-brand border-brand text-white" : "bg-surface text-slate-400 hover:text-white border-purple-900/40"
+            }`}
+          >
+            Singles
+          </button>
+        </div>
+      )}
+
       {/* Batch action bar */}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 mb-4 px-4 py-2.5 bg-brand/10 border border-brand/30 rounded-lg">
@@ -961,6 +1097,15 @@ export default function FailedImports() {
               className="px-3 py-1 bg-orange-700 hover:bg-orange-600 text-white rounded text-xs disabled:opacity-50"
             >
               Confirm Orphans Selected
+            </button>
+          ) : reopenBatch ? (
+            <button
+              onClick={() => batchMut.mutate({ ids: [...selected], action: "reopen" })}
+              disabled={batchMut.isPending}
+              title="Put these rows back into Needs attention so you can Accept or Reject again"
+              className="flex items-center gap-1.5 px-3 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs disabled:opacity-50"
+            >
+              <RotateCcw size={12} /> Reopen Selected
             </button>
           ) : (
             <>
@@ -999,9 +1144,11 @@ export default function FailedImports() {
       ) : sortedItems.length === 0 ? (
         <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-10 text-center">
           <p className="text-slate-400">
-            {statusFilter === "suggested"
-              ? "No stuck imports awaiting review. The background poller checks your *arr queues automatically."
-              : "Nothing here yet."}
+            {view === "needs_attention"
+              ? "No stuck imports awaiting review. Check Still queued if *arr still shows failures you already acted on."
+              : view === "still_in_queue"
+                ? "No tracked downloads currently in an *arr queue. Run Scan Now to refresh queue presence."
+                : "Nothing here yet."}
           </p>
         </div>
       ) : (
@@ -1044,7 +1191,8 @@ export default function FailedImports() {
               {sortedItems.map((item: FailedImport) => {
                 const actionable = item.status === "suggested" || item.status === "resolve_failed";
                 const orphanPending = item.status === "orphan_pending";
-                const selectable = actionable || orphanPending;
+                const canReopen = REOPENABLE.has(item.status);
+                const selectable = actionable || orphanPending || (view === "still_in_queue" && canReopen);
                 const isExpanded = expanded === item.id;
                 return (
                   <>
@@ -1086,6 +1234,27 @@ export default function FailedImports() {
                             >
                               Keep
                             </button>
+                          </div>
+                        )}
+                        {canReopen && !actionable && (
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <button
+                              onClick={() => reopenMut.mutate(item.id)}
+                              disabled={reopenMut.isPending}
+                              title="Put back into Needs attention so you can Accept or Reject again"
+                              className="flex items-center gap-1 px-2 py-1 bg-amber-800/80 hover:bg-amber-700 text-amber-100 rounded text-xs disabled:opacity-50"
+                            >
+                              <RotateCcw size={12} /> Reopen
+                            </button>
+                            {item.still_in_queue && (
+                              <button
+                                onClick={() => rejectMut.mutate({ id: item.id, remove: true })}
+                                title="Reject & remove from the download client (keeps status rejected)"
+                                className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            )}
                           </div>
                         )}
                         {actionable && (

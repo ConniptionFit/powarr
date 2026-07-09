@@ -18,6 +18,10 @@ router = APIRouter(prefix="/imports", tags=["imports"])
 
 STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "closed_external",
             "resolve_failed", "orphan_pending", "orphaned")
+# Virtual list filters (not FailedImport.status values) — v0.35.0
+NEEDS_ATTENTION_STATUSES = ("suggested", "resolve_failed", "orphan_pending")
+# Terminal statuses that can be reopened when the download is still queued
+REOPENABLE_STATUSES = ("accepted", "rejected", "orphaned", "closed_external", "auto_resolved")
 
 
 @router.get("/notify-action")
@@ -49,14 +53,23 @@ async def notify_action(token: str, db: Session = Depends(get_db)):
 @router.get("", response_model=list[FailedImportOut])
 def list_imports(
     db: Session = Depends(get_db),
-    status: Optional[str] = Query(None),
+    status: Optional[str] = Query(
+        None,
+        description="Status filter, or virtual: needs_attention | still_in_queue (v0.35.0)",
+    ),
     limit: int = Query(200),
     offset: int = Query(0),
 ):
     q = db.query(FailedImport)
-    if status:
+    if status == "needs_attention":
+        q = q.filter(FailedImport.status.in_(NEEDS_ATTENTION_STATUSES))
+    elif status == "still_in_queue":
+        q = q.filter(FailedImport.still_in_queue.is_(True))
+    elif status:
         q = q.filter(FailedImport.status == status)
-    return q.order_by(FailedImport.created_at.desc()).offset(offset).limit(limit).all()
+    # Still-queued view can exceed the default 200 (many accepted/rejected leftovers)
+    eff_limit = max(limit, 1000) if status == "still_in_queue" else limit
+    return q.order_by(FailedImport.created_at.desc()).offset(offset).limit(eff_limit).all()
 
 
 @router.get("/stats", response_model=ImportStats)
@@ -74,9 +87,12 @@ def import_stats(db: Session = Depends(get_db)):
     ).count()
     cfg = load_import_matching(db)
     auto_eligible_count = auto_eligible_query(db, cfg).count() if cfg.auto_resolve_enabled else 0
+    still_in_queue = db.query(FailedImport).filter(FailedImport.still_in_queue.is_(True)).count()
+    needs_attention = sum(counts[s] for s in NEEDS_ATTENTION_STATUSES)
     return ImportStats(
         **counts, by_service=by_service, auto_resolved_7d=auto_7d,
         auto_eligible_count=auto_eligible_count,
+        still_in_queue=still_in_queue, needs_attention=needs_attention,
     )
 
 
@@ -431,19 +447,22 @@ async def _accept_worker() -> None:
 
 @router.post("/batch")
 async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db)):
-    """Accept / reject / confirm_orphan several suggestions at once.
+    """Accept / reject / confirm_orphan / reopen several suggestions at once.
 
-    Body: {"ids": [...], "action": "accept"|"reject"|"confirm_orphan"}.
+    Body: {"ids": [...], "action": "accept"|"reject"|"confirm_orphan"|"reopen"}.
     Accept runs in the background (v0.28.0) so large batches don't 504 at the
     reverse proxy — returns {async: true, task_id, total} immediately; progress
     lands in the Active Processes tray via the tasks SSE bus. Additional Accepts
-    while one is running coalesce onto the same tray card (v0.33.0). Reject and
-    confirm_orphan stay synchronous (cheap DB writes).
+    while one is running coalesce onto the same tray card (v0.33.0). Reject,
+    confirm_orphan, and reopen stay synchronous (cheap DB writes).
     """
     ids = payload.get("ids") or []
     action = payload.get("action")
-    if action not in ("accept", "reject", "confirm_orphan") or not ids:
-        raise HTTPException(status_code=400, detail="Body must be {ids: [...], action: accept|reject|confirm_orphan}")
+    if action not in ("accept", "reject", "confirm_orphan", "reopen") or not ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Body must be {ids: [...], action: accept|reject|confirm_orphan|reopen}",
+        )
     if action == "accept":
         return await _enqueue_accepts(list(ids))
     results = []
@@ -451,6 +470,8 @@ async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db))
         try:
             if action == "confirm_orphan":
                 results.append(_confirm_orphan(item_id, db))
+            elif action == "reopen":
+                results.append(_reopen(item_id, db))
             else:
                 results.append(_reject(item_id, db))
         except HTTPException as e:
@@ -635,6 +656,32 @@ def _confirm_orphan(item_id: int, db: Session) -> dict:
     return {"id": item.id, "status": item.status}
 
 
+def _reopen(item_id: int, db: Session) -> dict:
+    """Put a terminal-status row back into triage (v0.35.0 Still queued view).
+
+    Used when Accept/Reject already ran but the download is still stuck in the
+    *arr queue — reopen → suggested so Accept/Reject/LLM work again. Prefer
+    still_in_queue=True rows; allow reopen without that flag for manual recovery.
+    """
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    if item.status in NEEDS_ATTENTION_STATUSES:
+        return {"id": item.id, "status": item.status, "message": "Already in triage"}
+    if item.status not in REOPENABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot reopen status '{item.status}'",
+        )
+    prev = item.status
+    item.status = "suggested"
+    item.resolved_at = None
+    item.message = ((item.message + " | ") if item.message else "") + f"Reopened from {prev}"
+    item.updated_at = datetime.utcnow()
+    db.commit()
+    return {"id": item.id, "status": item.status, "previous_status": prev}
+
+
 
 
 @router.get("/{item_id}/candidates")
@@ -677,7 +724,7 @@ def set_match(item_id: int, body: dict = Body(...), db: Session = Depends(get_db
     item.llm_confidence = None
     item.llm_rationale = None
     item.message = ((item.message + " | ") if item.message else "") + "Manually matched"
-    if item.status in ("rejected", "closed_external", "resolve_failed"):
+    if item.status in REOPENABLE_STATUSES or item.status == "resolve_failed":
         item.status = "suggested"
         item.resolved_at = None
     db.commit()
@@ -699,6 +746,12 @@ async def accept_import(item_id: int, db: Session = Depends(get_db)):
 @router.post("/{item_id}/confirm-orphan")
 def confirm_orphan(item_id: int, db: Session = Depends(get_db)):
     return _confirm_orphan(item_id, db)
+
+
+@router.post("/{item_id}/reopen")
+def reopen_import(item_id: int, db: Session = Depends(get_db)):
+    """Return a terminal-status row to suggested triage (Still queued / History)."""
+    return _reopen(item_id, db)
 
 
 @router.post("/{item_id}/keep")

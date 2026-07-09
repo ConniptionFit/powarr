@@ -54,6 +54,7 @@ def _migrate():
             "partial_import": "BOOLEAN",
             "suspicious_files": "TEXT",
             "llm_agrees": "BOOLEAN",
+            "still_in_queue": "BOOLEAN",
         },
         "integrations": {
             "username": "VARCHAR",

@@ -31,6 +31,9 @@ class FailedImport(Base):
     suspicious_files = Column(Text, nullable=True)  # JSON list of filenames matching a suspicious extension (empty/null = clean)
     # suggested | auto_resolved | accepted | rejected | closed_external | resolve_failed
     status = Column(String, default="suggested")
+    # True while the download/queue id is still present in the source *arr queue
+    # (v0.35.0) — surfaces accepted/rejected/orphaned rows that never left the queue
+    still_in_queue = Column(Boolean, nullable=True, index=True)
     verified = Column(Boolean, nullable=True)  # import confirmed in *arr history after resolve
     message = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

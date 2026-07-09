@@ -1156,22 +1156,54 @@ def _orphan_known_missing_files(db, summary: dict) -> None:
         db.commit()
 
 
+def _row_still_queued(row, queue_download_ids: set, queue_item_ids: set) -> bool:
+    if row.download_id:
+        return row.download_id in queue_download_ids
+    return bool(row.queue_item_id) and row.queue_item_id in queue_item_ids
+
+
 def _close_stale_rows(db, app_name: str, queue: list[dict], summary: dict) -> None:
-    """Suggested rows whose download left the queue on its own no longer need triage."""
+    """Suggested rows whose download left the queue on its own → closed_external.
+    Also refreshes still_in_queue (v0.35.0) so the Still queued triage view can
+    surface accepted/rejected/orphaned downloads that never left the *arr queue.
+
+    Scoped queries only — never loads the full history table for the app."""
+    from sqlalchemy import or_
+
     queue_download_ids = {rec.get("downloadId") for rec in queue if rec.get("downloadId")}
-    queue_item_ids = {str(rec.get("id", "")) for rec in queue}
-    open_rows = db.query(FailedImport).filter(
+    queue_item_ids = {str(rec.get("id", "")) for rec in queue if rec.get("id") is not None}
+
+    # Clear / close rows currently marked in-queue (or still suggested)
+    tracked = db.query(FailedImport).filter(
         FailedImport.source_app == app_name,
-        FailedImport.status == "suggested",
+        or_(FailedImport.still_in_queue.is_(True), FailedImport.status == "suggested"),
     ).all()
-    for row in open_rows:
-        still_queued = (row.download_id in queue_download_ids if row.download_id
-                        else row.queue_item_id in queue_item_ids)
-        if not still_queued:
+    for row in tracked:
+        still = _row_still_queued(row, queue_download_ids, queue_item_ids)
+        if row.still_in_queue != still:
+            row.still_in_queue = still
+        if row.status == "suggested" and not still:
             row.status = "closed_external"
             row.resolved_at = datetime.utcnow()
             row.message = ((row.message + " | ") if row.message else "") + "Left the queue on its own"
             summary["closed_external"] += 1
+
+    # Mark rows whose download_id / queue_item_id is in the live queue
+    if queue_download_ids:
+        for row in db.query(FailedImport).filter(
+            FailedImport.source_app == app_name,
+            FailedImport.download_id.in_(queue_download_ids),
+            or_(FailedImport.still_in_queue.is_(False), FailedImport.still_in_queue.is_(None)),
+        ).all():
+            row.still_in_queue = True
+    if queue_item_ids:
+        for row in db.query(FailedImport).filter(
+            FailedImport.source_app == app_name,
+            FailedImport.download_id.is_(None),
+            FailedImport.queue_item_id.in_(queue_item_ids),
+            or_(FailedImport.still_in_queue.is_(False), FailedImport.still_in_queue.is_(None)),
+        ).all():
+            row.still_in_queue = True
     db.commit()
 
 
@@ -1407,6 +1439,7 @@ async def _scan_once_inner(task_id: str) -> dict:
                     llm_rationale=match["llm_rationale"],
                     llm_agrees=match["llm_agrees"],
                     status="suggested",
+                    still_in_queue=True,
                     message=q_messages[:500] or None,
                 )
 
