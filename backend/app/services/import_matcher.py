@@ -886,6 +886,11 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             f"Source app: {app_name}",
             f"Queue status: {_queue_messages(rec)[:150]}",
         ]
+        if app_name == "lidarr":
+            evidence = llm_assist.music_match_evidence(raw_title, matched_title)
+            if evidence:
+                # Right after the app line so CAP_CONTEXT truncation can't drop it.
+                llm_context_parts.insert(1, evidence)
         if triggered_title and triggered_title != matched_title:
             llm_context_parts.append(
                 f"Item that triggered download: '{triggered_title}' "
@@ -1820,6 +1825,11 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 f"Source app: {row.source_app}",
                 f"Queue error: {(row.message or '')[:200]}",
             ]
+            if row.source_app == "lidarr":
+                evidence = llm_assist.music_match_evidence(
+                    row.raw_title, row.matched_title)
+                if evidence:
+                    ctx_parts.insert(1, evidence)
             alts = (meta.get("alternate_titles") or "").strip()
             if alts:
                 ctx_parts.append(f"Library alternate titles: {alts}")

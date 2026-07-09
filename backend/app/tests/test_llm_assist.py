@@ -9,7 +9,7 @@ from app.services.llm_assist import (
     CAP_CANDIDATE, CAP_CONTEXT, CAP_DET_SUMMARY, CAP_ITEM, CAP_RELEASE,
     PACK_CHUNK_SIZE, _limits, _parse_simple, _parse_pack_matches, _strip_think, _truncate,
     build_explain_prompt, build_review_prompt, build_pack_prompt,
-    PACK_MATCH_TYPES, review_pack_files,
+    PACK_MATCH_TYPES, music_match_evidence, review_pack_files,
 )
 
 
@@ -146,24 +146,35 @@ class TestPromptShapes(unittest.TestCase):
         p = build_explain_prompt("", "item", verbosity="minimal")
         self.assertIn("KEEP or DELETE", p)
 
-    def test_review_defaults_to_agree_and_strips_junk(self):
+    def test_sonarr_guidance_is_series_identity_checklist(self):
         p = build_review_prompt("", "r", "c", "x", "d", source_app="sonarr")
-        self.assertIn("Default to AGREE", p)
-        self.assertIn("Strip from the release name", p)
-        self.assertIn("Anime & foreign titles", p)
+        self.assertIn("TV match", p)
+        self.assertIn("series name only", p)
+        self.assertIn("season pack", p)
         self.assertIn("Do NOT write chain-of-thought", p)
         self.assertIn("bullet reasons", p)
 
-    def test_lidarr_guidance_has_no_anime(self):
+    def test_lidarr_guidance_is_two_check_music_checklist(self):
         p = build_review_prompt("", "r", "c", "x", "d", source_app="lidarr")
-        self.assertIn("MUSIC (Lidarr)", p)
-        self.assertNotIn("Anime & foreign titles", p)
-        self.assertIn("missing year", p.lower())
-        self.assertIn("DELUXE", p)
+        self.assertIn("MUSIC match", p)
+        self.assertNotIn("anime", p.lower())
+        self.assertNotIn("episode", p.lower())
+        self.assertIn("uploader", p)
+        self.assertIn("App check", p)
 
-    def test_year_missing_not_mismatch_in_sonarr_guidance(self):
+    def test_sonarr_guidance_treats_bare_series_candidate_as_normal(self):
         p = build_review_prompt("", "r", "c", "x", "d", source_app="sonarr")
-        self.assertIn("missing year on either side is NOT a mismatch", p)
+        self.assertIn("That is normal, not a mismatch", p)
+
+    def test_numeric_envelope_ties_adjustment_sign_to_verdict(self):
+        p = build_review_prompt("", "r", "c", "x", "d")
+        self.assertIn('0 to 0.3 when "agrees" is true', p)
+        self.assertIn("double-quote", p)
+
+    def test_classified_envelope_skips_sign_rule_keeps_quote_rule(self):
+        p = build_review_prompt("", "r", "c", "x", "d", confidence_style="classified")
+        self.assertNotIn('0 to 0.3 when "agrees" is true', p)
+        self.assertIn("double-quote", p)
 
     def test_forbid_thinking_can_be_disabled(self):
         p = build_review_prompt("", "r", "c", "x", "d", forbid_thinking=False)
@@ -174,6 +185,50 @@ class TestPromptShapes(unittest.TestCase):
         self.assertIn("Download folder name: Show.S01-GRP", p)
         self.assertIn("Strip quality/codec/uploader", p)
         self.assertIn("folder name, AND each filename", p)
+
+
+class TestMusicMatchEvidence(unittest.TestCase):
+    def test_scene_name_with_uploader_tag_finds_both(self):
+        ev = music_match_evidence(
+            "Prof-Good_Time_Boy-SINGLE-WEB-2026-FATHEAD", "Prof - Good Time Boy")
+        self.assertIn("artist in release name: YES", ev)
+        self.assertIn("album in release name: YES", ev)
+
+    def test_wrong_artist_reports_no(self):
+        ev = music_match_evidence(
+            "The_Weeknd-Starboy-Deluxe_Edition-CD-FLAC-2016-PERFECT",
+            "The Smashing Pumpkins - Perfect")
+        self.assertIn("artist in release name: NO", ev)
+
+    def test_punctuated_album_matches_separator_blind(self):
+        ev = music_match_evidence(
+            "Slipknot - Mate. Feed. Kill. Repeat. (1996) (320Kbps)",
+            "Slipknot - Mate. Feed. Kill. Repeat.")
+        self.assertIn("artist in release name: YES", ev)
+        self.assertIn("album in release name: YES", ev)
+
+    def test_album_may_join_onto_artist_words(self):
+        ev = music_match_evidence(
+            "Tech_N9ne_Collabos-Strange_Reign-DELUXE_EDITION-2CD-FLAC-2017-CALiFLAC",
+            "Tech N9ne - Collabos: Strange Reign")
+        self.assertIn("artist in release name: YES", ev)
+        self.assertIn("album in release name: YES", ev)
+
+    def test_self_titled_album_needs_second_occurrence(self):
+        # Correct self-titled release: artist appears twice → album YES
+        ev = music_match_evidence(
+            "Gorillaz-Gorillaz-2CD-FLAC-2001-GROUP", "Gorillaz - Gorillaz")
+        self.assertIn("album in release name: YES", ev)
+        # Different album by the same artist: single occurrence is consumed by
+        # the artist check → album NO
+        ev = music_match_evidence(
+            "Gorillaz-Cracker_Island-24-44-WEB-FLAC-2023-OBZEN", "Gorillaz - Gorillaz")
+        self.assertIn("artist in release name: YES", ev)
+        self.assertIn("album in release name: NO", ev)
+
+    def test_non_album_candidate_returns_empty(self):
+        self.assertEqual(music_match_evidence("Whatever-2020-GRP", "BareArtistName"), "")
+        self.assertEqual(music_match_evidence("", "A - B"), "")
 
 
 class TestCompactDetSummary(unittest.TestCase):

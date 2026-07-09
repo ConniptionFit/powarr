@@ -199,20 +199,21 @@ def compact_det_summary(match_rationale: str, heuristic_confidence: float | None
     return " | ".join(parts) if parts else "heuristic=unknown"
 
 
-# Per-*arr judging guidance (v0.32.0) — anime/TV rules must not appear on Lidarr, etc.
+# Per-*arr judging guidance (v0.32.0; sonarr/lidarr rewritten v0.36.0 for small local
+# models — checklist style, validated 13/13 against real failed-import rows with the
+# App-check evidence line injected; see music_match_evidence()).
 _APP_MATCH_GUIDANCE = {
     "sonarr": (
-        "\nStrip from the release name before judging: resolution, source (WEB-DL/BluRay), "
-        "codec, audio, HDR, encoder, and uploader/release-group tags — never evidence "
-        "for/against a match."
-        "\nAnime & foreign titles: absolute episode numbers, romaji/native/English "
-        "translations, and alternate titles of the same work count as matches. Prefer "
-        "the triggered series in Context over string similarity alone."
-        "\nYear: DISAGREE on year only when BOTH the release and the candidate have a "
-        "known year and they differ. A missing year on either side is NOT a mismatch."
-        "\nDefault to AGREE with the scorer. Reply DISAGREE only for a concrete "
-        "contradiction (wrong series, wrong episode/absolute number, or wrong year "
-        "when both years are known). Cosmetic filename differences are not contradictions."
+        "\nTV match. The candidate is the series name only — candidates never include "
+        "season, episode, or year. That is normal, not a mismatch."
+        "\nDecide exactly one thing: is the release the same show as the candidate? "
+        "Translated titles and alternate titles (see Context) count as the same show."
+        "\nSame show → agrees true. A season pack (e.g. S03) or single episode of the "
+        "candidate show is still the same show. Different show → agrees false."
+        "\nThe app has already verified quality tags (1080p/WEB-DL/x265), network tags "
+        "(TUBI/PMTP), language/dub, years, and the uploader tag at the end. Do not "
+        "mention them."
+        "\nReason bullets: - **Series**: ... and, for packs, - **Season**: ..."
     ),
     "radarr": (
         "\nStrip from the release name before judging: resolution, source (WEB-DL/BluRay), "
@@ -226,16 +227,24 @@ _APP_MATCH_GUIDANCE = {
         "clearly different work."
     ),
     "lidarr": (
-        "\nThis is a MUSIC (Lidarr) match — the candidate is typically "
-        "'Artist - Album'. Do NOT mention anime, episodes, absolute numbers, seasons, "
-        "or TV series."
-        "\nStrip before judging: audio format (FLAC/MP3/AAC), bitrate, CD/2CD/DISC/vinyl/"
-        "LP, DELUXE/Expanded/Remaster/Special Edition, uploader/group tags, and folder "
-        "noise — these are NEVER evidence for/against a match."
-        "\nAGREE when the release's artist and album match the candidate (edition/format "
-        "differences do not count). DISAGREE only for a concrete contradiction "
-        "(wrong artist or clearly different album)."
-        "\nYear: a missing year on either side is NOT a mismatch."
+        "\nMUSIC match. The candidate is 'Artist - Album' from the music library and is "
+        "the source of truth."
+        "\nRelease names use _ . - as word separators and usually end with the uploader's "
+        "tag (format: Artist-Album-Tags-Year-UPLOADER). The last tag is the uploader's "
+        "name, never the artist."
+        "\nDecide with exactly two checks. Always search for the CANDIDATE's words inside "
+        "the release name — never the reverse. Compare words only: ignore capitalization, "
+        "punctuation, and separators in both names."
+        "\n1. Artist: do the candidate's artist words appear in the release name?"
+        "\n2. Album: do the candidate's album words appear in the release name? They may "
+        "sit anywhere, even joined onto the artist words. If the release clearly names a "
+        "different album than the candidate's album, the answer is no."
+        "\nBoth yes → agrees true. Either no → agrees false."
+        "\nIf Context contains an 'App check' line, it reports these two checks computed "
+        "exactly — trust it over your own reading."
+        "\nThe app already verified years, editions (Deluxe/Remaster), audio format "
+        "(FLAC/CD/WEB/bitrate), and uploader tags. Do not mention them."
+        "\nReason: one bullet per check, like: - **Artist**: Prof — found in release"
     ),
     "readarr": (
         "\nThis is a BOOK (Readarr) match — the candidate is typically "
@@ -248,6 +257,39 @@ _APP_MATCH_GUIDANCE = {
     ),
 }
 _DEFAULT_MATCH_GUIDANCE = _APP_MATCH_GUIDANCE["sonarr"]
+
+_EVIDENCE_NORM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _evidence_norm(text: str) -> str:
+    return _EVIDENCE_NORM_RE.sub(" ", (text or "").lower()).strip()
+
+
+def music_match_evidence(release: str, candidate: str) -> str:
+    """Deterministic artist/album containment check for music matches (v0.36.0).
+
+    Small local models cannot reliably tokenize scene names like
+    'Prof-Good_Time_Boy-SINGLE-WEB-2026-FATHEAD' and read the trailing uploader tag
+    as the artist. This computes the two checks the lidarr judging guidance asks
+    for and injects them as an authoritative 'App check' context line. Both names
+    are compared punctuation/case/separator-blind; the first artist occurrence is
+    removed before the album check so self-titled albums resolve correctly in both
+    directions. Returns "" when the candidate isn't 'Artist - Album'-shaped."""
+    candidate = candidate or ""
+    if " - " not in candidate:
+        return ""
+    artist, album = candidate.split(" - ", 1)
+    rel = _evidence_norm(release)
+    art = _evidence_norm(artist)
+    alb = _evidence_norm(album)
+    if not rel or not art or not alb:
+        return ""
+    artist_found = art in rel
+    remainder = rel.replace(art, " ", 1) if artist_found else rel
+    album_found = alb in remainder
+    return (f"App check — candidate artist in release name: "
+            f"{'YES' if artist_found else 'NO'}; "
+            f"candidate album in release name: {'YES' if album_found else 'NO'}")
 
 
 def build_review_prompt(template: str, release: str, candidate: str, context: str,
@@ -302,7 +344,13 @@ def build_review_prompt(template: str, release: str, candidate: str, context: st
                     '\nReply with ONLY JSON: '
                     f'{{"agrees": true|false, "confidence_adjustment": <-0.3 to 0.3>, '
                     f'"reason": "{reason_spec}"}}'
+                    # Small models otherwise pick the boundary (-0.3) regardless of
+                    # verdict — even on AGREE (seen live on qwen2.5:3b).
+                    '\nconfidence_adjustment: 0 to 0.3 when "agrees" is true; '
+                    '-0.3 to 0 when "agrees" is false.'
                 )
+            # An unescaped quote inside reason breaks the whole JSON reply.
+            prompt += "\nDo not use double-quote characters inside the reason text."
     return prompt
 
 
