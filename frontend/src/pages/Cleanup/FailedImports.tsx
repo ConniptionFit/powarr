@@ -44,18 +44,19 @@ interface ColDef {
   label: string;
   width: number; // default px
   sortField?: keyof FailedImport;
+  tooltip?: string;
 }
 
 const COLUMNS: ColDef[] = [
-  { key: "source", label: "Source", width: 90, sortField: "source_app" },
-  { key: "release", label: "Downloaded Release", width: 340, sortField: "raw_title" },
-  { key: "matched", label: "Library Match", width: 240, sortField: "matched_title" },
-  { key: "match_pct", label: "Match", width: 90, sortField: "heuristic_confidence" },
-  { key: "match_notes", label: "Match Notes", width: 260, sortField: "match_rationale" },
-  { key: "llm_pct", label: "LLM", width: 90, sortField: "llm_confidence" },
-  { key: "llm_notes", label: "LLM Notes", width: 260, sortField: "llm_rationale" },
-  { key: "status", label: "Status", width: 120, sortField: "status" },
-  { key: "detected", label: "Detected", width: 110, sortField: "created_at" },
+  { key: "source", label: "Source", width: 90, sortField: "source_app", tooltip: "Download source (Radarr, Sonarr, Lidarr, Readarr)" },
+  { key: "release", label: "Downloaded Release", width: 340, sortField: "raw_title", tooltip: "The item that was downloaded and needs to be imported" },
+  { key: "matched", label: "Library Match", width: 240, sortField: "matched_title", tooltip: "Powarr's suggested match in your library" },
+  { key: "match_pct", label: "Match", width: 90, sortField: "heuristic_confidence", tooltip: "Confidence of the suggested library match" },
+  { key: "match_notes", label: "Match Notes", width: 260, sortField: "match_rationale", tooltip: "Reasoning behind the suggested match" },
+  { key: "llm_pct", label: "LLM", width: 90, sortField: "llm_confidence", tooltip: "Local LLM analysis of the match" },
+  { key: "llm_notes", label: "LLM Notes", width: 260, sortField: "llm_rationale", tooltip: "LLM reasoning for its confidence level" },
+  { key: "status", label: "Status", width: 120, sortField: "status", tooltip: "Current status of this import" },
+  { key: "detected", label: "Detected", width: 110, sortField: "created_at", tooltip: "When this import was first detected" },
 ];
 
 const LS_VISIBLE = "powarr.failedImports.visibleCols";
@@ -1019,10 +1020,12 @@ export default function FailedImports() {
                 </th>
                 {cols.map(c => (
                   <th key={c.key} className={`text-left ${d.head} relative select-none group`}
-                      style={{ width: colW(c) }}>
+                      style={{ width: colW(c) }}
+                      title={c.tooltip}>
                     <button
                       onClick={() => c.sortField && toggleSort(c.sortField)}
                       className={`flex items-center gap-1 uppercase ${c.sortField ? "cursor-pointer hover:text-white" : "cursor-default"}`}
+                      title={c.tooltip}
                     >
                       {c.key === "llm_pct" && <Bot size={13} className="text-brand-light" />}
                       {c.label}
