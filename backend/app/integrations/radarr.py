@@ -90,28 +90,24 @@ class RadarrIntegration(BaseIntegration):
                 page += 1
         return records[:max_records]
 
-    async def get_manual_import(self, download_id: str) -> list[dict]:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            r = await client.get(f"{self._base()}/manualimport", headers=self._headers(),
-                                 params={"downloadId": download_id, "filterExistingFiles": "false"})
-            r.raise_for_status()
-            return r.json()
+    async def get_manual_import(self, download_id: str, folder: str | None = None) -> list[dict]:
+        return await self._fetch_manual_import(download_id, filter_existing=False, folder=folder)
 
-    async def push_import_command(self, download_id: str, movie_id: int | None = None) -> dict:
+    async def push_import_command(self, download_id: str, movie_id: int | None = None,
+                                  folder: str | None = None) -> dict:
         """Fetch manual-import candidates for a download and execute a ManualImport
         command for the importable ones. Imports MUST go through POST /command —
         the bare POST /manualimport route is the reprocess endpoint and never imports."""
         try:
+            # downloadId only (+ optional folder fallback) — never widen the scan
+            # beyond the download (see the Sonarr seriesId incident, 2026-07-05)
+            candidates = await self._fetch_manual_import(
+                download_id, filter_existing=True, folder=folder)
+            files = build_manual_import_files(candidates, movie_id, download_id)
+            if not files:
+                return {"ok": False, "reason": "no_files", "imported": 0,
+                        "message": "Download files are gone — nothing left to import"}
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-                # downloadId only + filter already-imported files — never widen the scan
-                # beyond the download (see the Sonarr seriesId incident, 2026-07-05)
-                params = {"downloadId": download_id, "filterExistingFiles": "true"}
-                r = await client.get(f"{self._base()}/manualimport", headers=self._headers(), params=params)
-                r.raise_for_status()
-                files = build_manual_import_files(r.json(), movie_id, download_id)
-                if not files:
-                    return {"ok": False, "reason": "no_files", "imported": 0,
-                            "message": "Download files are gone — nothing left to import"}
                 pr = await client.post(f"{self._base()}/command", headers=self._headers(),
                                        json={"name": "ManualImport", "files": files, "importMode": "move"})
                 if pr.status_code in (200, 201, 202):
@@ -120,7 +116,7 @@ class RadarrIntegration(BaseIntegration):
                                        "confirmed against history afterward"}
                 return {"ok": False, "message": f"Import push failed: HTTP {pr.status_code}", "imported": 0}
         except Exception as e:
-            return {"ok": False, "message": str(e), "imported": 0}
+            return self._manual_import_error_result(e)
 
     async def unmonitor_movie(self, movie_id: int) -> bool:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:

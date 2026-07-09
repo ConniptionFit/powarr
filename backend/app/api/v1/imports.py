@@ -184,8 +184,10 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
     if not row:
         return {"matches": [], "message": f"{item.source_app} integration not enabled"}
     client = _get_client(item.source_app, row)
+    folder = import_matcher.extract_output_path(raw_metadata=item.raw_metadata,
+                                                messages=item.message)
     try:
-        candidates = await client.get_manual_import(item.download_id)
+        candidates = await client.get_manual_import(item.download_id, folder=folder)
     except Exception as e:
         return {"matches": [], "message": f"Manual-import lookup failed: {e}"}
 
@@ -311,8 +313,10 @@ async def import_files(item_id: int, db: Session = Depends(get_db)):
     if not row:
         return {"files": [], "message": f"{item.source_app} integration not enabled"}
     client = _get_client(item.source_app, row)
+    folder = import_matcher.extract_output_path(raw_metadata=item.raw_metadata,
+                                                messages=item.message)
     try:
-        candidates = await client.get_manual_import(item.download_id)
+        candidates = await client.get_manual_import(item.download_id, folder=folder)
     except Exception as e:
         return {"files": [], "message": f"Manual-import lookup failed: {e}"}
     overrides = json.loads(item.mapping_overrides or "{}")
@@ -409,11 +413,15 @@ async def _accept(item_id: int, db: Session) -> dict:
         raise HTTPException(status_code=400, detail=f"{item.source_app} integration not enabled")
 
     client = _get_client(item.source_app, row)
+    folder = import_matcher.extract_output_path(raw_metadata=item.raw_metadata,
+                                                messages=item.message)
     if item.source_app == "sonarr" and item.mapping_overrides:
-        result = await client.push_import_command(item.download_id, item.matched_id,
-                                                   overrides=json.loads(item.mapping_overrides))
+        result = await client.push_import_command(
+            item.download_id, item.matched_id,
+            overrides=json.loads(item.mapping_overrides), folder=folder)
     else:
-        result = await client.push_import_command(item.download_id, item.matched_id)
+        result = await client.push_import_command(
+            item.download_id, item.matched_id, folder=folder)
     item.message = result["message"]
     if result["ok"]:
         item.status = "accepted"

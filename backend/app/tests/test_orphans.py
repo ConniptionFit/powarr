@@ -8,7 +8,9 @@ import unittest
 
 from app.services.import_matcher import (
     decide_orphans, decide_orphan_status, orphan_fs_state, looks_like_missing_files,
+    extract_output_path,
 )
+from app.integrations.base import BaseIntegration
 
 
 class TestDecideOrphans(unittest.TestCase):
@@ -86,12 +88,47 @@ class TestLooksLikeMissingFiles(unittest.TestCase):
         self.assertTrue(looks_like_missing_files("Download files are gone — nothing left to import"))
         self.assertTrue(looks_like_missing_files(
             "Manual import queued | Download files are gone — nothing left to import"))
+        self.assertTrue(looks_like_missing_files(
+            "Server error '500 Internal Server Error' for url '...manualimport...' "
+            "Object reference not set to an instance of an object."))
+        self.assertTrue(looks_like_missing_files(
+            "No files found are eligible for import in /downloads/x; qBittorrent is reporting missing files"))
 
     def test_unrelated(self):
         self.assertFalse(looks_like_missing_files(None))
         self.assertFalse(looks_like_missing_files(""))
         self.assertFalse(looks_like_missing_files("Manual import command queued for 3 file(s)"))
         self.assertFalse(looks_like_missing_files("Import push failed: HTTP 500"))
+
+
+class TestExtractOutputPath(unittest.TestCase):
+    def test_structured_field_wins(self):
+        self.assertEqual(
+            extract_output_path({"outputPath": "/downloads/A", "statusMessages": []}),
+            "/downloads/A")
+
+    def test_parses_eligible_message(self):
+        msgs = "No files found are eligible for import in /downloads/ActiveSeeds/Foo.S01; qBittorrent is reporting missing files"
+        self.assertEqual(extract_output_path({"statusMessages": []}, messages=msgs),
+                         "/downloads/ActiveSeeds/Foo.S01")
+
+    def test_from_raw_metadata_json(self):
+        raw = '{"outputPath": null, "messages": "No files found are eligible for import in /downloads/X/Y"}'
+        self.assertEqual(extract_output_path(raw_metadata=raw), "/downloads/X/Y")
+
+
+class TestManualImportErrorResult(unittest.TestCase):
+    def test_nullreference_500_is_no_files(self):
+        r = BaseIntegration._manual_import_error_result(
+            Exception("Server error '500 Internal Server Error' for url "
+                      "'http://x/manualimport' — Object reference not set to an instance of an object."))
+        self.assertEqual(r["reason"], "no_files")
+        self.assertIn("gone", r["message"].lower())
+
+    def test_other_errors_passthrough(self):
+        r = BaseIntegration._manual_import_error_result(Exception("connection refused"))
+        self.assertNotIn("reason", r)
+        self.assertIn("connection refused", r["message"])
 
 
 class TestQbitLoginParsing(unittest.TestCase):

@@ -115,36 +115,32 @@ class SonarrIntegration(BaseIntegration):
             r.raise_for_status()
             return r.json()
 
-    async def get_manual_import(self, download_id: str) -> list[dict]:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            r = await client.get(f"{self._base()}/manualimport", headers=self._headers(),
-                                 params={"downloadId": download_id, "filterExistingFiles": "false"})
-            r.raise_for_status()
-            return r.json()
+    async def get_manual_import(self, download_id: str, folder: str | None = None) -> list[dict]:
+        return await self._fetch_manual_import(download_id, filter_existing=False, folder=folder)
 
     async def push_import_command(self, download_id: str, series_id: int | None = None,
-                                  overrides: dict | None = None) -> dict:
+                                  overrides: dict | None = None, folder: str | None = None) -> dict:
         """Fetch manual-import candidates for a download and execute a ManualImport
         command for the importable ones. Imports MUST go through POST /command —
         the bare POST /manualimport route is Sonarr's reprocess/re-evaluate endpoint:
         it never imports, and 404s when a candidate lacks a flat seriesId.
 
         overrides: {raw_path: {"episode_id": int, ...}} — user-corrected per-file
-        episode mappings from the triage UI (see build_manual_import_files)."""
+        episode mappings from the triage UI (see build_manual_import_files).
+        folder: optional outputPath for the NullReference-500 fallback."""
         try:
+            # downloadId ONLY (+ optional folder fallback). NEVER add seriesId
+            # here: Sonarr's manualimport GET switches to scanning the SERIES' OWN
+            # LIBRARY FILES when seriesId is present, and importing those back onto
+            # themselves mass-deletes the library (2026-07-05 One Piece incident).
+            # series_id is applied later, as a mapping fallback per file entry.
+            candidates = await self._fetch_manual_import(
+                download_id, filter_existing=True, folder=folder)
+            files = build_manual_import_files(candidates, series_id, download_id, overrides)
+            if not files:
+                return {"ok": False, "reason": "no_files", "imported": 0,
+                        "message": "Download files are gone — nothing left to import"}
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-                # downloadId ONLY, and filter already-imported files. NEVER add seriesId
-                # here: Sonarr's manualimport GET switches to scanning the SERIES' OWN
-                # LIBRARY FILES when seriesId is present, and importing those back onto
-                # themselves mass-deletes the library (2026-07-05 One Piece incident).
-                # series_id is applied later, as a mapping fallback per file entry.
-                params = {"downloadId": download_id, "filterExistingFiles": "true"}
-                r = await client.get(f"{self._base()}/manualimport", headers=self._headers(), params=params)
-                r.raise_for_status()
-                files = build_manual_import_files(r.json(), series_id, download_id, overrides)
-                if not files:
-                    return {"ok": False, "reason": "no_files", "imported": 0,
-                            "message": "Download files are gone — nothing left to import"}
                 # Hard guard: never import files that already live inside the series'
                 # own library folder — that means the scan scope is wrong and importing
                 # would churn/delete the library itself
@@ -165,7 +161,7 @@ class SonarrIntegration(BaseIntegration):
                                        "confirmed against history afterward"}
                 return {"ok": False, "message": f"Import push failed: HTTP {pr.status_code}", "imported": 0}
         except Exception as e:
-            return {"ok": False, "message": str(e), "imported": 0}
+            return self._manual_import_error_result(e)
 
     async def unmonitor_series(self, series_id: int) -> bool:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:

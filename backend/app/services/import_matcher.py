@@ -265,7 +265,8 @@ def score_pack_match(title_sim: float, target_seasons: set | None, complete: boo
 
 
 async def _pack_coverage(client, download_id: str | None, series_id: int,
-                         target_seasons: set | None) -> tuple[int | None, int | None]:
+                         target_seasons: set | None,
+                         folder: str | None = None) -> tuple[int | None, int | None]:
     """(mapped_episodes, total_episodes) for a pack — every step fails soft.
     total = aired episodes in the target seasons (whole show minus specials when
     complete); mapped = distinct in-scope episodes the manual-import preview maps
@@ -295,7 +296,7 @@ async def _pack_coverage(client, download_id: str | None, series_id: int,
     mapped = None
     if download_id and total:
         try:
-            files = await client.get_manual_import(download_id)
+            files = await client.get_manual_import(download_id, folder=folder)
             mapped_ids = set()
             for f in files:
                 for e in f.get("episodes") or []:
@@ -409,6 +410,46 @@ def _queue_messages(rec: dict) -> str:
     return "; ".join(msgs)[:1000]
 
 
+_OUTPUT_PATH_IN_MSG_RE = re.compile(
+    r"(?:eligible for import in|missing files[,:]?\s*|No files found[^\n]*?\s)"
+    r"(/downloads/[^\s;]+|/media/[^\s;]+)",
+    re.IGNORECASE,
+)
+
+
+def extract_output_path(rec: dict | None = None, messages: str | None = None,
+                        raw_metadata: str | None = None) -> str | None:
+    """Best-effort download folder path for the manualimport folder fallback.
+
+    Sonarr often nulls `outputPath` once qBittorrent reports missing files, but
+    the path still appears inside statusMessages (\"No files found are eligible
+    for import in /downloads/...\"). Prefer the structured field, then parse
+    messages / stored raw_metadata.
+    """
+    if rec:
+        path = rec.get("outputPath")
+        if path:
+            return path
+        messages = messages or _queue_messages(rec)
+    if raw_metadata and not messages:
+        try:
+            meta = json.loads(raw_metadata)
+            path = meta.get("outputPath")
+            if path:
+                return path
+            messages = meta.get("messages") or ""
+        except (ValueError, TypeError):
+            pass
+    if messages:
+        m = _OUTPUT_PATH_IN_MSG_RE.search(messages)
+        if m:
+            return m.group(1).rstrip("/.,;")
+        # Broader fallback: first absolute path-looking token under /downloads or /media
+        for tok in re.findall(r"(/downloads/[^\s;]+|/media/[^\s;]+)", messages):
+            return tok.rstrip("/.,;")
+    return None
+
+
 # Per-app field names: (queue/history media-id key, library fetch method, library title key)
 APP_FIELDS = {
     "sonarr": ("seriesId", "get_series", "title"),
@@ -484,8 +525,10 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
                                        for r in siblings) if s is not None]
         mapped = total = None
         if client is not None:
-            mapped, total = await _pack_coverage(client, download_id, matched_id,
-                                                 parsed["pack_seasons"])
+            mapped, total = await _pack_coverage(
+                client, download_id, matched_id, parsed["pack_seasons"],
+                folder=extract_output_path(rec),
+            )
         if mapped is None and total and sibling_seasons:
             mapped = len([s for s in sibling_seasons
                           if not parsed["pack_seasons"] or s in parsed["pack_seasons"]])
@@ -513,7 +556,9 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         triggered_ep_id = rec["episode"].get("id")
         if numeric_mismatch and client is not None and rec.get("downloadId") and triggered_ep_id:
             try:
-                candidates = await client.get_manual_import(rec["downloadId"])
+                candidates = await client.get_manual_import(
+                    rec["downloadId"], folder=extract_output_path(rec),
+                )
             except Exception as e:
                 logger.info(f"Manual-import corroboration failed (non-fatal): {e}")
                 candidates = []
@@ -668,19 +713,25 @@ def decide_orphan_status(fs_state: str, auto_purge: bool) -> str | None:
 
 def looks_like_missing_files(message: str | None) -> bool:
     """True when a push/accept message already established the download has
-    no importable files left (empty manualimport). Used to orphan at accept
-    time and to clear stuck triage rows on the next scan."""
+    no importable files left (empty manualimport / Servarr NullReference 500).
+    Used to orphan at accept time and to clear stuck triage rows on the next scan."""
     if not message:
         return False
     m = message.lower()
-    return "no importable files" in m or "download files are gone" in m
+    if "no importable files" in m or "download files are gone" in m:
+        return True
+    # Legacy raw httpx strings from before reason=no_files classification
+    if "500" in m and ("nullreference" in m or "object reference not set" in m):
+        return True
+    if "qbit" in m and "missing files" in m:
+        return True
+    if "no files found are eligible for import" in m:
+        return True
+    return False
 
 
 def _row_output_path(row) -> str | None:
-    try:
-        return json.loads(row.raw_metadata or "{}").get("outputPath")
-    except (ValueError, TypeError):
-        return None
+    return extract_output_path(raw_metadata=row.raw_metadata)
 
 
 async def remove_from_download_clients(download_id: str, db) -> list[str]:
@@ -1011,6 +1062,8 @@ async def _scan_once_inner(task_id: str) -> dict:
                     summary["below_floor"] += 1
                     continue
 
+                q_messages = _queue_messages(rec)
+                output_path = extract_output_path(rec, messages=q_messages)
                 item = FailedImport(
                     source_app=app_name,
                     queue_item_id=queue_item_id,
@@ -1020,9 +1073,9 @@ async def _scan_once_inner(task_id: str) -> dict:
                         "status": rec.get("status"),
                         "trackedDownloadState": rec.get("trackedDownloadState"),
                         "trackedDownloadStatus": rec.get("trackedDownloadStatus"),
-                        "outputPath": rec.get("outputPath"),
+                        "outputPath": output_path,
                         "protocol": rec.get("protocol"),
-                        "messages": _queue_messages(rec),
+                        "messages": q_messages,
                         "match_rationale": match["match_rationale"],
                         "pack": match["pack"],
                     }),
@@ -1034,7 +1087,7 @@ async def _scan_once_inner(task_id: str) -> dict:
                     llm_rationale=match["llm_rationale"],
                     llm_agrees=match["llm_agrees"],
                     status="suggested",
-                    message=_queue_messages(rec)[:500] or None,
+                    message=q_messages[:500] or None,
                 )
 
                 # Quality-downgrade + suspicious-file checks (v0.17.0/v0.19.0) — one
@@ -1046,7 +1099,9 @@ async def _scan_once_inner(task_id: str) -> dict:
                 mi_candidates: list[dict] = []
                 if download_id:
                     try:
-                        mi_candidates = await client.get_manual_import(download_id)
+                        mi_candidates = await client.get_manual_import(
+                            download_id, folder=output_path,
+                        )
                     except Exception as e:
                         logger.info(f"Manual-import check failed (non-fatal): {e}")
                 if mi_candidates:
@@ -1081,7 +1136,8 @@ async def _scan_once_inner(task_id: str) -> dict:
                             logger.info(f"Quality downgrade: removed '{item.raw_title}' from {app_name}'s queue")
                 elif (cfg.auto_resolve_enabled and match["matched_id"]
                         and match["confidence"] >= cfg.high_confidence_threshold and download_id):
-                    result = await client.push_import_command(download_id, match["matched_id"])
+                    result = await client.push_import_command(
+                        download_id, match["matched_id"], folder=output_path)
                     if result["ok"]:
                         item.status = "auto_resolved"
                         item.resolved_at = datetime.utcnow()

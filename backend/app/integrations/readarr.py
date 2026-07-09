@@ -56,42 +56,38 @@ class ReadarrIntegration(BaseIntegration):
                 page += 1
         return records[:max_records]
 
-    async def get_manual_import(self, download_id: str) -> list[dict]:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            r = await client.get(f"{self._base()}/manualimport", headers=self._headers(),
-                                 params={"downloadId": download_id, "filterExistingFiles": "false"})
-            r.raise_for_status()
-            return r.json()
+    async def get_manual_import(self, download_id: str, folder: str | None = None) -> list[dict]:
+        return await self._fetch_manual_import(download_id, filter_existing=False, folder=folder)
 
-    async def push_import_command(self, download_id: str, author_id: int | None = None) -> dict:
+    async def push_import_command(self, download_id: str, author_id: int | None = None,
+                                  folder: str | None = None) -> dict:
         """Fetch manual-import candidates for a download and execute a ManualImport
         command for the importable ones. Imports MUST go through POST /command —
         the bare POST /manualimport route is the reprocess endpoint and never imports."""
         try:
+            # downloadId only (+ optional folder fallback) — never widen the scan
+            # beyond the download (see the Sonarr seriesId incident, 2026-07-05)
+            candidates = await self._fetch_manual_import(
+                download_id, filter_existing=True, folder=folder)
+            files = []
+            for f in candidates:
+                aid = (f.get("author") or {}).get("id") or f.get("authorId") or author_id
+                book_id = (f.get("book") or {}).get("id") or f.get("bookId")
+                if not aid or not book_id or not f.get("path"):
+                    continue
+                entry = {
+                    "path": f["path"],
+                    "authorId": aid,
+                    "bookId": book_id,
+                    "foreignEditionId": f.get("foreignEditionId"),
+                    "quality": f.get("quality"),
+                    "downloadId": f.get("downloadId") or download_id,
+                }
+                files.append({k: v for k, v in entry.items() if v is not None})
+            if not files:
+                return {"ok": False, "reason": "no_files", "imported": 0,
+                        "message": "Download files are gone — nothing left to import"}
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-                # downloadId only + filter already-imported files — never widen the scan
-                # beyond the download (see the Sonarr seriesId incident, 2026-07-05)
-                r = await client.get(f"{self._base()}/manualimport", headers=self._headers(),
-                                     params={"downloadId": download_id, "filterExistingFiles": "true"})
-                r.raise_for_status()
-                files = []
-                for f in r.json():
-                    aid = (f.get("author") or {}).get("id") or f.get("authorId") or author_id
-                    book_id = (f.get("book") or {}).get("id") or f.get("bookId")
-                    if not aid or not book_id or not f.get("path"):
-                        continue
-                    entry = {
-                        "path": f["path"],
-                        "authorId": aid,
-                        "bookId": book_id,
-                        "foreignEditionId": f.get("foreignEditionId"),
-                        "quality": f.get("quality"),
-                        "downloadId": f.get("downloadId") or download_id,
-                    }
-                    files.append({k: v for k, v in entry.items() if v is not None})
-                if not files:
-                    return {"ok": False, "reason": "no_files", "imported": 0,
-                            "message": "Download files are gone — nothing left to import"}
                 pr = await client.post(f"{self._base()}/command", headers=self._headers(),
                                        json={"name": "ManualImport", "files": files, "importMode": "move",
                                              "replaceExistingFiles": False})
@@ -101,4 +97,4 @@ class ReadarrIntegration(BaseIntegration):
                                        "confirmed against history afterward"}
                 return {"ok": False, "message": f"Import push failed: HTTP {pr.status_code}", "imported": 0}
         except Exception as e:
-            return {"ok": False, "message": str(e), "imported": 0}
+            return self._manual_import_error_result(e)
