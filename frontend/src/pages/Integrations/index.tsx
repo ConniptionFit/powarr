@@ -457,10 +457,11 @@ function OllamaCard() {
 
 function QdrantCard() {
   const qc = useQueryClient();
-  const { data: cfg } = useQuery({ queryKey: ["sp-settings"], queryFn: () => req("/api/v1/smart-playlists/settings") });
+  const { data: cfg } = useQuery({ queryKey: ["sp-settings"], queryFn: () => req<any>("/api/v1/smart-playlists/settings") });
   const [qdrantUrl, setQdrantUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [collection, setCollection] = useState("music_affinity_space");
+  const [apiKeySet, setApiKeySet] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
   const [testing, setTesting] = useState(false);
 
@@ -468,6 +469,7 @@ function QdrantCard() {
     if (cfg) {
       setQdrantUrl(cfg.qdrant_url || "");
       setCollection(cfg.collection || "music_affinity_space");
+      setApiKeySet(cfg.qdrant_api_key_set || false);
     }
   }, [cfg]);
 
@@ -530,7 +532,7 @@ function QdrantCard() {
             <label className="text-xs text-slate-400 mb-1 block">API Key (optional)</label>
             <input
               type="password"
-              placeholder={cfg?.qdrant_api_key_set ? "•••• saved — leave blank to keep" : "API key (if needed)"}
+              placeholder={apiKeySet ? "•••• saved — leave blank to keep" : "API key (if needed)"}
               value={apiKey}
               onChange={e => setApiKey(e.target.value)}
               className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
