@@ -143,7 +143,8 @@ class SonarrIntegration(BaseIntegration):
                 r.raise_for_status()
                 files = build_manual_import_files(r.json(), series_id, download_id, overrides)
                 if not files:
-                    return {"ok": False, "message": "No importable files resolved for this download", "imported": 0}
+                    return {"ok": False, "reason": "no_files", "imported": 0,
+                            "message": "Download files are gone — nothing left to import"}
                 # Hard guard: never import files that already live inside the series'
                 # own library folder — that means the scan scope is wrong and importing
                 # would churn/delete the library itself

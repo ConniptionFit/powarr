@@ -101,7 +101,10 @@ class LidarrIntegration(BaseIntegration):
                     }
                     files.append({k: v for k, v in entry.items() if v is not None})
                 if not files:
-                    return {"ok": False, "message": "No importable files resolved for this download", "imported": 0}
+                    # Empty candidate list = Lidarr sees nothing left for this
+                    # downloadId (already imported, removed, or never on disk).
+                    return {"ok": False, "reason": "no_files", "imported": 0,
+                            "message": "Download files are gone — nothing left to import"}
                 pr = await client.post(f"{self._base()}/command", headers=self._headers(),
                                        json={"name": "ManualImport", "files": files, "importMode": "move",
                                              "replaceExistingFiles": False})

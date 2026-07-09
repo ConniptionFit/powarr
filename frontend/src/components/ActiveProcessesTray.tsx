@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, RefreshCw, RotateCw, Trash2 } from "lucide-react";
+import { Loader2, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import { useTasks } from "../context/TaskContext";
 import type { TaskProgress } from "../lib/api";
 import BotState from "./BotState";
@@ -7,12 +7,12 @@ import BotState from "./BotState";
 const AUTO_DISMISS_MS = 4000; // "always auto-dismiss" — success or failure alike, per user decision 2026-07-07
 
 // llm_run gets the animated BotState (color/motion carries the status itself)
-// — everything else gets a plain lucide icon that spins while running.
+// — everything else gets a plain Lucide icon that spins while running.
 const KIND_ICON: Record<Exclude<TaskProgress["kind"], "llm_run">, React.ElementType> = {
   scan: RefreshCw,
   plex_sync: RotateCw,
   deletion: Trash2,
-  import_batch: Check,
+  import_batch: Loader2, // spinning loader — checkmark read as "done", not in-progress
 };
 
 function TaskIcon({ task }: { task: TaskProgress }) {

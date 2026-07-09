@@ -110,7 +110,8 @@ class RadarrIntegration(BaseIntegration):
                 r.raise_for_status()
                 files = build_manual_import_files(r.json(), movie_id, download_id)
                 if not files:
-                    return {"ok": False, "message": "No importable files resolved for this download", "imported": 0}
+                    return {"ok": False, "reason": "no_files", "imported": 0,
+                            "message": "Download files are gone — nothing left to import"}
                 pr = await client.post(f"{self._base()}/command", headers=self._headers(),
                                        json={"name": "ManualImport", "files": files, "importMode": "move"})
                 if pr.status_code in (200, 201, 202):

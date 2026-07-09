@@ -6,7 +6,9 @@ import os
 import tempfile
 import unittest
 
-from app.services.import_matcher import decide_orphans, decide_orphan_status, orphan_fs_state
+from app.services.import_matcher import (
+    decide_orphans, decide_orphan_status, orphan_fs_state, looks_like_missing_files,
+)
 
 
 class TestDecideOrphans(unittest.TestCase):
@@ -76,6 +78,20 @@ class TestDecideOrphanStatus(unittest.TestCase):
     def test_fs_error_aborts_even_with_auto_purge(self):
         self.assertIsNone(decide_orphan_status("error", auto_purge=False))
         self.assertIsNone(decide_orphan_status("error", auto_purge=True))
+
+
+class TestLooksLikeMissingFiles(unittest.TestCase):
+    def test_legacy_and_new_messages(self):
+        self.assertTrue(looks_like_missing_files("No importable files resolved for this download"))
+        self.assertTrue(looks_like_missing_files("Download files are gone — nothing left to import"))
+        self.assertTrue(looks_like_missing_files(
+            "Manual import queued | Download files are gone — nothing left to import"))
+
+    def test_unrelated(self):
+        self.assertFalse(looks_like_missing_files(None))
+        self.assertFalse(looks_like_missing_files(""))
+        self.assertFalse(looks_like_missing_files("Manual import command queued for 3 file(s)"))
+        self.assertFalse(looks_like_missing_files("Import push failed: HTTP 500"))
 
 
 class TestQbitLoginParsing(unittest.TestCase):

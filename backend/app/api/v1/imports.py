@@ -254,7 +254,7 @@ async def _batch_accept_bg(ids: list[int], task_id: str) -> None:
     """Background accept loop — own SessionLocal per item so a long batch
     doesn't hold one transaction open across many *arr round-trips."""
     from app.services import tasks
-    ok, failed = 0, 0
+    ok, orphaned, failed = 0, 0, 0
     try:
         for i, item_id in enumerate(ids, 1):
             db = SessionLocal()
@@ -262,31 +262,40 @@ async def _batch_accept_bg(ids: list[int], task_id: str) -> None:
                 result = await _accept(item_id, db)
                 if result.get("ok"):
                     ok += 1
+                elif result.get("status") == "orphaned" or result.get("reason") == "no_files":
+                    orphaned += 1
                 else:
                     failed += 1
-                tasks.update_task(
-                    task_id, current=i,
-                    message=f"{ok} ok, {failed} failed — {result.get('message') or ''}".strip(" —"),
-                )
+                parts = [f"{ok} imported"]
+                if orphaned:
+                    parts.append(f"{orphaned} gone")
+                if failed:
+                    parts.append(f"{failed} failed")
+                msg = ", ".join(parts)
+                if result.get("message"):
+                    msg = f"{msg} — {result['message']}"
+                tasks.update_task(task_id, current=i, message=msg)
             except HTTPException as e:
                 failed += 1
-                tasks.update_task(task_id, current=i, message=f"{ok} ok, {failed} failed — {e.detail}")
+                tasks.update_task(task_id, current=i, message=f"{ok} imported, {orphaned} gone, {failed} failed — {e.detail}")
             except Exception as e:
                 failed += 1
-                tasks.update_task(task_id, current=i, message=f"{ok} ok, {failed} failed — {e}")
+                tasks.update_task(task_id, current=i, message=f"{ok} imported, {orphaned} gone, {failed} failed — {e}")
             finally:
                 db.close()
-        status = "done" if failed == 0 else ("failed" if ok == 0 else "done")
-        tasks.finish_task(task_id, status, f"{ok} imported, {failed} failed")
+        status = "done" if failed == 0 else ("failed" if ok == 0 and orphaned == 0 else "done")
+        finish = f"{ok} imported, {orphaned} gone (orphaned), {failed} failed"
+        tasks.finish_task(task_id, status, finish)
         import_matcher.publish({
             "type": "import_batch",
-            "ok": ok, "failed": failed, "total": len(ids), "task_id": task_id,
+            "ok": ok, "orphaned": orphaned, "failed": failed, "total": len(ids), "task_id": task_id,
         })
     except Exception as e:
         tasks.finish_task(task_id, "failed", str(e))
         import_matcher.publish({
             "type": "import_batch",
-            "ok": ok, "failed": failed, "total": len(ids), "task_id": task_id, "error": str(e),
+            "ok": ok, "orphaned": orphaned, "failed": failed, "total": len(ids),
+            "task_id": task_id, "error": str(e),
         })
 
 
@@ -409,6 +418,18 @@ async def _accept(item_id: int, db: Session) -> dict:
     if result["ok"]:
         item.status = "accepted"
         item.resolved_at = datetime.utcnow()
+    elif result.get("reason") == "no_files" or import_matcher.looks_like_missing_files(result.get("message")):
+        # *arr returned zero importable candidates for this downloadId — the
+        # files are gone (removed/imported elsewhere). Don't leave the row in
+        # triage as a push failure; mark orphaned with a clear warning.
+        item.status = "orphaned"
+        item.resolved_at = datetime.utcnow()
+        item.verified = False
+        warn = "Download files are gone — nothing left to import"
+        item.message = warn if not item.message else (
+            item.message if warn in item.message else f"{item.message} | {warn}")
+        result = {**result, "ok": False, "reason": "no_files", "message": item.message,
+                  "warning": warn}
     db.commit()
     return {"id": item.id, "status": item.status, **result}
 

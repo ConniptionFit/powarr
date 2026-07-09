@@ -489,7 +489,10 @@ export default function FailedImports() {
         if (data.type === "llm_run") setActionMsg(`LLM run finished: ${data.scored} scored, ${data.skipped} skipped`);
         if (data.type === "llm_run_started") setLlmQueued(null);
         if (data.type === "import_batch") {
-          setActionMsg(`Batch import finished: ${data.ok} imported, ${data.failed} failed`);
+          const parts = [`${data.ok ?? 0} imported`];
+          if (data.orphaned) parts.push(`${data.orphaned} gone (orphaned)`);
+          if (data.failed) parts.push(`${data.failed} failed`);
+          setActionMsg(`Batch import finished: ${parts.join(", ")}`);
           setSelected(new Set());
         }
       } catch { /* keepalive */ }

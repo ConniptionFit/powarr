@@ -666,6 +666,16 @@ def decide_orphan_status(fs_state: str, auto_purge: bool) -> str | None:
     return "orphaned" if auto_purge else "orphan_pending"
 
 
+def looks_like_missing_files(message: str | None) -> bool:
+    """True when a push/accept message already established the download has
+    no importable files left (empty manualimport). Used to orphan at accept
+    time and to clear stuck triage rows on the next scan."""
+    if not message:
+        return False
+    m = message.lower()
+    return "no importable files" in m or "download files are gone" in m
+
+
 def _row_output_path(row) -> str | None:
     try:
         return json.loads(row.raw_metadata or "{}").get("outputPath")
@@ -769,6 +779,33 @@ async def _check_orphans(db, cfg: ImportMatchingSettings, summary: dict) -> None
     db.commit()
 
 
+def _orphan_known_missing_files(db, summary: dict) -> None:
+    """Clear triage rows whose last push already proved the download has no
+    files left (empty *arr manualimport). Complements the download-client
+    orphan check — Lidarr often returns zero candidates while the torrent
+    hash is still listed, so client presence alone wouldn't orphan them."""
+    rows = db.query(FailedImport).filter(
+        FailedImport.status.in_(("suggested", "resolve_failed")),
+    ).all()
+    now = datetime.utcnow()
+    changed = False
+    for row in rows:
+        if not looks_like_missing_files(row.message):
+            continue
+        warn = "Download files are gone — nothing left to import"
+        row.status = "orphaned"
+        row.resolved_at = now
+        row.verified = False
+        if warn not in (row.message or ""):
+            row.message = ((row.message + " | ") if row.message else "") + warn
+        summary["orphaned"] += 1
+        changed = True
+        logger.warning(f"Orphan check: '{row.raw_title}' ({row.source_app}) — "
+                       f"prior push found no files; marked orphaned")
+    if changed:
+        db.commit()
+
+
 def _close_stale_rows(db, app_name: str, queue: list[dict], summary: dict) -> None:
     """Suggested rows whose download left the queue on its own no longer need triage."""
     queue_download_ids = {rec.get("downloadId") for rec in queue if rec.get("downloadId")}
@@ -790,7 +827,9 @@ def _close_stale_rows(db, app_name: str, queue: list[dict], summary: dict) -> No
 
 async def _verify_resolved(db, app_name: str, client, cfg: ImportMatchingSettings, summary: dict) -> None:
     """Confirm pushed imports actually landed: look for an import event in recent history.
-    Unverified past the timeout → resolve_failed (surfaced back into triage)."""
+    Unverified past the timeout → resolve_failed (surfaced back into triage), unless the
+    download is already gone from every download client — then orphan it instead of
+    bouncing a dead push back into triage."""
     pending = db.query(FailedImport).filter(
         FailedImport.source_app == app_name,
         FailedImport.status.in_(("auto_resolved", "accepted")),
@@ -806,18 +845,75 @@ async def _verify_resolved(db, app_name: str, client, cfg: ImportMatchingSetting
     imported_ids = {h.get("downloadId") for h in history
                     if "imported" in str(h.get("eventType", "")).lower() and h.get("downloadId")}
     now = datetime.utcnow()
+    timed_out = []
     for row in pending:
         if row.download_id and row.download_id in imported_ids:
             row.verified = True
             summary["verified"] += 1
         elif row.resolved_at and now - row.resolved_at > timedelta(minutes=cfg.verify_timeout_minutes):
+            timed_out.append(row)
+    if timed_out:
+        gone = await _download_ids_confirmed_gone(
+            db, {r.download_id for r in timed_out if r.download_id})
+        for row in timed_out:
             row.verified = False
-            row.status = "resolve_failed"
-            row.message = ((row.message + " | ") if row.message else "") + \
-                f"Import not confirmed in history within {cfg.verify_timeout_minutes} min"
-            summary["resolve_failed"] += 1
-            logger.warning(f"Import verify: '{row.raw_title}' ({app_name}) push not confirmed — marked resolve_failed")
+            if row.download_id and row.download_id.lower() in gone:
+                fs = await orphan_fs_state_async(_row_output_path(row))
+                if fs == "present":
+                    # Files still on disk — keep as resolve_failed so the user can retry
+                    row.status = "resolve_failed"
+                    row.message = ((row.message + " | ") if row.message else "") + \
+                        f"Import not confirmed in history within {cfg.verify_timeout_minutes} min"
+                    summary["resolve_failed"] += 1
+                    logger.warning(f"Import verify: '{row.raw_title}' ({app_name}) push not "
+                                   f"confirmed — marked resolve_failed (files still on disk)")
+                elif fs == "error":
+                    row.status = "resolve_failed"
+                    row.message = ((row.message + " | ") if row.message else "") + \
+                        f"Import not confirmed in history within {cfg.verify_timeout_minutes} min"
+                    summary["resolve_failed"] += 1
+                    logger.warning(f"Import verify: '{row.raw_title}' ({app_name}) push not "
+                                   f"confirmed — marked resolve_failed (couldn't stat path)")
+                else:
+                    row.status = "orphaned"
+                    row.resolved_at = now
+                    warn = "Download files are gone — nothing left to import"
+                    row.message = ((row.message + " | ") if row.message else "") + warn
+                    summary["orphaned"] += 1
+                    logger.warning(f"Import verify: '{row.raw_title}' ({app_name}) push not "
+                                   f"confirmed and download is gone — marked orphaned")
+            else:
+                row.status = "resolve_failed"
+                row.message = ((row.message + " | ") if row.message else "") + \
+                    f"Import not confirmed in history within {cfg.verify_timeout_minutes} min"
+                summary["resolve_failed"] += 1
+                logger.warning(f"Import verify: '{row.raw_title}' ({app_name}) push not confirmed — marked resolve_failed")
     db.commit()
+
+
+async def _download_ids_confirmed_gone(db, download_ids: set[str]) -> set[str]:
+    """Subset of download_ids confirmed absent from every configured download client.
+    Empty set when no clients are configured or any client is unreachable (fail-soft)."""
+    from app.api.v1.integrations import DOWNLOAD_CLIENT_NAMES
+    from app.api.v1.integrations import _get_client as _download_client
+    if not download_ids:
+        return set()
+    clients = []
+    for name in DOWNLOAD_CLIENT_NAMES:
+        row = db.query(Integration).filter_by(name=name, enabled=True).first()
+        if row and row.url:
+            clients.append((name, _download_client(row)))
+    if not clients:
+        return set()
+    ids = {d.lower() for d in download_ids if d}
+    results: list[set[str] | None] = []
+    for name, client in clients:
+        found = await client.check_downloads(ids)
+        if found is None:
+            logger.warning(f"Orphan check: {name} unreachable — skipping gone-confirm this cycle")
+        results.append(found)
+    gone = decide_orphans(ids, results)
+    return {d.lower() for d in (gone or set())}
 
 
 async def scan_once() -> dict:
@@ -992,6 +1088,14 @@ async def _scan_once_inner(task_id: str) -> dict:
                         summary["auto_resolved"] += 1
                         logger.info(f"Import scan: auto-resolved '{item.raw_title}' ({app_name}, "
                                     f"confidence {item.confidence:.2f}): {result['message']}")
+                    elif result.get("reason") == "no_files":
+                        # Files already gone — don't leave a suggested row that can never import
+                        item.status = "orphaned"
+                        item.resolved_at = datetime.utcnow()
+                        item.verified = False
+                        summary["orphaned"] += 1
+                        logger.warning(f"Import scan: '{item.raw_title}' ({app_name}) files gone "
+                                       f"at auto-resolve — marked orphaned")
                     item.message = result["message"]
 
                 if item.status == "suggested":
@@ -1001,6 +1105,7 @@ async def _scan_once_inner(task_id: str) -> dict:
                 if item.status == "suggested":
                     summary["new_suggestion_ids"].append(item.id)
         await _check_orphans(db, cfg, summary)
+        _orphan_known_missing_files(db, summary)
 
         # Last-scan timestamp for the dashboard's "next scan" countdown — updated on
         # every completed cycle, manual "Scan Now" included, so it reflects reality
