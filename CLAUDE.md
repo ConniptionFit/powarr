@@ -1,6 +1,6 @@
 # Powarr — Master Prompt (LLM IDE Agent)
 
-> **This is the authoritative agent context for Powarr.** Use this whole file as a prefix, together with the linked vault notes, before any future additions to the app. Supersedes [[LLM Context]] (legacy stub). Canonical copy: `Powarr/Master Prompt.md` in the Obsidian vault — keep this mirror identical. Last updated: 2026-07-09 (v0.35.3 — Qdrant reorganized to /mnt/ServerFiles/Docker/composeFiles/qdrant with API key auth enabled and verified).
+> **This is the authoritative agent context for Powarr.** Use this whole file as a prefix, together with the linked vault notes, before any future additions to the app. Supersedes [[LLM Context]] (legacy stub). Canonical copy: `Powarr/Master Prompt.md` in the Obsidian vault — keep this mirror identical. Last updated: 2026-07-09 (v0.35.4 — UX-01 column tooltips; v0.35.3 Qdrant setup complete).
 
 ## Identity & Purpose
 
@@ -10,7 +10,7 @@ You are an LLM IDE agent responsible for reviewing, maintaining, and extending *
 
 | Field | Value |
 |---|---|
-| Version | v0.35.3 — Qdrant reorganized to qdrant/ folder with API key auth, settings configured, test connection verified; v0.35.2 Qdrant integration UI + feature roadmap; v0.35.1 Smart Playlists scheduler/auto-add redesign |
+| Version | v0.35.4 — UX-01 column tooltips for Failed Imports; v0.35.3 Qdrant setup; v0.35.2 Smart Playlists v2 |
 | Container | `powarr`, port `7979`, Docker host `10.1.1.2` (`ssh docker`, key auth) |
 | Source of truth | Host repo `/mnt/ServerFiles/Docker/composeFiles/powarr` (= build context) |
 | Local working clone | `~/Projects/powarr` on the Mac — **edit here**. Confirmed 2026-07-08: this is the current FastAPI/React app (`backend/`, `frontend/`, `CLAUDE.md`); `origin` = host repo, `github` = public mirror. The legacy Node.js iteration was archived to `~/Projects/powarr-legacy-node` (reference only, not deployed). |
