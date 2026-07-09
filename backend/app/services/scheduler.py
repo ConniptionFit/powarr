@@ -10,7 +10,7 @@ from app.models.app_setting import AppSetting
 from app.models.media import MediaItem
 from app.schemas.settings import (
     CleanupSettings, SyncSettings, LlmScheduleSettings, BackupSettings,
-    NotificationSettings,
+    NotificationSettings, SmartPlaylistSettings,
 )
 
 logger = logging.getLogger("powarr")
@@ -161,6 +161,17 @@ async def _scheduled_weekly_digest(db) -> None:
     logger.info("Weekly digest sent")
 
 
+async def _scheduled_playlist_generation(db) -> None:
+    """Scheduled Smart Playlists generation with optional auto-add (MOD-01b, v0.35+)."""
+    cfg = _get_setting(db, "smart_playlists", SmartPlaylistSettings)
+    if not cfg.enabled or not cfg.schedule_enabled:
+        return
+    from app.services.playlist_generator import run_scheduled_generation
+    result = await run_scheduled_generation()
+    if result.get("ok") and result.get("playlists", 0) > 0:
+        logger.info(f"Scheduled playlist generation: {result.get('message')}")
+
+
 async def maintenance_loop():
     logger.info("Maintenance scheduler started")
     while True:
@@ -172,6 +183,7 @@ async def maintenance_loop():
                 await _scheduled_llm_run(db)
                 await _scheduled_backup(db)
                 await _scheduled_weekly_digest(db)
+                await _scheduled_playlist_generation(db)
             finally:
                 db.close()
         except asyncio.CancelledError:

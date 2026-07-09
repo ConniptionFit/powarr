@@ -1,4 +1,4 @@
-"""Smart Playlists API (MOD-01, v0.34.0)."""
+"""Smart Playlists API (MOD-01, v0.35+) — scheduling, auto-add, track tracking."""
 import json
 from datetime import datetime
 from typing import Optional
@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.app_setting import AppSetting
-from app.models.smart_playlist import SmartPlaylist, SmartPlaylistCandidate
+from app.models.smart_playlist import (
+    SmartPlaylist, SmartPlaylistCandidate, SmartPlaylistRun, SmartPlaylistTrack
+)
 from app.schemas.settings import SmartPlaylistSettings
 from app.services import playlist_generator
 from app.services.secret_box import encrypt
@@ -23,9 +25,20 @@ class PlaylistOut(BaseModel):
     title: str
     plex_playlist_id: Optional[str] = None
     enabled: bool
+    track_count: int = 0
     pending_count: int = 0
+    last_generated_at: Optional[datetime] = None
+    last_run_message: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class PlaylistDetailOut(PlaylistOut):
+    """Extended playlist details with run history."""
+    mood: Optional[str] = None
+    era: Optional[str] = None
+    auto_add_override: Optional[bool] = None
+    max_tracks_override: Optional[int] = None
 
 
 class CandidateOut(BaseModel):
@@ -35,6 +48,31 @@ class CandidateOut(BaseModel):
     musicbrainz_id: Optional[str] = None
     status: str
     created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class TrackOut(BaseModel):
+    id: int
+    playlist_id: int
+    plex_key: str
+    artist_name: str
+    track_title: Optional[str] = None
+    added_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PlaylistRunOut(BaseModel):
+    id: int
+    playlist_id: Optional[int] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    status: str
+    message: Optional[str] = None
+    candidates_found: int = 0
+    candidates_accepted: int = 0
+    tracks_added: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -132,3 +170,64 @@ async def batch(body: dict = Body(...)):
         else:
             results.append(playlist_generator.reject_candidate(cid))
     return {"results": results}
+
+
+@router.get("/{playlist_id}", response_model=PlaylistDetailOut)
+def get_playlist(playlist_id: int, db: Session = Depends(get_db)):
+    """Get detailed playlist info including metadata and overrides."""
+    pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    pending = db.query(SmartPlaylistCandidate).filter_by(
+        playlist_id=pl.id, status="pending").count()
+    return PlaylistDetailOut(
+        **{k: getattr(pl, k) for k in PlaylistDetailOut.model_fields},
+        pending_count=pending
+    )
+
+
+@router.get("/{playlist_id}/runs", response_model=list[PlaylistRunOut])
+def get_playlist_runs(playlist_id: int, limit: int = Query(50, ge=1, le=500),
+                      db: Session = Depends(get_db)):
+    """Get run history for a playlist."""
+    pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    runs = db.query(SmartPlaylistRun).filter_by(playlist_id=playlist_id).order_by(
+        SmartPlaylistRun.started_at.desc()).limit(limit).all()
+    return runs
+
+
+@router.get("/{playlist_id}/tracks", response_model=list[TrackOut])
+def get_playlist_tracks(playlist_id: int, limit: int = Query(500, ge=1, le=1000),
+                        db: Session = Depends(get_db)):
+    """Get tracks in a playlist."""
+    pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    tracks = db.query(SmartPlaylistTrack).filter_by(playlist_id=playlist_id).order_by(
+        SmartPlaylistTrack.added_at.desc()).limit(limit).all()
+    return tracks
+
+
+@router.put("/{playlist_id}", response_model=PlaylistDetailOut)
+def update_playlist(playlist_id: int, body: dict = Body(...),
+                   db: Session = Depends(get_db)):
+    """Update playlist settings (auto_add_override, max_tracks_override, etc.)."""
+    pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    # Only allow updating override fields
+    allowed = {"auto_add_override", "max_tracks_override", "enabled", "title"}
+    for key in allowed:
+        if key in body:
+            setattr(pl, key, body[key])
+
+    db.commit()
+    pending = db.query(SmartPlaylistCandidate).filter_by(
+        playlist_id=pl.id, status="pending").count()
+    return PlaylistDetailOut(
+        **{k: getattr(pl, k) for k in PlaylistDetailOut.model_fields},
+        pending_count=pending
+    )

@@ -61,6 +61,15 @@ def _migrate():
             "password": "VARCHAR",
         },
         "deletion_log": {},
+        "smart_playlists": {
+            "mood": "VARCHAR",
+            "era": "VARCHAR",
+            "track_count": "INTEGER DEFAULT 0",
+            "last_generated_at": "TIMESTAMP",
+            "last_run_message": "VARCHAR",
+            "auto_add_override": "BOOLEAN",
+            "max_tracks_override": "INTEGER",
+        },
     }
     with engine.connect() as conn:
         for table, pending in pending_by_table.items():
