@@ -5,7 +5,7 @@ import { integrationsApi, settingsApi, ollamaApi, type IntegrationConfig } from 
 
 const INTEGRATION_META: Record<string, { label: string; color: string; description: string }> = {
   plex: { label: "Plex", color: "bg-yellow-600", description: "Media server — required for library sync" },
-  tautulli: { label: "Tautulli", color: "bg-blue-600", description: "Optional: enriched watch history" },
+  tautulli: { label: "Tautulli", color: "bg-blue-600", description: "Optional: watch history + multi-user deletion protection" },
   sonarr: { label: "Sonarr", color: "bg-teal-600", description: "TV show management" },
   radarr: { label: "Radarr", color: "bg-amber-600", description: "Movie management" },
   lidarr: { label: "Lidarr", color: "bg-pink-600", description: "Music management" },
