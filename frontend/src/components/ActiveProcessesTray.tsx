@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw, RotateCw, Trash2 } from "lucide-react";
+import { Check, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import { useTasks } from "../context/TaskContext";
 import type { TaskProgress } from "../lib/api";
 import BotState from "./BotState";
@@ -12,6 +12,7 @@ const KIND_ICON: Record<Exclude<TaskProgress["kind"], "llm_run">, React.ElementT
   scan: RefreshCw,
   plex_sync: RotateCw,
   deletion: Trash2,
+  import_batch: Check,
 };
 
 function TaskIcon({ task }: { task: TaskProgress }) {

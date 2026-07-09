@@ -43,3 +43,12 @@ class ImportStats(BaseModel):
     orphaned: int = 0
     by_service: dict[str, int] = {}  # suggested count per source app
     auto_resolved_7d: int = 0
+    # Process N Items (v0.28.0) — 0 when auto_resolve is off
+    auto_eligible_count: int = 0
+
+
+class AutoEligibleOut(BaseModel):
+    enabled: bool
+    threshold: float
+    count: int
+    ids: list[int] = []

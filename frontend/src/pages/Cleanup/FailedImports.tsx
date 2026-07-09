@@ -1,17 +1,18 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd } from "lucide-react";
-import { importsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
+import { importsApi, settingsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
+import { PlatformBadge, PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 
-const APP_COLORS: Record<string, string> = {
-  sonarr: "bg-teal-600",
-  radarr: "bg-amber-600",
-  lidarr: "bg-pink-600",
-  readarr: "bg-orange-700",
-};
+/** True when the click landed on (or inside) an interactive control — row-click
+ *  select must ignore these so buttons/checkboxes/links keep their own behavior. */
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return !!target.closest("button, a, input, select, textarea, label, [role='button']");
+}
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   suggested: { label: "Suggested", cls: "bg-yellow-900/60 text-yellow-300" },
@@ -379,6 +380,8 @@ export default function FailedImports() {
   const [downgradeOnly, setDowngradeOnly] = usePersistedState<boolean>("powarr.failedImports.downgradeOnly", false);
   const [suspiciousOnly, setSuspiciousOnly] = usePersistedState<boolean>("powarr.failedImports.suspiciousOnly", false);
   const [packFilter, setPackFilter] = usePersistedState<"all" | "packs" | "singles">("powarr.failedImports.packFilter", "all");
+  const [search, setSearch] = usePersistedState("powarr.failedImports.search", "");
+  const [platformFilter, setPlatformFilter] = usePersistedState<PlatformName | "">("powarr.failedImports.platformFilter", "");
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
@@ -419,12 +422,40 @@ export default function FailedImports() {
     queryFn: importsApi.stats,
   });
 
+  const { data: matchSettings } = useQuery({
+    queryKey: ["import-matching"],
+    queryFn: settingsApi.getImportMatching,
+  });
+
+  const { data: autoEligible } = useQuery({
+    queryKey: ["import-auto-eligible"],
+    queryFn: importsApi.autoEligible,
+    // Only poll when auto-resolve is on — otherwise the button is hidden
+    enabled: !!matchSettings?.auto_resolve_enabled,
+    refetchInterval: matchSettings?.auto_resolve_enabled ? 15_000 : false,
+  });
+
+  const enabledPlatforms = useMemo(() => {
+    if (!matchSettings) return PLATFORM_ORDER.slice();
+    return PLATFORM_ORDER.filter(p => matchSettings[`${p}_enabled` as keyof typeof matchSettings] !== false);
+  }, [matchSettings]);
+
   const sortedItems = useMemo(() => {
     let arr = items;
     if (downgradeOnly) arr = arr.filter(i => i.quality_downgrade);
     if (suspiciousOnly) arr = arr.filter(i => i.suspicious_files);
     if (packFilter === "packs") arr = arr.filter(i => i.pack);
     if (packFilter === "singles") arr = arr.filter(i => !i.pack);
+    if (platformFilter) arr = arr.filter(i => i.source_app === platformFilter);
+    const q = search.trim().toLowerCase();
+    if (q) {
+      arr = arr.filter(i =>
+        (i.raw_title || "").toLowerCase().includes(q) ||
+        (i.matched_title || "").toLowerCase().includes(q) ||
+        (i.message || "").toLowerCase().includes(q) ||
+        (i.match_rationale || "").toLowerCase().includes(q)
+      );
+    }
     arr = [...arr];
     arr.sort((a, b) => {
       const av = a[sortBy], bv = b[sortBy];
@@ -437,24 +468,30 @@ export default function FailedImports() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return arr;
-  }, [items, sortBy, sortDir, downgradeOnly, suspiciousOnly, packFilter]);
+  }, [items, sortBy, sortDir, downgradeOnly, suspiciousOnly, packFilter, platformFilter, search]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["imports"] });
     qc.invalidateQueries({ queryKey: ["import-stats"] });
+    qc.invalidateQueries({ queryKey: ["import-auto-eligible"] });
     setSelected(new Set());
   };
 
-  // Live updates: poller scans + on-demand LLM runs both publish SSE events
+  // Live updates: poller scans + on-demand LLM runs + async batch accepts
   useEffect(() => {
     const es = new EventSource("/api/v1/imports/events");
     es.onmessage = ev => {
       qc.invalidateQueries({ queryKey: ["imports"] });
       qc.invalidateQueries({ queryKey: ["import-stats"] });
+      qc.invalidateQueries({ queryKey: ["import-auto-eligible"] });
       try {
         const data = JSON.parse(ev.data);
         if (data.type === "llm_run") setActionMsg(`LLM run finished: ${data.scored} scored, ${data.skipped} skipped`);
         if (data.type === "llm_run_started") setLlmQueued(null);
+        if (data.type === "import_batch") {
+          setActionMsg(`Batch import finished: ${data.ok} imported, ${data.failed} failed`);
+          setSelected(new Set());
+        }
       } catch { /* keepalive */ }
     };
     return () => es.close();
@@ -476,9 +513,23 @@ export default function FailedImports() {
 
   const batchMut = useMutation({
     mutationFn: ({ ids, action }: { ids: number[]; action: "accept" | "reject" | "confirm_orphan" }) => importsApi.batch(ids, action),
-    onSuccess: r => { setActionMsg(`Batch done: ${r.results.length} item(s) processed`); invalidate(); },
+    onSuccess: (r, vars) => {
+      if (r.async && r.task_id) {
+        setActionMsg(`Importing ${r.total ?? vars.ids.length} item(s) — progress in Active Processes`);
+        // Selection cleared when the import_batch SSE event arrives
+        return;
+      }
+      setActionMsg(`Batch done: ${r.results.length} item(s) processed`);
+      invalidate();
+    },
     onError: (e: Error) => setActionMsg(`Batch failed: ${e.message}`),
   });
+
+  const processEligible = () => {
+    const ids = autoEligible?.ids ?? [];
+    if (!ids.length) return;
+    batchMut.mutate({ ids, action: "accept" });
+  };
 
   const confirmOrphanMut = useMutation({
     mutationFn: (id: number) => importsApi.confirmOrphan(id),
@@ -570,7 +621,7 @@ export default function FailedImports() {
   const renderCell = (item: FailedImport, key: ColKey, isExpanded: boolean) => {
     switch (key) {
       case "source":
-        return <span className={`px-2 py-0.5 rounded text-xs font-bold text-white ${APP_COLORS[item.source_app] ?? "bg-slate-600"}`}>{item.source_app}</span>;
+        return <PlatformBadge app={item.source_app} />;
       case "release":
         return (
           <>
@@ -755,6 +806,51 @@ export default function FailedImports() {
         {actionMsg && <span className="text-sm text-slate-300 ml-2">{actionMsg}</span>}
       </div>
 
+      {/* Search + platform filters (v0.28.0) */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <div className="relative">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+          <input
+            type="search"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search title / release…"
+            className="pl-8 pr-3 py-1.5 w-56 bg-surface-raised border border-purple-900/40 rounded-lg text-sm text-white placeholder:text-slate-500"
+          />
+        </div>
+        {enabledPlatforms.map(p => {
+          const meta = PLATFORM_META[p];
+          const Icon = meta.Icon;
+          const active = platformFilter === p;
+          return (
+            <button
+              key={p}
+              onClick={() => setPlatformFilter(active ? "" : p)}
+              title={`Filter by ${meta.label}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+                active
+                  ? `${meta.badge} border-transparent text-white`
+                  : `bg-surface-raised hover:text-white border-purple-900/40 ${meta.chip}`
+              }`}
+            >
+              <Icon size={13} />
+              {meta.label}
+            </button>
+          );
+        })}
+        {matchSettings?.auto_resolve_enabled && (autoEligible?.count ?? stats?.auto_eligible_count ?? 0) > 0 && (
+          <button
+            onClick={processEligible}
+            disabled={batchMut.isPending}
+            title={`Batch-import ${autoEligible?.count ?? stats?.auto_eligible_count} item(s) at or above the auto-resolve threshold (${Math.round((matchSettings.high_confidence_threshold ?? 0.9) * 100)}%)`}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-green-700 hover:bg-green-600 text-white transition-colors disabled:opacity-50"
+          >
+            <Check size={14} />
+            Process {autoEligible?.count ?? stats?.auto_eligible_count} Items
+          </button>
+        )}
+      </div>
+
       {/* Batch action bar */}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 mb-4 px-4 py-2.5 bg-brand/10 border border-brand/30 rounded-lg">
@@ -847,12 +943,20 @@ export default function FailedImports() {
               {sortedItems.map((item: FailedImport) => {
                 const actionable = item.status === "suggested" || item.status === "resolve_failed";
                 const orphanPending = item.status === "orphan_pending";
+                const selectable = actionable || orphanPending;
                 const isExpanded = expanded === item.id;
                 return (
                   <>
-                    <tr key={item.id} className="hover:bg-white/5 transition-colors">
-                      <td className="px-3 py-3">
-                        {(actionable || orphanPending) && (
+                    <tr
+                      key={item.id}
+                      className={`hover:bg-white/5 transition-colors ${selectable ? "cursor-pointer" : ""} ${selected.has(item.id) ? "bg-brand/5" : ""}`}
+                      onClick={e => {
+                        if (!selectable || isInteractiveTarget(e.target)) return;
+                        toggleSelect(item.id);
+                      }}
+                    >
+                      <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                        {selectable && (
                           <input type="checkbox" className="accent-purple-500"
                                  checked={selected.has(item.id)} onChange={() => toggleSelect(item.id)} />
                         )}
@@ -862,7 +966,7 @@ export default function FailedImports() {
                           {renderCell(item, c.key, isExpanded)}
                         </td>
                       ))}
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                         {orphanPending && (
                           <div className="flex items-center gap-1.5 justify-end">
                             <button

@@ -1,10 +1,11 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot } from "lucide-react";
-import { mediaApi, integrationsApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
+import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search } from "lucide-react";
+import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
+import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 
 function ScoreBadge({ score }: { score: number }) {
   const color =
@@ -12,6 +13,12 @@ function ScoreBadge({ score }: { score: number }) {
     score >= 50 ? "bg-yellow-900/60 text-yellow-300" :
     "bg-green-900/60 text-green-300";
   return <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${color}`}>{score.toFixed(0)}</span>;
+}
+
+/** True when the click landed on (or inside) an interactive control. */
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return !!target.closest("button, a, input, select, textarea, label, [role='button']");
 }
 
 type SortKey = "score" | "file_size" | "watch_count" | "last_watched_at";
@@ -24,6 +31,8 @@ interface ShowGroup {
   last_watched_at: string | null;
   avg_score: number;
   sonarr_id: number | null;
+  radarr_id: number | null;
+  lidarr_id: number | null;
   ids: number[];
 }
 
@@ -40,6 +49,8 @@ function groupByShow(items: MediaItem[]): ShowGroup[] {
         last_watched_at: null,
         avg_score: 0,
         sonarr_id: ep.sonarr_id,
+        radarr_id: ep.radarr_id,
+        lidarr_id: ep.lidarr_id,
         ids: [],
       });
     }
@@ -48,6 +59,9 @@ function groupByShow(items: MediaItem[]): ShowGroup[] {
     g.total_size += ep.file_size;
     g.total_watch_count += ep.watch_count;
     g.ids.push(ep.id);
+    if (ep.sonarr_id) g.sonarr_id = ep.sonarr_id;
+    if (ep.radarr_id) g.radarr_id = ep.radarr_id;
+    if (ep.lidarr_id) g.lidarr_id = ep.lidarr_id;
     if (ep.last_watched_at) {
       if (!g.last_watched_at || ep.last_watched_at > g.last_watched_at) {
         g.last_watched_at = ep.last_watched_at;
@@ -60,6 +74,13 @@ function groupByShow(items: MediaItem[]): ShowGroup[] {
   return Array.from(map.values());
 }
 
+function matchesPlatform(item: { sonarr_id: number | null; radarr_id: number | null; lidarr_id: number | null }, platform: PlatformName): boolean {
+  if (platform === "sonarr") return item.sonarr_id != null;
+  if (platform === "radarr") return item.radarr_id != null;
+  if (platform === "lidarr") return item.lidarr_id != null;
+  return false; // readarr has no MediaItem FK — chip omitted on this page
+}
+
 export default function DeletionSuggestions() {
   const qc = useQueryClient();
   // Filters + sort persist per-browser (v0.27.0, Approved Queue #11)
@@ -68,6 +89,9 @@ export default function DeletionSuggestions() {
   const [showMode, setShowMode] = usePersistedState<"episode" | "show">("powarr.deletionSuggestions.showMode", "show");
   const [sortBy, setSortBy] = usePersistedState<SortKey>("powarr.deletionSuggestions.sortBy", "score");
   const [order, setOrder] = usePersistedState<"asc" | "desc">("powarr.deletionSuggestions.order", "desc");
+  const [search, setSearch] = usePersistedState("powarr.deletionSuggestions.search", "");
+  const [platformFilter, setPlatformFilter] = usePersistedState<PlatformName | "">("powarr.deletionSuggestions.platformFilter", "");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null); // id or "show:title"
@@ -91,33 +115,93 @@ export default function DeletionSuggestions() {
     queryFn: () => mediaApi.list(params),
   });
 
+  const { data: matchSettings } = useQuery({
+    queryKey: ["import-matching"],
+    queryFn: settingsApi.getImportMatching,
+  });
+
+  // Deletion page: Radarr/Sonarr/Lidarr only (no readarr_id on MediaItem)
+  const enabledPlatforms = useMemo(() => {
+    const deletionPlatforms = PLATFORM_ORDER.filter(p => p !== "readarr");
+    if (!matchSettings) return deletionPlatforms;
+    return deletionPlatforms.filter(p => matchSettings[`${p}_enabled` as keyof typeof matchSettings] !== false);
+  }, [matchSettings]);
+
+  const filteredItems = useMemo(() => {
+    let arr = rawItems;
+    if (platformFilter && platformFilter !== "readarr") {
+      arr = arr.filter(i => matchesPlatform(i, platformFilter));
+    }
+    const q = search.trim().toLowerCase();
+    if (q) {
+      arr = arr.filter(i =>
+        (i.title || "").toLowerCase().includes(q) ||
+        (i.parent_title || "").toLowerCase().includes(q) ||
+        (i.library_section || "").toLowerCase().includes(q) ||
+        String(i.year ?? "").includes(q)
+      );
+    }
+    return arr;
+  }, [rawItems, platformFilter, search]);
+
   const isShowMode = showMode === "show" && (!mediaType || mediaType === "episode");
   const showGroups = useMemo(() => {
     if (!isShowMode) return [];
-    const episodes = rawItems.filter(i => i.media_type === "episode");
+    const episodes = filteredItems.filter(i => i.media_type === "episode");
     const groups = groupByShow(episodes);
     if (sortBy === "score") groups.sort((a, b) => order === "desc" ? b.avg_score - a.avg_score : a.avg_score - b.avg_score);
     if (sortBy === "file_size") groups.sort((a, b) => order === "desc" ? b.total_size - a.total_size : a.total_size - b.total_size);
     if (sortBy === "watch_count") groups.sort((a, b) => order === "desc" ? b.total_watch_count - a.total_watch_count : a.total_watch_count - b.total_watch_count);
     return groups;
-  }, [rawItems, isShowMode, sortBy, order]);
+  }, [filteredItems, isShowMode, sortBy, order]);
 
-  const displayItems = isShowMode ? [] : rawItems;
+  const displayItems = isShowMode ? [] : filteredItems;
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => mediaApi.delete(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["stats"] }); setConfirmDelete(null); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["stats"] }); setConfirmDelete(null); setSelected(new Set()); },
   });
 
   const deleteBatchMut = useMutation({
     mutationFn: (ids: number[]) => mediaApi.deleteBatch(ids),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["stats"] }); setConfirmDelete(null); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["stats"] }); setConfirmDelete(null); setSelected(new Set()); },
   });
 
   const ignoreMut = useMutation({
     mutationFn: ({ id, ignored }: { id: number; ignored: boolean }) => mediaApi.ignore(id, ignored),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["media"] }),
   });
+
+  const toggleSelect = (id: number) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectMany = (ids: number[]) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      const allSelected = ids.every(id => next.has(id));
+      if (allSelected) ids.forEach(id => next.delete(id));
+      else ids.forEach(id => next.add(id));
+      return next;
+    });
+  };
+
+  const allVisibleIds = useMemo(() => {
+    if (isShowMode) return showGroups.flatMap(g => g.ids);
+    return displayItems.map(i => i.id);
+  }, [isShowMode, showGroups, displayItems]);
+
+  const toggleSelectAll = () => {
+    setSelected(prev =>
+      prev.size === allVisibleIds.length && allVisibleIds.length > 0
+        ? new Set()
+        : new Set(allVisibleIds)
+    );
+  };
 
   // Streams rationale tokens over SSE so long verbose generations are visible as
   // they happen; falls back to the plain POST when the stream can't start
@@ -217,7 +301,7 @@ export default function DeletionSuggestions() {
   const SortIcon = ({ k }: { k: SortKey }) =>
     sortBy === k ? (order === "desc" ? <ChevronDown size={13} /> : <ChevronUp size={13} />) : null;
 
-  const hasEpisodes = rawItems.some(i => i.media_type === "episode") || (!mediaType);
+  const hasEpisodes = filteredItems.some(i => i.media_type === "episode") || (!mediaType);
 
   return (
     <div>
@@ -248,7 +332,7 @@ export default function DeletionSuggestions() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-5 items-center">
+      <div className="flex flex-wrap gap-3 mb-4 items-center">
         <div className="flex items-center gap-2">
           <label className="text-slate-400 text-sm">Min score</label>
           <input
@@ -291,6 +375,56 @@ export default function DeletionSuggestions() {
         )}
       </div>
 
+      {/* Search + platform filters (v0.28.0) */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <div className="relative">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+          <input
+            type="search"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search title…"
+            className="pl-8 pr-3 py-1.5 w-56 bg-surface-raised border border-purple-900/40 rounded-lg text-sm text-white placeholder:text-slate-500"
+          />
+        </div>
+        {enabledPlatforms.map(p => {
+          const meta = PLATFORM_META[p];
+          const Icon = meta.Icon;
+          const active = platformFilter === p;
+          return (
+            <button
+              key={p}
+              onClick={() => setPlatformFilter(active ? "" : p)}
+              title={`Filter by linked ${meta.label} ID`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+                active
+                  ? `${meta.badge} border-transparent text-white`
+                  : `bg-surface-raised hover:text-white border-purple-900/40 ${meta.chip}`
+              }`}
+            >
+              <Icon size={13} />
+              {meta.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 mb-4 px-4 py-2.5 bg-brand/10 border border-brand/30 rounded-lg">
+          <span className="text-sm text-brand-light">{selected.size} selected</span>
+          <button
+            onClick={() => deleteBatchMut.mutate([...selected])}
+            disabled={deleteBatchMut.isPending}
+            className="px-3 py-1 bg-red-700 hover:bg-red-600 text-white rounded text-xs disabled:opacity-50"
+          >
+            Delete Selected
+          </button>
+          <button onClick={() => setSelected(new Set())} className="text-xs text-slate-400 hover:text-white ml-auto">
+            Clear
+          </button>
+        </div>
+      )}
+
       {isLoading ? (
         <p className="text-slate-400">Loading…</p>
       ) : (isShowMode ? showGroups : displayItems).length === 0 ? (
@@ -302,6 +436,14 @@ export default function DeletionSuggestions() {
           <table className="w-full text-sm">
             <thead className="border-b border-purple-900/30 text-slate-400 text-xs uppercase tracking-wider">
               <tr>
+                <th className="px-3 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    className="accent-purple-500"
+                    checked={selected.size > 0 && selected.size === allVisibleIds.length && allVisibleIds.length > 0}
+                    onChange={toggleSelectAll}
+                  />
+                </th>
                 <th className="text-left px-4 py-3">{isShowMode ? "Show" : "Title"}</th>
                 {!isShowMode && <th className="text-left px-4 py-3">Type</th>}
                 <th className="text-left px-4 py-3 cursor-pointer hover:text-white select-none" onClick={() => toggleSort("score")}>
@@ -323,8 +465,26 @@ export default function DeletionSuggestions() {
               {isShowMode
                 ? showGroups.map(group => {
                     const key = `show:${group.parent_title}`;
+                    const groupSelected = group.ids.length > 0 && group.ids.every(id => selected.has(id));
+                    const groupPartial = !groupSelected && group.ids.some(id => selected.has(id));
                     return (
-                      <tr key={group.parent_title} className="hover:bg-white/5 transition-colors">
+                      <tr
+                        key={group.parent_title}
+                        className={`hover:bg-white/5 transition-colors cursor-pointer ${groupSelected ? "bg-brand/5" : ""}`}
+                        onClick={e => {
+                          if (isInteractiveTarget(e.target)) return;
+                          toggleSelectMany(group.ids);
+                        }}
+                      >
+                        <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            className="accent-purple-500"
+                            checked={groupSelected}
+                            ref={el => { if (el) el.indeterminate = groupPartial; }}
+                            onChange={() => toggleSelectMany(group.ids)}
+                          />
+                        </td>
                         <td className="px-4 py-3 text-white font-medium">
                           {group.parent_title}
                           <span className="text-slate-500 text-xs ml-2">{group.episodes.length} ep</span>
@@ -333,7 +493,7 @@ export default function DeletionSuggestions() {
                         <td className="px-4 py-3 text-slate-300">{fmtBytes(group.total_size)}</td>
                         <td className="px-4 py-3 text-slate-300">{group.total_watch_count}</td>
                         <td className="px-4 py-3 text-slate-400">{fmtDate(group.last_watched_at)}</td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center gap-2 justify-end">
                             {confirmDelete === key ? (
                               <div className="flex gap-1">
@@ -354,7 +514,21 @@ export default function DeletionSuggestions() {
                     const key = String(item.id);
                     return (
                       <Fragment key={item.id}>
-                      <tr className="hover:bg-white/5 transition-colors">
+                      <tr
+                        className={`hover:bg-white/5 transition-colors cursor-pointer ${selected.has(item.id) ? "bg-brand/5" : ""}`}
+                        onClick={e => {
+                          if (isInteractiveTarget(e.target)) return;
+                          toggleSelect(item.id);
+                        }}
+                      >
+                        <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            className="accent-purple-500"
+                            checked={selected.has(item.id)}
+                            onChange={() => toggleSelect(item.id)}
+                          />
+                        </td>
                         <td className="px-4 py-3 text-white font-medium">
                           {item.parent_title && <span className="text-slate-500 text-xs block">{item.parent_title}</span>}
                           {item.title}
@@ -365,7 +539,7 @@ export default function DeletionSuggestions() {
                         <td className="px-4 py-3 text-slate-300">{fmtBytes(item.file_size)}</td>
                         <td className="px-4 py-3 text-slate-300">{item.watch_count}</td>
                         <td className="px-4 py-3 text-slate-400">{fmtDate(item.last_watched_at)}</td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center gap-2 justify-end">
                             <button
                               onClick={() => explain(item)}
@@ -395,7 +569,7 @@ export default function DeletionSuggestions() {
                       </tr>
                       {(item.llm_rationale || explainMsg[item.id] || explainBusy === item.id || streamText[item.id]) && (
                         <tr className="bg-black/10">
-                          <td colSpan={7} className="px-4 pb-3 pt-1">
+                          <td colSpan={8} className="px-4 pb-3 pt-1">
                             <div className="flex items-start gap-2">
                               <Bot size={13} className="text-brand-light mt-0.5 shrink-0" />
                               <div className="min-w-0">

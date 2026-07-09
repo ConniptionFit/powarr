@@ -9,9 +9,10 @@ from typing import Optional
 from app.database import get_db, SessionLocal
 from app.models.failed_import import FailedImport
 from app.models.integration import Integration
-from app.schemas.failed_import import FailedImportOut, ImportStats
+from app.schemas.failed_import import FailedImportOut, ImportStats, AutoEligibleOut
 from app.services import import_matcher
 from app.services.import_matcher import scan_once, _get_client
+from app.services.auto_eligible import load_import_matching, list_auto_eligible_ids, auto_eligible_query
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -71,7 +72,29 @@ def import_stats(db: Session = Depends(get_db)):
         FailedImport.status == "auto_resolved",
         FailedImport.resolved_at >= week_ago,
     ).count()
-    return ImportStats(**counts, by_service=by_service, auto_resolved_7d=auto_7d)
+    cfg = load_import_matching(db)
+    auto_eligible_count = auto_eligible_query(db, cfg).count() if cfg.auto_resolve_enabled else 0
+    return ImportStats(
+        **counts, by_service=by_service, auto_resolved_7d=auto_7d,
+        auto_eligible_count=auto_eligible_count,
+    )
+
+
+@router.get("/auto-eligible", response_model=AutoEligibleOut)
+def auto_eligible(db: Session = Depends(get_db)):
+    """IDs eligible for the Process N Items button (v0.28.0).
+
+    Server-backed so the count and the subsequent batch-accept agree on
+    auto_resolve_enabled + high_confidence_threshold + matched_id.
+    """
+    cfg = load_import_matching(db)
+    ids = list_auto_eligible_ids(db, cfg) if cfg.auto_resolve_enabled else []
+    return AutoEligibleOut(
+        enabled=cfg.auto_resolve_enabled,
+        threshold=cfg.high_confidence_threshold,
+        count=len(ids),
+        ids=ids,
+    )
 
 
 @router.get("/events")
@@ -198,23 +221,73 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
 
 @router.post("/batch")
 async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db)):
-    """Accept or reject several suggestions at once: {"ids": [...], "action": "accept"|"reject"}."""
+    """Accept / reject / confirm_orphan several suggestions at once.
+
+    Body: {"ids": [...], "action": "accept"|"reject"|"confirm_orphan"}.
+    Accept runs in the background (v0.28.0) so large batches don't 504 at the
+    reverse proxy — returns {async: true, task_id, total} immediately; progress
+    lands in the Active Processes tray via the tasks SSE bus. Reject and
+    confirm_orphan stay synchronous (cheap DB writes).
+    """
+    from app.services import tasks
     ids = payload.get("ids") or []
     action = payload.get("action")
     if action not in ("accept", "reject", "confirm_orphan") or not ids:
         raise HTTPException(status_code=400, detail="Body must be {ids: [...], action: accept|reject|confirm_orphan}")
+    if action == "accept":
+        task_id = tasks.create_task("import_batch", f"Importing {len(ids)} item(s)", total=len(ids))
+        tasks.spawn_background(_batch_accept_bg(list(ids), task_id))
+        return {"async": True, "task_id": task_id, "total": len(ids), "results": []}
     results = []
     for item_id in ids:
         try:
-            if action == "accept":
-                results.append(await _accept(item_id, db))
-            elif action == "confirm_orphan":
+            if action == "confirm_orphan":
                 results.append(_confirm_orphan(item_id, db))
             else:
                 results.append(_reject(item_id, db))
         except HTTPException as e:
             results.append({"id": item_id, "error": e.detail})
-    return {"results": results}
+    return {"async": False, "results": results}
+
+
+async def _batch_accept_bg(ids: list[int], task_id: str) -> None:
+    """Background accept loop — own SessionLocal per item so a long batch
+    doesn't hold one transaction open across many *arr round-trips."""
+    from app.services import tasks
+    ok, failed = 0, 0
+    try:
+        for i, item_id in enumerate(ids, 1):
+            db = SessionLocal()
+            try:
+                result = await _accept(item_id, db)
+                if result.get("ok"):
+                    ok += 1
+                else:
+                    failed += 1
+                tasks.update_task(
+                    task_id, current=i,
+                    message=f"{ok} ok, {failed} failed — {result.get('message') or ''}".strip(" —"),
+                )
+            except HTTPException as e:
+                failed += 1
+                tasks.update_task(task_id, current=i, message=f"{ok} ok, {failed} failed — {e.detail}")
+            except Exception as e:
+                failed += 1
+                tasks.update_task(task_id, current=i, message=f"{ok} ok, {failed} failed — {e}")
+            finally:
+                db.close()
+        status = "done" if failed == 0 else ("failed" if ok == 0 else "done")
+        tasks.finish_task(task_id, status, f"{ok} imported, {failed} failed")
+        import_matcher.publish({
+            "type": "import_batch",
+            "ok": ok, "failed": failed, "total": len(ids), "task_id": task_id,
+        })
+    except Exception as e:
+        tasks.finish_task(task_id, "failed", str(e))
+        import_matcher.publish({
+            "type": "import_batch",
+            "ok": ok, "failed": failed, "total": len(ids), "task_id": task_id, "error": str(e),
+        })
 
 
 @router.get("/{item_id}/files")

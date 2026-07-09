@@ -294,6 +294,14 @@ export interface ImportStats {
   orphaned: number;
   by_service: Record<string, number>;
   auto_resolved_7d: number;
+  auto_eligible_count: number;
+}
+
+export interface AutoEligible {
+  enabled: boolean;
+  threshold: number;
+  count: number;
+  ids: number[];
 }
 
 export interface ImportFileDetail {
@@ -311,6 +319,7 @@ export const importsApi = {
   list: (status?: string) =>
     req<FailedImport[]>(`/imports${status ? `?status=${status}` : ""}`),
   stats: () => req<ImportStats>("/imports/stats"),
+  autoEligible: () => req<AutoEligible>("/imports/auto-eligible"),
   scan: () => req<Record<string, unknown>>("/imports/scan", { method: "POST" }),
   accept: (id: number) =>
     req<{ id: number; status: string; ok: boolean; message: string }>(`/imports/${id}/accept`, { method: "POST" }),
@@ -318,7 +327,7 @@ export const importsApi = {
     req<{ id: number; status: string; download_client?: string[] }>(
       `/imports/${id}/reject?remove_download=${removeDownload}`, { method: "POST" }),
   batch: (ids: number[], action: "accept" | "reject" | "confirm_orphan") =>
-    req<{ results: Array<Record<string, unknown>> }>("/imports/batch", {
+    req<{ async?: boolean; task_id?: string; total?: number; results: Array<Record<string, unknown>> }>("/imports/batch", {
       method: "POST", body: JSON.stringify({ ids, action }),
     }),
   confirmOrphan: (id: number) =>
@@ -353,7 +362,7 @@ export const importsApi = {
 // --- Active processes (tracked background tasks) ---
 export interface TaskProgress {
   id: string;
-  kind: "llm_run" | "scan" | "plex_sync" | "deletion";
+  kind: "llm_run" | "scan" | "plex_sync" | "deletion" | "import_batch";
   label: string;
   status: "running" | "done" | "failed";
   current: number | null;
