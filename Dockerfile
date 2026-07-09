@@ -41,4 +41,8 @@ RUN useradd --create-home --uid 7979 --shell /usr/sbin/nologin powarr \
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:7979/api/v1/system/health', timeout=4).status == 200 else 1)"
 
+# Run as non-root user (SEC-05, v0.35.1). Requires host /config volume chown:
+# `docker exec powarr chown -R 7979:7979 /config` (one-time after first run with root)
+USER powarr
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7979"]

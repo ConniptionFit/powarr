@@ -48,8 +48,8 @@ interface ColDef {
 
 const COLUMNS: ColDef[] = [
   { key: "source", label: "Source", width: 90, sortField: "source_app" },
-  { key: "release", label: "Release", width: 340, sortField: "raw_title" },
-  { key: "matched", label: "Matched To", width: 240, sortField: "matched_title" },
+  { key: "release", label: "Downloaded Release", width: 340, sortField: "raw_title" },
+  { key: "matched", label: "Library Match", width: 240, sortField: "matched_title" },
   { key: "match_pct", label: "Match", width: 90, sortField: "heuristic_confidence" },
   { key: "match_notes", label: "Match Notes", width: 260, sortField: "match_rationale" },
   { key: "llm_pct", label: "LLM", width: 90, sortField: "llm_confidence" },

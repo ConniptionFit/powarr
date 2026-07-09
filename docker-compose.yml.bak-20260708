@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  powarr:
+    build: .
+    container_name: powarr
+    ports:
+      - "7979:7979"
+    volumes:
+      - /mnt/ServerFiles/Docker/powarr:/config
+    restart: unless-stopped
+    environment:
+      - POWARR_DATA_DIR=/config
+      - POWARR_DB_URL=postgresql://powarr:precious9rep.building@postgres:5432/powarr
+    networks:
+      - default
+      - postgres_net  # the network your existing postgres container is on
+
+networks:
+  postgres_net:
+    external: true
+    name: postgres_net  # replace with your actual postgres network name
