@@ -267,6 +267,9 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
     if not file_names:
         return {"matches": [], "message": "No files found in this download"}
 
+    folder = import_matcher.extract_output_path(raw_metadata=item.raw_metadata,
+                                                messages=item.message) or ""
+    folder_name = folder.rstrip("/").split("/")[-1] if folder else ""
     matches = await llm_assist.review_pack_files(
         host=ollama_cfg.host, model=ollama_cfg.model_for("match"),
         release_title=item.raw_title, candidate_title=item.matched_title,
@@ -276,6 +279,8 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
         verbosity=ollama_cfg.verbosity,
         model_size=ollama_cfg.model_size,
         keep_alive_minutes=ollama_cfg.keep_alive_minutes,
+        folder_name=folder_name,
+        **llm_assist.prompt_kwargs(ollama_cfg),
         **llm_assist.inference_kwargs(ollama_cfg),
     )
 

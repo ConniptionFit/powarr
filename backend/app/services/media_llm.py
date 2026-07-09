@@ -53,6 +53,7 @@ async def generate_and_store(item: MediaItem, ollama: OllamaSettings, db) -> str
         ollama.host, ollama.model_for("explain"), item_summary(item), ollama.api_style,
         template=ollama.explain_prompt, verbosity=ollama.verbosity,
         model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes,
+        **llm_assist.prompt_kwargs(ollama),
         **llm_assist.inference_kwargs(ollama))
     if rationale:
         item.llm_rationale = rationale

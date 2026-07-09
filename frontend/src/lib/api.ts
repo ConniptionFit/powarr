@@ -118,6 +118,11 @@ export interface ScoringWeights {
   max_size_gb_reference: number;
   max_age_days_reference: number;
   max_release_age_years_reference: number;
+  watch_half_life_days?: number;
+}
+
+export interface ScoringProfiles {
+  by_library: Record<string, Partial<ScoringWeights>>;
 }
 
 export interface ImportMatchingSettings {
@@ -158,6 +163,7 @@ export interface OllamaSettings {
   batch_delay_ms: number; // pause between sequential batch calls; 0 = none
   match_prompt: string;
   explain_prompt: string;
+  pack_prompt?: string;
   // Per-task control (v0.27.0) — task models default to `model` when blank
   match_enabled: boolean;
   explain_enabled: boolean;
@@ -170,6 +176,9 @@ export interface OllamaSettings {
   temperature?: number;
   max_tokens?: number;
   timeout_seconds?: number;
+  // Prompt scaffold (v0.30.0)
+  forbid_thinking?: boolean;
+  compact_det_summary?: boolean;
 }
 
 export interface LlmStats {
@@ -238,6 +247,9 @@ export const settingsApi = {
   getScoring: () => req<ScoringWeights>("/settings/scoring"),
   updateScoring: (w: ScoringWeights) =>
     req<ScoringWeights>("/settings/scoring", { method: "PUT", body: JSON.stringify(w) }),
+  getScoringProfiles: () => req<ScoringProfiles>("/settings/scoring-profiles"),
+  updateScoringProfiles: (p: ScoringProfiles) =>
+    req<ScoringProfiles>("/settings/scoring-profiles", { method: "PUT", body: JSON.stringify(p) }),
   getImportMatching: () => req<ImportMatchingSettings>("/settings/import-matching"),
   updateImportMatching: (s: ImportMatchingSettings) =>
     req<ImportMatchingSettings>("/settings/import-matching", { method: "PUT", body: JSON.stringify(s) }),
@@ -262,13 +274,13 @@ export const settingsApi = {
   updateNotifications: (s: NotificationSettings) =>
     req<NotificationSettings>("/settings/notifications", { method: "PUT", body: JSON.stringify(s) }),
   testNotification: () => req<{ ok: boolean; message: string }>("/settings/notifications/test", { method: "POST" }),
-  refinePrompt: (draft: string, task: "match" | "explain") =>
+  refinePrompt: (draft: string, task: "match" | "explain" | "pack") =>
     req<{ refined: string }>("/settings/ollama/refine-prompt", {
       method: "POST", body: JSON.stringify({ draft, task }),
     }),
   ollamaContextLength: () =>
     req<{ context_length: number | null; model: string | null }>("/settings/ollama/context-length"),
-  ollamaPreview: (task: "match" | "explain", useRealData: boolean) =>
+  ollamaPreview: (task: "match" | "explain" | "pack", useRealData: boolean) =>
     req<{ output: string | null; latency_ms: number; json_valid: boolean | null; message: string }>(
       "/settings/ollama/preview", { method: "POST", body: JSON.stringify({ task, use_real_data: useRealData }) }),
   llmStats: () => req<LlmStats>("/settings/llm/stats"),

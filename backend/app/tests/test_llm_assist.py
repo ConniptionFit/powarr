@@ -30,7 +30,8 @@ class TestTruncation(unittest.TestCase):
         # Even with every field pathological, the prompt stays bounded by the caps
         # plus the static scaffold text (reply-format instruction + the fixed
         # judging-guidance block added in v0.20.0).
-        budget = CAP_RELEASE + CAP_CANDIDATE + CAP_CONTEXT + CAP_DET_SUMMARY + 1000
+        # Scaffold grew in v0.30.0 (junk-strip / anime / agree-default / no-think).
+        budget = CAP_RELEASE + CAP_CANDIDATE + CAP_CONTEXT + CAP_DET_SUMMARY + 1600
         self.assertLess(len(prompt), budget)
         # No single substituted run may exceed the largest per-field cap.
         self.assertNotIn("R" * (CAP_DET_SUMMARY + 1), prompt)
@@ -128,21 +129,53 @@ class TestPromptShapes(unittest.TestCase):
         p = build_review_prompt("", "r", "c", "x", "d", verbosity="minimal")
         self.assertIn('{"agrees": true|false}', p)
         self.assertNotIn("confidence_adjustment", p)
-        self.assertNotIn("reason", p)
+        # Reply schema is verdict-only; "reason" may still appear in judging guidance.
+        self.assertTrue(p.rstrip().endswith('{"agrees": true|false}'))
 
     def test_classified_json_asks_shift_not_float(self):
         p = build_review_prompt("", "r", "c", "x", "d", confidence_style="classified")
         self.assertIn("confidence_shift", p)
         self.assertNotIn("confidence_adjustment", p)
 
-    def test_simple_format_has_no_json_ask(self):
+    def test_simple_format_asks_pipe_line(self):
         p = build_review_prompt("", "r", "c", "x", "d", reply_format="simple")
-        self.assertNotIn("JSON", p)
         self.assertIn("agree or disagree", p)
+        self.assertIn("Reply with ONLY one line", p)
 
     def test_explain_minimal_asks_one_word(self):
         p = build_explain_prompt("", "item", verbosity="minimal")
         self.assertIn("KEEP or DELETE", p)
+
+    def test_review_defaults_to_agree_and_strips_junk(self):
+        p = build_review_prompt("", "r", "c", "x", "d")
+        self.assertIn("Default to AGREE", p)
+        self.assertIn("Strip from the release name", p)
+        self.assertIn("Anime & foreign titles", p)
+        self.assertIn("Do NOT write chain-of-thought", p)
+        self.assertIn("bullet reasons", p)
+
+    def test_forbid_thinking_can_be_disabled(self):
+        p = build_review_prompt("", "r", "c", "x", "d", forbid_thinking=False)
+        self.assertNotIn("Do NOT write chain-of-thought", p)
+
+    def test_pack_prompt_uses_folder_and_strip_guidance(self):
+        p = build_pack_prompt("", "rel", "cand", "a.mkv", "ctx", folder_name="Show.S01-GRP")
+        self.assertIn("Download folder name: Show.S01-GRP", p)
+        self.assertIn("Strip quality/codec/uploader", p)
+        self.assertIn("folder name, AND each filename", p)
+
+
+class TestCompactDetSummary(unittest.TestCase):
+    def test_includes_heuristic_and_tokens(self):
+        from app.services.llm_assist import compact_det_summary
+        out = compact_det_summary(
+            "episode title similarity 0.9; season+episode numbers match; capped title-only",
+            0.88, pack_label="S02")
+        self.assertIn("heuristic=0.88", out)
+        self.assertIn("pack=S02", out)
+        self.assertIn("title", out)
+        self.assertIn("numeric", out)
+        self.assertIn("capped", out)
 
 
 def _stubbed_review(reply, **kwargs):

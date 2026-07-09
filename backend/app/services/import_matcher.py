@@ -664,14 +664,20 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
                 f"Download type: season pack ({pack_label}). Accepting it imports every "
                 f"mappable file from the pack, not a single episode.")
         llm_context = " | ".join(llm_context_parts)
+        if getattr(ollama, "compact_det_summary", True):
+            det_summary = llm_assist.compact_det_summary(
+                match_rationale, heuristic_confidence, pack_label=pack_label)
+        else:
+            det_summary = f"{match_rationale} (heuristic confidence {heuristic_confidence})"
         llm = await llm_assist.review_match(
             ollama.host, ollama.model_for("match"), raw_title, matched_title,
-            det_summary=f"{match_rationale} (heuristic confidence {heuristic_confidence})",
+            det_summary=det_summary,
             context=llm_context,
             api_style=ollama.api_style, template=ollama.match_prompt,
             verbosity=ollama.verbosity, model_size=ollama.model_size,
             keep_alive_minutes=ollama.keep_alive_minutes,
-            reply_format=ollama.reply_format, confidence_style=ollama.confidence_style,
+            reply_format="markdown", confidence_style=ollama.confidence_style,
+            **llm_assist.prompt_kwargs(ollama),
             **llm_assist.inference_kwargs(ollama))
         if llm:
             llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
@@ -1383,22 +1389,24 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 continue
             if row.heuristic_confidence is None:
                 row.heuristic_confidence = row.confidence
-            det_summary = (row.match_rationale or "series/title heuristics only") + \
-                f" (heuristic confidence {row.heuristic_confidence})"
+            if getattr(ollama, "compact_det_summary", True):
+                det_summary = llm_assist.compact_det_summary(
+                    row.match_rationale or "series/title heuristics only",
+                    row.heuristic_confidence,
+                    pack_label=row.pack if getattr(row, "pack", None) else None)
+            else:
+                det_summary = (row.match_rationale or "series/title heuristics only") + \
+                    f" (heuristic confidence {row.heuristic_confidence})"
             llm = await llm_assist.review_match(
                 ollama.host, ollama.model_for("match"), row.raw_title, row.matched_title,
                 det_summary=det_summary,
                 context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
                 api_style=ollama.api_style, template=ollama.match_prompt,
-                # An on-demand run is an explicit user click ("Run LLM on Selected" /
-                # per-row Bot icon / "Run LLM on Unscored Imports") — always ask for
-                # the most in-depth reasoning available, regardless of the configured
-                # default verbosity (which still governs the passive background scan
-                # in _match_record). model_size's token cap still applies, so this is
-                # safe even on small models.
+                # On-demand runs always ask for verdict + bullets (verbose tier).
                 verbosity="verbose", model_size=ollama.model_size,
                 keep_alive_minutes=ollama.keep_alive_minutes,
-                reply_format=ollama.reply_format, confidence_style=ollama.confidence_style,
+                reply_format="markdown", confidence_style=ollama.confidence_style,
+                **llm_assist.prompt_kwargs(ollama),
                 **llm_assist.inference_kwargs(ollama))
             if not llm:
                 skipped += 1

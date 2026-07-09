@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.29.0", docs_url="/api/docs")
+app = FastAPI(title="Powarr", version="0.30.0", docs_url="/api/docs")
 
 # Paths that stay reachable without a session: the auth flow itself, the
 # health endpoint (Docker healthcheck probes from inside the container), and
@@ -98,13 +98,14 @@ def _apply_llm_breaker_config():
 def _seed_settings():
     from app.database import SessionLocal
     from app.models.app_setting import AppSetting
-    from app.schemas.settings import (ScoringWeights, ImportMatchingSettings, OllamaSettings,
-                                      CleanupSettings, SyncSettings)
+    from app.schemas.settings import (ScoringWeights, ScoringProfiles, ImportMatchingSettings,
+                                      OllamaSettings, CleanupSettings, SyncSettings,
+                                      NotificationSettings)
     import json
 
-    from app.schemas.settings import NotificationSettings
     defaults = {
         "scoring_weights": ScoringWeights,
+        "scoring_profiles": ScoringProfiles,
         "import_matching": ImportMatchingSettings,
         "ollama": OllamaSettings,
         "cleanup": CleanupSettings,

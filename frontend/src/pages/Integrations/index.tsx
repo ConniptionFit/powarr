@@ -214,19 +214,19 @@ const OTHER = "__other__";
 // pattern). Selecting one fills the model and applies the profile in one click —
 // the model still has to be pulled on the Ollama host (warned if absent).
 const MODEL_PRESETS: Array<{ label: string; model: string;
-  profile: { model_size: string; verbosity: string; reply_format: string; confidence_style: string } }> = [
+  profile: { model_size: string; verbosity: string; confidence_style: string } }> = [
   { label: "qwen2.5:3b — solid small all-rounder", model: "qwen2.5:3b",
-    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
+    profile: { model_size: "small", verbosity: "minimal", confidence_style: "classified" } },
   { label: "llama3.2:3b — good instruction-following", model: "llama3.2:3b",
-    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
+    profile: { model_size: "small", verbosity: "minimal", confidence_style: "classified" } },
   { label: "llama3.2:1b — tiniest workable", model: "llama3.2:1b",
-    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
+    profile: { model_size: "small", verbosity: "minimal", confidence_style: "classified" } },
   { label: "phi3.5 — small but chatty", model: "phi3.5",
-    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
+    profile: { model_size: "small", verbosity: "minimal", confidence_style: "classified" } },
   { label: "qwen2.5:7b — reliable JSON at 7B", model: "qwen2.5:7b",
-    profile: { model_size: "medium", verbosity: "brief", reply_format: "json", confidence_style: "numeric" } },
+    profile: { model_size: "medium", verbosity: "brief", confidence_style: "numeric" } },
   { label: "mistral:7b — reliable JSON at 7B", model: "mistral",
-    profile: { model_size: "medium", verbosity: "brief", reply_format: "json", confidence_style: "numeric" } },
+    profile: { model_size: "medium", verbosity: "brief", confidence_style: "numeric" } },
 ];
 
 function OllamaCard() {
@@ -261,11 +261,12 @@ function OllamaCard() {
   // managed in Settings → LLM Assist) survive connection-side saves.
   const buildPayload = () => ({
     verbosity: "brief", model_size: "medium", keep_alive_minutes: 10,
-    reply_format: "json", confidence_style: "numeric", batch_delay_ms: 0,
-    match_prompt: "", explain_prompt: "",
+    reply_format: "markdown", confidence_style: "numeric", batch_delay_ms: 0,
+    match_prompt: "", explain_prompt: "", pack_prompt: "",
     match_enabled: true, explain_enabled: true, match_model: "", explain_model: "",
     breaker_threshold: 5, breaker_cooldown_minutes: 10,
     temperature: 0, max_tokens: 0, timeout_seconds: 0,
+    forbid_thinking: true, compact_det_summary: true,
     ...(cfg ?? {}),
     ...(presetProfile ?? {}), // a chosen model preset overrides the profile fields
     enabled, host, model, api_style: apiStyle,
@@ -289,7 +290,7 @@ function OllamaCard() {
       const r = await settingsApi.ollamaPreview("match", false);
       setBenchResult(`${(r.latency_ms / 1000).toFixed(1)}s — ${r.json_valid
         ? "verdict parsed ✓ (model handles structured matching)"
-        : "verdict did NOT parse ✗ — model may be too small; try Simple replies / Minimal verbosity"}`);
+        : "verdict did NOT parse ✗ — model may be too small; try Minimal verbosity or Classified confidence"}`);
     } catch (e: unknown) {
       setBenchResult(e instanceof Error ? e.message : String(e));
     } finally { setBenching(false); }
@@ -406,7 +407,7 @@ function OllamaCard() {
             onChange={e => { if (e.target.value !== "") applyPreset(Number(e.target.value)); }}
             className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white"
           >
-            <option value="">Pick a preset to fill model + tuned profile (size, verbosity, reply format)…</option>
+            <option value="">Pick a preset to fill model + tuned profile (size, verbosity, confidence style)…</option>
             {MODEL_PRESETS.map((p, i) => <option key={p.model} value={i}>{p.label}</option>)}
           </select>
           {presetProfile && !presetWarning && (

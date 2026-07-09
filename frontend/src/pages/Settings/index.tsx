@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup, Activity, RotateCcw } from "lucide-react";
-import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ImportMatchingSettings,
-         type CleanupSettings, type SyncSettings, type NotificationSettings, type OllamaSettings,
-         type LlmScheduleSettings, type BackupSettings, type BackupFile } from "../../lib/api";
+import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ScoringProfiles,
+         type ImportMatchingSettings, type CleanupSettings, type SyncSettings, type NotificationSettings,
+         type OllamaSettings, type LlmScheduleSettings, type BackupSettings, type BackupFile } from "../../lib/api";
 
 function WeightRow({ label, field, value, onChange, description }: {
   label: string;
@@ -56,7 +56,14 @@ const REFS: { label: string; field: keyof ScoringWeights; description: string; u
   { label: "Max Size Reference (GB)", field: "max_size_gb_reference", description: "File size considered '100%' for scoring", unit: "GB" },
   { label: "Max Age Reference (days)", field: "max_age_days_reference", description: "Days old considered '100%' for scoring", unit: "days" },
   { label: "Max Release Age Reference (years)", field: "max_release_age_years_reference", description: "Years since release considered '100%' for scoring", unit: "years" },
+  { label: "Watch Half-Life (days)", field: "watch_half_life_days", description: "Days after a watch until the watch-factor reaches ~63% of max (smooth decay; series-level watches count too)", unit: "days" },
   { label: "Min Score Threshold", field: "min_score_threshold", description: "Items below this score are hidden from Cleanup by default", unit: "" },
+];
+
+const PROFILE_OVERLAY_FIELDS: { label: string; field: keyof ScoringWeights; description: string }[] = [
+  ...FIELDS,
+  { label: "Watch Half-Life (days)", field: "watch_half_life_days", description: "Override decay half-life for this library" },
+  { label: "Min Score Threshold", field: "min_score_threshold", description: "Override Cleanup visibility floor for this library" },
 ];
 
 function ImportMatchingSection() {
@@ -562,9 +569,11 @@ function BackupSection() {
   );
 }
 
+type PromptTask = "match" | "explain" | "pack";
+
 // Preset prompt suggestions per task. Placeholders are substituted by the backend;
 // the JSON reply-format instruction is appended automatically, so templates stay clean.
-const PROMPT_PRESETS: Record<"match" | "explain", { label: string; text: string }[]> = {
+const PROMPT_PRESETS: Record<PromptTask, { label: string; text: string }[]> = {
   match: [
     {
       label: "Strict matcher (default style)",
@@ -572,11 +581,25 @@ const PROMPT_PRESETS: Record<"match" | "explain", { label: string; text: string 
     },
     {
       label: "Lenient — alternate titles & translations",
-      text: "You match download release names to media library entries. Consider alternate titles, translations, romanizations, and common abbreviations as valid matches.\nRelease name: {release}\nCandidate library entry: {candidate}\nContext: {context}",
+      text: "You match download release names to media library entries. Consider alternate titles, translations, romanizations, and common abbreviations as valid matches. Ignore quality/uploader tags.\nRelease name: {release}\nCandidate library entry: {candidate}\nContext: {context}",
+    },
+    {
+      label: "Anime / absolute numbering aware",
+      text: "You match download release names to media library entries. For anime, absolute episode numbers and romaji/native/English titles of the same work count as matches. Strip quality and release-group tags before judging.\nRelease name: {release}\nCandidate library entry: {candidate}\nContext: {context}",
     },
     {
       label: "Conservative — punish year/edition mismatch",
       text: "You match download release names to media library entries. Be conservative: lower your confidence sharply when the year, edition, or cut (e.g. Director's Cut, remaster) differs between release and candidate.\nRelease name: {release}\nCandidate library entry: {candidate}\nContext: {context}",
+    },
+  ],
+  pack: [
+    {
+      label: "Pack file mapper (default style)",
+      text: "You map each file in a season/series pack to its episode.\nPack release name: {release}\nSeries: {candidate}\nFiles: {files}\nContext: {context}",
+    },
+    {
+      label: "Anime pack — absolute + translations",
+      text: "You map each file in an anime pack to its episode. Prefer absolute numbers when present; accept romaji/native/English titles. Use pack name, folder name, and each filename together. Strip quality/uploader tags.\nPack release name: {release}\nSeries: {candidate}\nFiles: {files}\nContext: {context}",
     },
   ],
   explain: [
@@ -597,14 +620,25 @@ const PROMPT_PRESETS: Record<"match" | "explain", { label: string; text: string 
 
 // Worst-case injected-data token overhead per task, from the CAP_* truncation
 // limits in llm_assist.py (chars/4) plus the fixed reply-instruction scaffold.
-const INJECTED_TOKENS = { match: Math.ceil((300 + 300 + 400 + 600) / 4) + 60, explain: Math.ceil(500 / 4) + 30 };
-const DEFAULT_TEMPLATE_TOKENS = { match: 40, explain: 35 }; // built-in defaults, when the textarea is empty
+const INJECTED_TOKENS: Record<PromptTask, number> = {
+  match: Math.ceil((300 + 300 + 400 + 600) / 4) + 80,
+  pack: Math.ceil((300 + 300 + 800 + 400) / 4) + 100,
+  explain: Math.ceil(500 / 4) + 40,
+};
+const DEFAULT_TEMPLATE_TOKENS: Record<PromptTask, number> = { match: 40, pack: 45, explain: 35 };
 
 // Placeholders each prompt task's scaffold substitutes — kept here so the
 // clickable insert buttons and the static help text can't drift apart.
-const PROMPT_PLACEHOLDERS: Record<"match" | "explain", string[]> = {
+const PROMPT_PLACEHOLDERS: Record<PromptTask, string[]> = {
   match: ["{release}", "{candidate}", "{context}"],
+  pack: ["{release}", "{candidate}", "{files}", "{context}"],
   explain: ["{item}"],
+};
+
+const PROMPT_TASK_LABEL: Record<PromptTask, string> = {
+  match: "Import Matching",
+  pack: "Pack Files",
+  explain: "Deletion Rationale",
 };
 
 function LLMAssistSection() {
@@ -614,7 +648,7 @@ function LLMAssistSection() {
   // In-memory call stats + breaker state — cheap endpoint, poll while the page is open.
   const { data: stats } = useQuery({ queryKey: ["llm-stats"], queryFn: settingsApi.llmStats, refetchInterval: 15000 });
   const [cfg, setCfg] = useState<OllamaSettings | null>(null);
-  const [task, setTask] = useState<"match" | "explain">("match");
+  const [task, setTask] = useState<PromptTask>("match");
   const [msg, setMsg] = useState<string | null>(null);
   const [refining, setRefining] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -626,8 +660,9 @@ function LLMAssistSection() {
 
   if (!cfg) return null;
 
-  const promptField = task === "match" ? "match_prompt" : "explain_prompt";
-  const promptValue = cfg[promptField];
+  const promptField = (task === "match" ? "match_prompt" : task === "pack" ? "pack_prompt" : "explain_prompt") as
+    "match_prompt" | "pack_prompt" | "explain_prompt";
+  const promptValue = (cfg[promptField] as string) || "";
   const setPrompt = (text: string) => setCfg(c => (c ? { ...c, [promptField]: text } : c));
 
   // Inserts at the current cursor position (or the end, if the textarea never
@@ -696,9 +731,8 @@ function LLMAssistSection() {
     finally { setTesting(false); }
   };
 
-  // Live template-size estimate (item 12) vs the model's detected context window (item 9).
-  const promptTokens = Math.ceil((cfg?.[task === "match" ? "match_prompt" : "explain_prompt"] ?? "").length / 4)
-    || DEFAULT_TEMPLATE_TOKENS[task];
+  // Live template-size estimate vs the model's detected context window.
+  const promptTokens = Math.ceil(promptValue.length / 4) || DEFAULT_TEMPLATE_TOKENS[task];
   const estTokens = promptTokens + INJECTED_TOKENS[task];
   const ctxLimit = ctx?.context_length ?? null;
   const nearCeiling = ctxLimit !== null && estTokens > ctxLimit * 0.8;
@@ -815,7 +849,7 @@ function LLMAssistSection() {
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>
           <p className="text-white text-sm font-medium">Explanation Verbosity</p>
-          <p className="text-slate-500 text-xs mt-0.5">Minimal = bare verdict only (agree/disagree, KEEP/DELETE) — best for tiny models; Brief = one-liners; Verbose = detailed multi-sentence explanations</p>
+          <p className="text-slate-500 text-xs mt-0.5">Minimal = bare verdict only; Brief/Verbose = one-line verdict plus Markdown bullet reasons (no chain-of-thought)</p>
         </div>
         <select
           value={cfg.verbosity}
@@ -831,14 +865,14 @@ function LLMAssistSection() {
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>
           <p className="text-white text-sm font-medium">Model Size Profile</p>
-          <p className="text-slate-500 text-xs mt-0.5">Scales reply length and timeouts to the model. Selecting Small also pre-fills Minimal verbosity and Simple replies (adjust after if you like)</p>
+          <p className="text-slate-500 text-xs mt-0.5">Scales reply length and timeouts to the model. Selecting Small also pre-fills Minimal verbosity</p>
         </div>
         <select
           value={cfg.model_size}
           onChange={e => {
             const size = e.target.value;
             setCfg(c => c ? (size === "small"
-              ? { ...c, model_size: size, verbosity: "minimal", reply_format: "simple" }
+              ? { ...c, model_size: size, verbosity: "minimal" }
               : { ...c, model_size: size }) : c);
           }}
           className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"
@@ -849,21 +883,29 @@ function LLMAssistSection() {
         </select>
       </div>
 
-      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
         <div>
-          <p className="text-white text-sm font-medium">Reply Format</p>
-          <p className="text-slate-500 text-xs mt-0.5">JSON = structured replies (default). Simple = one pipe-separated line, for models that can't produce reliable JSON. Markdown = same structure as JSON, but the model formats its reason with bold/bullets for a richer display. Either way, the other formats are still accepted as a fallback</p>
+          <p className="text-white text-sm font-medium">Forbid Thinking / Chain-of-Thought</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Instruct the model to answer immediately with no &lt;think&gt; blocks or step-by-step reasoning (saves tokens). On by default; stripping still runs as a backstop.
+          </p>
         </div>
-        <select
-          value={cfg.reply_format}
-          onChange={e => setCfg(c => c ? { ...c, reply_format: e.target.value } : c)}
-          className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"
-        >
-          <option value="json">JSON</option>
-          <option value="simple">Simple text</option>
-          <option value="markdown">Markdown</option>
-        </select>
-      </div>
+        <input type="checkbox" className="accent-purple-500 ml-6"
+               checked={cfg.forbid_thinking !== false}
+               onChange={e => setCfg(c => c ? { ...c, forbid_thinking: e.target.checked } : c)} />
+      </label>
+
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Compact Scorer Summary</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Inject a short structured scorer line into match prompts instead of the full prose rationale — smaller context, same signal. On by default.
+          </p>
+        </div>
+        <input type="checkbox" className="accent-purple-500 ml-6"
+               checked={cfg.compact_det_summary !== false}
+               onChange={e => setCfg(c => c ? { ...c, compact_det_summary: e.target.checked } : c)} />
+      </label>
 
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>
@@ -950,14 +992,12 @@ function LLMAssistSection() {
             </p>
           </div>
           <div className="flex items-center rounded-lg overflow-hidden border border-purple-900/40">
-            <button onClick={() => setTask("match")}
-                    className={`px-3 py-1.5 text-sm transition-colors ${task === "match" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
-              Import Matching
-            </button>
-            <button onClick={() => setTask("explain")}
-                    className={`px-3 py-1.5 text-sm transition-colors ${task === "explain" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
-              Deletion Rationale
-            </button>
+            {(["match", "pack", "explain"] as PromptTask[]).map(t => (
+              <button key={t} onClick={() => setTask(t)}
+                      className={`px-3 py-1.5 text-sm transition-colors ${task === t ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
+                {PROMPT_TASK_LABEL[t]}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -1006,7 +1046,7 @@ function LLMAssistSection() {
           rows={5}
           value={promptValue}
           onChange={e => setPrompt(e.target.value)}
-          placeholder={`(using built-in default — type here or load a suggestion to customize the ${task === "match" ? "matching" : "rationale"} prompt)`}
+          placeholder={`(using built-in default — type here or load a suggestion to customize the ${PROMPT_TASK_LABEL[task].toLowerCase()} prompt)`}
           className="w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-xs font-mono text-white placeholder:text-slate-600"
         />
         <div className="flex items-center justify-between mt-1">
@@ -1532,6 +1572,139 @@ function NotificationsSection() {
   );
 }
 
+function ScoringProfilesSection() {
+  const qc = useQueryClient();
+  const { data: profiles } = useQuery({ queryKey: ["scoring-profiles"], queryFn: settingsApi.getScoringProfiles });
+  const { data: libraries = [] } = useQuery({ queryKey: ["libraries"], queryFn: mediaApi.libraries });
+  const [cfg, setCfg] = useState<ScoringProfiles | null>(null);
+  const [lib, setLib] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (profiles) setCfg(profiles);
+  }, [profiles]);
+
+  useEffect(() => {
+    if (!lib && libraries.length > 0) setLib(libraries[0]);
+  }, [libraries, lib]);
+
+  if (!cfg) return null;
+
+  const overlay = (lib && cfg.by_library[lib]) || {};
+
+  const setOverlayField = (field: keyof ScoringWeights, raw: string) => {
+    if (!lib) return;
+    setCfg(c => {
+      if (!c) return c;
+      const next = { ...c.by_library };
+      const cur = { ...(next[lib] || {}) };
+      if (raw.trim() === "") {
+        delete cur[field];
+      } else {
+        cur[field] = Number(raw);
+      }
+      if (Object.keys(cur).length === 0) delete next[lib];
+      else next[lib] = cur;
+      return { by_library: next };
+    });
+  };
+
+  const clearLibrary = () => {
+    if (!lib) return;
+    setCfg(c => {
+      if (!c) return c;
+      const next = { ...c.by_library };
+      delete next[lib];
+      return { by_library: next };
+    });
+  };
+
+  const save = async () => {
+    setMsg(null);
+    try {
+      await settingsApi.updateScoringProfiles(cfg);
+      qc.invalidateQueries({ queryKey: ["scoring-profiles"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center justify-between pt-5 pb-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Per-Library Scoring Profiles</h2>
+          <p className="text-slate-500 text-xs mt-1">
+            Cleanup only — partial overlays on the global weights above. Empty fields inherit the default. Saving rescores the library.
+          </p>
+        </div>
+        <button
+          onClick={save}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+        >
+          <Save size={13} />
+          {saved ? "Saved!" : "Save & Rescore"}
+        </button>
+      </div>
+      {msg && <p className="text-xs text-red-400 pb-2">{msg}</p>}
+
+      {libraries.length === 0 ? (
+        <p className="text-slate-500 text-xs pb-5">No libraries found — run a Plex sync first.</p>
+      ) : (
+        <>
+          <div className="py-3 border-b border-purple-900/20 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-white text-sm font-medium">Library</p>
+              <p className="text-slate-500 text-xs mt-0.5">
+                {Object.keys(cfg.by_library).length
+                  ? `${Object.keys(cfg.by_library).length} library overlay(s) configured`
+                  : "No overlays yet — all libraries use global weights"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 ml-6">
+              <select
+                value={lib}
+                onChange={e => setLib(e.target.value)}
+                className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white"
+              >
+                {libraries.map(l => (
+                  <option key={l} value={l}>{l}{cfg.by_library[l] ? " *" : ""}</option>
+                ))}
+              </select>
+              <button
+                onClick={clearLibrary}
+                disabled={!lib || !cfg.by_library[lib]}
+                className="px-3 py-1.5 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors disabled:opacity-40"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          {PROFILE_OVERLAY_FIELDS.map(f => (
+            <div key={f.field} className="py-3 border-b border-purple-900/20 last:border-0 flex items-center justify-between">
+              <div>
+                <p className="text-white text-sm font-medium">{f.label}</p>
+                <p className="text-slate-500 text-xs mt-0.5">{f.description}</p>
+              </div>
+              <input
+                type="number"
+                step={0.5}
+                placeholder="inherit"
+                value={overlay[f.field] ?? ""}
+                onChange={e => setOverlayField(f.field, e.target.value)}
+                className="w-24 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white text-right ml-6 placeholder:text-slate-600"
+              />
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { data, isLoading } = useQuery({ queryKey: ["scoring"], queryFn: settingsApi.getScoring });
   const [weights, setWeights] = useState<ScoringWeights | null>(null);
@@ -1585,7 +1758,7 @@ export default function SettingsPage() {
             <div className="flex items-center gap-2 ml-6">
               <input
                 type="number"
-                value={weights[f.field] as number}
+                value={(weights[f.field] as number) ?? ""}
                 onChange={e => handleChange(f.field, Number(e.target.value))}
                 className="w-24 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white text-right"
               />
@@ -1595,6 +1768,7 @@ export default function SettingsPage() {
         ))}
       </div>
 
+      <ScoringProfilesSection />
       <ImportMatchingSection />
       <LLMAssistSection />
       <LlmScheduleSection />

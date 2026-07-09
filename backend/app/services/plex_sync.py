@@ -3,12 +3,13 @@ and the background scheduler alike."""
 import json
 import logging
 from datetime import datetime
+from collections import defaultdict
 
 from app.models.app_setting import AppSetting
 from app.models.integration import Integration
 from app.models.media import MediaItem
-from app.schemas.settings import ScoringWeights, CleanupSettings
-from app.services.scorer import score_item
+from app.schemas.settings import ScoringWeights, ScoringProfiles, CleanupSettings
+from app.services.scorer import score_item, weights_for_library, load_scoring_profiles
 
 logger = logging.getLogger("powarr")
 
@@ -28,28 +29,62 @@ def _set_setting(db, key: str, value: str) -> None:
     row.value = value
 
 
+def _series_index_from_payload(items: list[dict], existing_by_key: dict) -> dict[str, dict]:
+    """Build parent_title → {watched, last} from the incoming sync payload plus
+    any already-stored rows (covers episodes not in this payload page)."""
+    idx: dict[str, dict] = defaultdict(lambda: {"watched": False, "last": None})
+
+    def _ingest(parent, watch_count, last_watched, media_type):
+        if not parent or media_type not in ("episode", "track"):
+            return
+        entry = idx[parent]
+        if (watch_count or 0) > 0 or last_watched:
+            entry["watched"] = True
+        if last_watched and (entry["last"] is None or last_watched > entry["last"]):
+            entry["last"] = last_watched
+
+    for m in existing_by_key.values():
+        _ingest(m.parent_title, m.watch_count, m.last_watched_at, m.media_type)
+    for d in items:
+        _ingest(d.get("parent_title"), d.get("watch_count"), d.get("last_watched_at"),
+                d.get("media_type"))
+    return idx
+
+
 def upsert_media_items(db, items: list[dict], weights: ScoringWeights,
+                       profiles: ScoringProfiles | None = None,
                        progress=None) -> int:
-    """Upsert Plex items by plex_rating_key + rescore. Loads every existing row's
-    key in ONE query into a dict instead of a SELECT per item — on a large library
-    that turns tens of thousands of round trips into one. progress(n) is called
-    (if given) every 50 items and at the end for the task-tracker countdown."""
+    """Upsert Plex items by plex_rating_key + rescore with series-aware watch
+    and per-library weight overlays (v0.30.0)."""
+    if profiles is None:
+        profiles = load_scoring_profiles(db)
     existing_by_key = {m.plex_rating_key: m for m in db.query(MediaItem).all()}
+    series_idx = _series_index_from_payload(items, existing_by_key)
     total = len(items)
     upserted = 0
     for item_data in items:
         key = item_data["plex_rating_key"]
         existing = existing_by_key.get(key)
+        parent = item_data.get("parent_title")
+        series = series_idx.get(parent or "") if parent else None
+        score_input = {
+            **item_data,
+            "series_watched": bool(series and series["watched"])
+                if item_data.get("media_type") in ("episode", "track") else False,
+            "series_last_watched_at": (series or {}).get("last")
+                if item_data.get("media_type") in ("episode", "track") else None,
+        }
+        eff = weights_for_library(weights, profiles, item_data.get("library_section"))
+        new_score = score_item(score_input, eff)
         if existing:
             for k, v in item_data.items():
                 setattr(existing, k, v)
-            existing.score = score_item(item_data, weights)
+            existing.score = new_score
         else:
             data = dict(item_data)
-            data["score"] = score_item(item_data, weights)
+            data["score"] = new_score
             new_item = MediaItem(**data)
             db.add(new_item)
-            # Guard against the same rating key appearing twice in one payload.
             existing_by_key[key] = new_item
         upserted += 1
         if progress and (upserted % 50 == 0 or upserted == total):
@@ -69,11 +104,12 @@ async def run_plex_sync(db) -> dict:
         from app.integrations.plex import PlexIntegration
         plex = PlexIntegration(row.url, row.api_key)
         weights = _get_setting(db, "scoring_weights", ScoringWeights)
+        profiles = load_scoring_profiles(db)
 
         items = await plex.fetch_media_items()
         tasks.update_task(task_id, total=len(items))
         upserted = upsert_media_items(
-            db, items, weights,
+            db, items, weights, profiles=profiles,
             progress=lambda n: tasks.update_task(task_id, current=n))
 
         _set_setting(db, "last_synced", datetime.utcnow().isoformat())
@@ -133,7 +169,6 @@ async def refresh_seerr_protection(db) -> int:
             if req["year"]:
                 q = q.filter(MediaItem.year.in_((req["year"] - 1, req["year"], req["year"] + 1)))
         else:
-            # TV request → protect all episodes of the show
             q = db.query(MediaItem).filter(MediaItem.media_type == "episode",
                                            MediaItem.parent_title.ilike(title))
         count += q.update({"protected": True}, synchronize_session=False)
@@ -143,12 +178,7 @@ async def refresh_seerr_protection(db) -> int:
 
 
 async def refresh_tautulli_watch_protection(db) -> int:
-    """Mark items watched by another Tautulli user within N days as watch_protected.
-
-    Uses one get_history call (not per-item stats). Resets prior watch_protected
-    flags first. Primary user's watches (primary_tautulli_user) never protect.
-    No-op when Tautulli isn't configured or the toggle is off.
-    """
+    """Mark items watched by another Tautulli user within N days as watch_protected."""
     cleanup = _get_setting(db, "cleanup", CleanupSettings)
     if not cleanup.protect_other_users:
         return 0
@@ -177,7 +207,6 @@ async def refresh_tautulli_watch_protection(db) -> int:
 
     count = 0
     if protect_keys:
-        # Chunk IN() to keep the query size sane on large libraries
         keys = list(protect_keys)
         for i in range(0, len(keys), 500):
             chunk = keys[i:i + 500]

@@ -12,6 +12,18 @@ class ScoringWeights(BaseModel):
     max_size_gb_reference: float = 50.0
     max_age_days_reference: float = 1825.0
     max_release_age_years_reference: float = 20.0
+    # Days until a watched item's watch-factor approaches ~0.63 of max (v0.30.0).
+    # Pre-v0.30 used a hard linear /365 ramp — see [[Scoring System — Pre-v0.30 Backup]].
+    watch_half_life_days: float = 365.0
+
+
+class ScoringProfiles(BaseModel):
+    """Per-Plex-library partial overlays on ScoringWeights (v0.30.0, AQ #16).
+
+    Keys are `MediaItem.library_section` names. Each value is a partial dict of
+    ScoringWeights fields — only listed keys override the global default.
+    """
+    by_library: dict[str, dict] = {}
 
 
 class ImportMatchingSettings(BaseModel):
@@ -76,7 +88,16 @@ class OllamaSettings(BaseModel):
     match_prompt: str = ""  # custom template for import matching; "" = built-in default
     explain_prompt: str = ""  # custom template for deletion rationale; "" = built-in default
     pack_prompt: str = ""  # custom template for season pack file matching; "" = built-in default
-    verbose_rationales: bool = False  # extended reasoning in rationales (impacts token usage)
+    verbose_rationales: bool = False  # legacy unused — verbosity tier replaced it
+    # Forbid chain-of-thought / <think> in the scaffold (v0.30.0) — on by default.
+    # Models should answer with verdict + bullets only; stripping still runs as a backstop.
+    forbid_thinking: bool = True
+    # Inject a compact structured det_summary instead of the full prose rationale
+    # (v0.30.0) — smaller context, same signal. On by default.
+    compact_det_summary: bool = True
+    # Reply format is fixed to rich-text-capable JSON (reason may use Markdown
+    # bullets/bold). The Settings UI no longer exposes reply_format; the field
+    # remains for API/back-compat and is forced to "markdown" at call sites.
     # Per-task control (v0.27.0, Approved Queue #10) — the global `enabled` stays the
     # master switch; these narrow it per consumer. Task models default to the shared
     # `model` when blank, so existing configs behave exactly as before.

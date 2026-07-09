@@ -4,9 +4,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.app_setting import AppSetting
-from app.schemas.settings import (ScoringWeights, ImportMatchingSettings, OllamaSettings,
-                                  CleanupSettings, SyncSettings, NotificationSettings,
-                                  LlmScheduleSettings, BackupSettings)
+from app.schemas.settings import (ScoringWeights, ScoringProfiles, ImportMatchingSettings,
+                                  OllamaSettings, CleanupSettings, SyncSettings,
+                                  NotificationSettings, LlmScheduleSettings, BackupSettings)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -48,10 +48,23 @@ def update_scoring_weights(weights: ScoringWeights, db: Session = Depends(get_db
     row.value = json.dumps(weights.model_dump())
     db.commit()
 
-    from app.services.scorer import rescore_all
-    rescore_all(db, weights)
+    from app.services.scorer import rescore_all, load_scoring_profiles
+    rescore_all(db, weights, load_scoring_profiles(db))
 
     return weights
+
+
+@router.get("/scoring-profiles", response_model=ScoringProfiles)
+def get_scoring_profiles(db: Session = Depends(get_db)):
+    return _get_json_setting(db, "scoring_profiles", ScoringProfiles)
+
+
+@router.put("/scoring-profiles", response_model=ScoringProfiles)
+def update_scoring_profiles(body: ScoringProfiles, db: Session = Depends(get_db)):
+    _put_json_setting(db, "scoring_profiles", body)
+    from app.services.scorer import rescore_all
+    rescore_all(db, _get_weights(db), body)
+    return body
 
 
 @router.get("/import-matching", response_model=ImportMatchingSettings)
@@ -213,15 +226,20 @@ _BENCH_MATCH = {
     "context": "Source app: sonarr. Queue error: no files eligible for import",
     "det_summary": "episode title similarity 0.91; season+episode numbers match (heuristic confidence 0.88)",
 }
+_BENCH_PACK = {
+    "release": "The.Example.Show.S02.1080p.WEB-DL-GRP",
+    "candidate": "The Example Show",
+    "files": ["The.Example.Show.S02E01.mkv", "The.Example.Show.S02E02.mkv"],
+    "folder": "The.Example.Show.S02.1080p.WEB-DL-GRP",
+}
 _BENCH_ITEM = "The Example Movie (2011), movie, 8.2 GB, watched 0x, last watched never, deletion score 72.4/100"
 
 
 @router.post("/ollama/preview")
 async def ollama_preview(body: dict = Body(default={}), db: Session = Depends(get_db)):
     """Dry-run the saved prompt/model settings and report what came back.
-    {"task": "match"|"explain", "use_real_data": bool} — real data pulls one
-    current row (item 13); canned data is the fixed self-test/benchmark (item 14).
-    Nothing is persisted."""
+    {"task": "match"|"explain"|"pack", "use_real_data": bool} — real data pulls one
+    current row; canned data is the fixed self-test/benchmark. Nothing is persisted."""
     import time
     from app.services import llm_assist
     cfg = _get_json_setting(db, "ollama", OllamaSettings)
@@ -229,6 +247,7 @@ async def ollama_preview(body: dict = Body(default={}), db: Session = Depends(ge
         raise HTTPException(status_code=400, detail="LLM assist is not enabled — configure it on the Integrations page")
     task = body.get("task") or "match"
     use_real = bool(body.get("use_real_data"))
+    pk = llm_assist.prompt_kwargs(cfg)
     if not llm_assist.acquire_slot():
         raise HTTPException(status_code=409, detail="An LLM run is already in progress")
     try:
@@ -242,46 +261,96 @@ async def ollama_preview(body: dict = Body(default={}), db: Session = Depends(ge
                        .order_by(MediaItem.score.desc()).first())
                 if row:
                     item_summary, source = summarize(row), f"media item #{row.id}"
-            prompt = llm_assist.build_explain_prompt(cfg.explain_prompt, item_summary, cfg.verbosity)
+            prompt = llm_assist.build_explain_prompt(
+                cfg.explain_prompt, item_summary, cfg.verbosity, **pk)
             started = time.monotonic()
             raw = await llm_assist._generate(
                 cfg.host, cfg.model_for("explain"), prompt, cfg.api_style, json_format=False,
                 verbose=cfg.verbosity == "verbose", model_size=cfg.model_size,
-                keep_alive_minutes=cfg.keep_alive_minutes)
+                keep_alive_minutes=cfg.keep_alive_minutes, **llm_assist.inference_kwargs(cfg))
             latency_ms = round((time.monotonic() - started) * 1000)
             output = llm_assist._strip_think(raw or "")
             return {"output": output or None, "latency_ms": latency_ms, "json_valid": None,
                     "message": f"Ran the deletion-rationale prompt against {source}."
                                + ("" if output else " Empty reply after <think> stripping — try Minimal verbosity.")}
+
+        if task == "pack":
+            release = _BENCH_PACK["release"]
+            candidate = _BENCH_PACK["candidate"]
+            files = list(_BENCH_PACK["files"])
+            folder = _BENCH_PACK["folder"]
+            if use_real:
+                import json as _json
+                from app.models.failed_import import FailedImport
+                # Pack flag lives in raw_metadata (no dedicated column).
+                for row in (db.query(FailedImport)
+                            .filter(FailedImport.matched_title.isnot(None))
+                            .order_by(FailedImport.created_at.desc()).limit(40)):
+                    if not row.pack:
+                        continue
+                    release = row.raw_title or release
+                    candidate = row.matched_title or candidate
+                    try:
+                        meta = _json.loads(row.raw_metadata or "{}")
+                    except (ValueError, TypeError):
+                        meta = {}
+                    path = meta.get("outputPath") or meta.get("output_path") or ""
+                    if path:
+                        folder = str(path).rstrip("/").split("/")[-1]
+                    source = f"failed import #{row.id}"
+                    break
+            files_str = ", ".join(files)
+            prompt = llm_assist.build_pack_prompt(
+                cfg.pack_prompt, release, candidate, files_str, "Multi-file pack preview.",
+                cfg.verbosity, folder_name=folder, **pk)
+            started = time.monotonic()
+            raw = await llm_assist._generate(
+                cfg.host, cfg.model_for("match"), prompt, cfg.api_style, json_format=True,
+                verbose=cfg.verbosity == "verbose", model_size=cfg.model_size,
+                keep_alive_minutes=cfg.keep_alive_minutes, **llm_assist.inference_kwargs(cfg))
+            latency_ms = round((time.monotonic() - started) * 1000)
+            parsed = llm_assist._parse_pack_matches(raw or "")
+            ok = bool(parsed)
+            message = f"Ran the pack-file prompt against {source}."
+            if not ok:
+                message += " Reply did not parse as a file-match array — try Minimal verbosity."
+            return {"output": llm_assist._strip_think(raw or "") or None, "latency_ms": latency_ms,
+                    "json_valid": ok, "message": message}
+
         fields = dict(_BENCH_MATCH)
         if use_real:
             from app.models.failed_import import FailedImport
             row = (db.query(FailedImport).filter(FailedImport.matched_title.isnot(None))
                    .order_by(FailedImport.created_at.desc()).first())
             if row:
+                det = row.match_rationale or "series/title heuristics only"
+                if getattr(cfg, "compact_det_summary", True):
+                    det = llm_assist.compact_det_summary(
+                        det, row.heuristic_confidence or row.confidence)
+                else:
+                    det = f"{det} (heuristic confidence {row.heuristic_confidence or row.confidence})"
                 fields = {"release": row.raw_title, "candidate": row.matched_title,
                           "context": f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
-                          "det_summary": (row.match_rationale or "series/title heuristics only")
-                                         + f" (heuristic confidence {row.heuristic_confidence or row.confidence})"}
+                          "det_summary": det}
                 source = f"failed import #{row.id}"
+        # Reply envelope is fixed to markdown-capable JSON (v0.30.0).
         prompt = llm_assist.build_review_prompt(
             cfg.match_prompt, fields["release"], fields["candidate"], fields["context"],
-            fields["det_summary"], cfg.verbosity, cfg.reply_format, cfg.confidence_style)
+            fields["det_summary"], cfg.verbosity, llm_assist.REPLY_FORMAT, cfg.confidence_style,
+            **pk)
         started = time.monotonic()
         raw = await llm_assist._generate(
             cfg.host, cfg.model_for("match"), prompt, cfg.api_style,
-            json_format=cfg.reply_format != "simple", verbose=cfg.verbosity == "verbose",
-            model_size=cfg.model_size, keep_alive_minutes=cfg.keep_alive_minutes)
+            json_format=True, verbose=cfg.verbosity == "verbose",
+            model_size=cfg.model_size, keep_alive_minutes=cfg.keep_alive_minutes,
+            **llm_assist.inference_kwargs(cfg))
         latency_ms = round((time.monotonic() - started) * 1000)
-        if cfg.reply_format == "simple":
-            parsed = llm_assist._parse_simple(raw or "") or llm_assist._parse_json(raw or "")
-        else:
-            parsed = llm_assist._parse_json(raw or "") or llm_assist._parse_simple(raw or "")
+        parsed = llm_assist._parse_json(raw or "") or llm_assist._parse_simple(raw or "")
         ok = bool(parsed and "agrees" in parsed)
         message = f"Ran the match-review prompt against {source}."
         if not ok:
             message += (" Reply did not parse as a verdict — this model may be too small for "
-                        "structured matching; try the Simple reply format or Minimal verbosity.")
+                        "structured matching; try Minimal verbosity or Classified confidence.")
         return {"output": llm_assist._strip_think(raw or "") or None, "latency_ms": latency_ms,
                 "json_valid": ok, "message": message}
     finally:
