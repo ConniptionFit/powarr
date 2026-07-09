@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot } from "lucide-react";
 import { mediaApi, integrationsApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
 import ClampedText from "../../components/ClampedText";
-import AnimatedBot from "../../components/AnimatedBot";
+import BotState from "../../components/BotState";
 
 function ScoreBadge({ score }: { score: number }) {
   const color =
@@ -267,7 +267,7 @@ export default function DeletionSuggestions() {
           <p className="text-slate-400">No candidates found. Try lowering the minimum score or sync Plex first.</p>
         </div>
       ) : (
-        <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-hidden">
+        <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-purple-900/30 text-slate-400 text-xs uppercase tracking-wider">
               <tr>
@@ -344,7 +344,7 @@ export default function DeletionSuggestions() {
                                 : "Ask the local LLM whether this is a good deletion candidate (requires Ollama assist)"}
                               className={`p-1.5 rounded hover:bg-white/10 transition-colors disabled:opacity-50 ${item.llm_rationale ? "text-brand-light" : "text-slate-400 hover:text-brand-light"}`}
                             >
-                              <AnimatedBot active={explainBusy === item.id} size={15} />
+                              {explainBusy === item.id ? <BotState variant="responding" size={15} /> : <Bot size={15} />}
                             </button>
                             <button onClick={() => ignoreMut.mutate({ id: item.id, ignored: !item.ignored })} title={item.ignored ? "Un-ignore" : "Ignore"} className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
                               {item.ignored ? <Eye size={15} /> : <EyeOff size={15} />}

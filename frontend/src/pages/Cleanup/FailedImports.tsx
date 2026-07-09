@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd } from "lucide-react";
 import { importsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import ClampedText from "../../components/ClampedText";
-import AnimatedBot from "../../components/AnimatedBot";
+import BotState from "../../components/BotState";
 
 const APP_COLORS: Record<string, string> = {
   sonarr: "bg-teal-600",
@@ -787,7 +787,7 @@ export default function FailedImports() {
                 title="Score the selected items with the local LLM (most in-depth reasoning available, regardless of the configured verbosity)"
                 className="flex items-center gap-1.5 px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-xs disabled:opacity-50"
               >
-                <AnimatedBot active={llmRunMut.isPending} size={12} /> Run LLM on Selected
+                {llmRunMut.isPending ? <BotState variant="thinking" size={12} /> : <Bot size={12} />} Run LLM on Selected
               </button>
             </>
           )}
@@ -923,7 +923,7 @@ export default function FailedImports() {
                                   title="Score this item with the local LLM (most in-depth reasoning available, regardless of the configured verbosity)"
                                   className="p-1.5 rounded hover:bg-indigo-900/40 text-slate-400 hover:text-indigo-300 transition-colors disabled:opacity-30"
                                 >
-                                  <AnimatedBot active={llmRunMut.isPending} size={15} />
+                                  {llmRunMut.isPending ? <BotState variant="thinking" size={15} /> : <Bot size={15} />}
                                 </button>
                                 {item.pack && item.matched_id && (
                                   <PackReviewButton
@@ -987,7 +987,7 @@ function PackReviewButton({
         title={isLoading ? "Analyzing..." : hasResults ? "Hover to see results" : "Review files in pack with LLM"}
       >
         {isLoading ? (
-          <AnimatedBot active size={15} className="text-cyan-300" />
+          <BotState variant="thinking" size={15} />
         ) : hasResults ? (
           <Lightbulb size={15} className="text-cyan-300" />
         ) : (

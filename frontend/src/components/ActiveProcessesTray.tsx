@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import { useTasks } from "../context/TaskContext";
 import type { TaskProgress } from "../lib/api";
-import AnimatedBot from "./AnimatedBot";
+import BotState from "./BotState";
 
 const AUTO_DISMISS_MS = 4000; // "always auto-dismiss" — success or failure alike, per user decision 2026-07-07
 
-// llm_run gets the animated robot (needs an `active` prop, not a bare icon
-// render) — everything else gets a plain lucide icon that spins while running.
+// llm_run gets the animated BotState (color/motion carries the status itself)
+// — everything else gets a plain lucide icon that spins while running.
 const KIND_ICON: Record<Exclude<TaskProgress["kind"], "llm_run">, React.ElementType> = {
   scan: RefreshCw,
   plex_sync: RotateCw,
@@ -15,7 +15,10 @@ const KIND_ICON: Record<Exclude<TaskProgress["kind"], "llm_run">, React.ElementT
 };
 
 function TaskIcon({ task }: { task: TaskProgress }) {
-  if (task.kind === "llm_run") return <AnimatedBot active={task.status === "running"} size={15} />;
+  if (task.kind === "llm_run") {
+    const variant = task.status === "failed" ? "error" : task.status === "done" ? "complete" : "thinking";
+    return <BotState variant={variant} size={18} />;
+  }
   const Icon = KIND_ICON[task.kind];
   return <Icon size={15} className={task.status === "running" ? "animate-spin" : ""} />;
 }

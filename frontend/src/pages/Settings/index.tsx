@@ -819,7 +819,7 @@ function SecuritySection() {
             Authentication is <span className="text-yellow-300">disabled</span>. Set credentials to enable password login
             (LAN traffic keeps working via the bypass below).
           </p>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <input type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} className={inputCls} />
             <input type="password" placeholder="Password (min 8 chars)" value={password} onChange={e => setPassword(e.target.value)} className={inputCls} />
             <input type="password" placeholder="Confirm password" value={confirm} onChange={e => setConfirm(e.target.value)} className={inputCls} />
@@ -1008,7 +1008,7 @@ function NotificationsSection() {
                  className="accent-purple-500" />
           Push a summary when a scan finds new suggestions, auto-resolves, or push failures
         </label>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="text-xs text-slate-400 mb-1 block">ntfy Server URL</label>
             <input type="text" placeholder="http://10.1.1.2:8091" value={cfg.ntfy_url}
