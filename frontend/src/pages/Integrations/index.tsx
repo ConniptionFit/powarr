@@ -210,13 +210,23 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
 
 const OTHER = "__other__";
 
+const CPU_SMALL_MATCH_PROMPT =
+  "Same work + season + episode (TV) = match. Ignore codec/resolution/group tags.\n" +
+  "Release: {release}\nLibrary: {candidate}\n{context}";
+
+const CPU_SMALL_PACK_PROMPT =
+  "Map each file to season+episode for \"{candidate}\". Parse S##E## or absolute ep# from filenames.\n" +
+  "Pack: {release}\nFiles: {files}\n{context}";
+
 // Known-good small models with pre-tuned profiles (mirrors PROMPT_PRESETS'
 // pattern). Selecting one fills the model and applies the profile in one click —
 // the model still has to be pulled on the Ollama host (warned if absent).
 const MODEL_PRESETS: Array<{ label: string; model: string;
-  profile: { model_size: string; verbosity: string; reply_format: string; confidence_style: string } }> = [
+  profile: { model_size: string; verbosity: string; reply_format: string; confidence_style: string;
+    match_prompt?: string; pack_prompt?: string } }> = [
   { label: "qwen2.5:3b — solid small all-rounder", model: "qwen2.5:3b",
-    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
+    profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified",
+      match_prompt: CPU_SMALL_MATCH_PROMPT, pack_prompt: CPU_SMALL_PACK_PROMPT } },
   { label: "llama3.2:3b — good instruction-following", model: "llama3.2:3b",
     profile: { model_size: "small", verbosity: "minimal", reply_format: "simple", confidence_style: "classified" } },
   { label: "llama3.2:1b — tiniest workable", model: "llama3.2:1b",
@@ -262,7 +272,7 @@ function OllamaCard() {
   const buildPayload = () => ({
     verbosity: "brief", model_size: "medium", keep_alive_minutes: 10,
     reply_format: "json", confidence_style: "numeric", batch_delay_ms: 0,
-    match_prompt: "", explain_prompt: "",
+    match_prompt: "", explain_prompt: "", pack_prompt: "",
     ...(cfg ?? {}),
     ...(presetProfile ?? {}), // a chosen model preset overrides the profile fields
     enabled, host, model, api_style: apiStyle,

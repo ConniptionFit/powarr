@@ -205,6 +205,13 @@ class TestPackMatchPrompt(unittest.TestCase):
         p = build_pack_prompt("", "rel", "cand", "a.mkv", "ctx", verbosity="minimal")
         self.assertIn("match_type", p)
         self.assertNotIn('"reason"', p)
+        self.assertIn("Number Match=S##E## only", p)
+        self.assertNotIn("- Exact Match:", p)  # short defs, not bullet list
+
+    def test_default_match_prompt_focuses_episode_alignment(self):
+        p = build_review_prompt("", "Show.S01E01", "Show", "ctx", "det")
+        self.assertIn("season + episode", p)
+        self.assertIn("Rules:", p)
 
 
 class TestParsePackMatches(unittest.TestCase):

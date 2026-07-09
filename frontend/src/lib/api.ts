@@ -148,6 +148,7 @@ export interface OllamaSettings {
   batch_delay_ms: number; // pause between sequential batch calls; 0 = none
   match_prompt: string;
   explain_prompt: string;
+  pack_prompt: string;
 }
 
 export interface CleanupSettings {

@@ -30,19 +30,20 @@ CAP_ITEM = 500
 CAP_DET_SUMMARY = 600
 CAP_FILES = 800
 
+# Tuned for CPU-only small models (e.g. qwen2.5:3b): short templates; pair with
+# model_size=small, verbosity=minimal, reply_format=simple, confidence_style=classified.
 DEFAULT_MATCH_PROMPT = (
-    "You match download release names to media library entries.\n"
-    "Release name: {release}\n"
-    "Candidate library entry: {candidate}\n"
-    "Context: {context}"
+    "Same work + season + episode (TV) = match. Ignore codec/resolution/group tags.\n"
+    "Release: {release}\n"
+    "Library: {candidate}\n"
+    "{context}"
 )
 
 DEFAULT_PACK_PROMPT = (
-    "You match individual files within a season/series pack to episodes in a media library.\n"
+    "Map each file to season+episode for \"{candidate}\". Parse S##E## or absolute ep# from filenames.\n"
     "Pack: {release}\n"
-    "Library entry: {candidate}\n"
-    "Files in download: {files}\n"
-    "Context: {context}"
+    "Files: {files}\n"
+    "{context}"
 )
 
 DEFAULT_EXPLAIN_PROMPT = (
@@ -90,13 +91,9 @@ def build_review_prompt(template: str, release: str, candidate: str, context: st
     prompt += ("\nDeterministic scorer result (computed from title/season/episode/"
                f"absolute-number comparisons): {_truncate(det_summary, CAP_DET_SUMMARY)}")
     prompt += (
-        "\nJudging guidance: ignore file-quality/format/codec/audio details and uploader or "
-        "release-group identifiers (resolution, source, codec, audio channels, HDR, encoder, "
-        "release-group tag) — these describe the file, not the show or movie, and are never "
-        "evidence for or against a match. If the release name is in a different language or "
-        "script than the candidate's title (common for anime/international content), consider "
-        "whether it could be a known translation, transliteration, or alternate title for the "
-        "same work rather than judging on string similarity alone."
+        "\nRules: trust the scorer's S##E##/title signals; ignore codec/resolution/group tags. "
+        "Romanized or foreign release names may be the same show. Triggered-series in context "
+        "outranks filename guesswork."
     )
     if reply_format == "simple":
         if verbosity == "minimal":
@@ -166,6 +163,13 @@ _PACK_MATCH_TYPE_DEFS = (
     "- Low Confidence: the evidence is weak or ambiguous"
 )
 
+# Minimal verbosity on small models: one line instead of seven bullet definitions.
+_PACK_MATCH_TYPE_DEFS_SHORT = (
+    "match_type per file: Exact Match=number+title, Title Match=title in filename, "
+    "Number Match=S##E## only, Absolute Number Match=anime absolute #, "
+    "Multi-Episode File=one file spans 2+ eps, Sequence Match=order only, Low Confidence=weak guess"
+)
+
 
 def build_pack_prompt(template: str, release: str, candidate: str, files_list: str,
                       context: str, verbosity: str = "brief") -> str:
@@ -177,7 +181,7 @@ def build_pack_prompt(template: str, release: str, candidate: str, files_list: s
                  .replace("{files}", _truncate(files_list, CAP_FILES))
                  .replace("{context}", _truncate(context, CAP_CONTEXT)))
     match_type_choices = "|".join(f'"{t}"' for t in PACK_MATCH_TYPES)
-    prompt += f"\n{_PACK_MATCH_TYPE_DEFS}"
+    prompt += f"\n{_PACK_MATCH_TYPE_DEFS_SHORT if verbosity == 'minimal' else _PACK_MATCH_TYPE_DEFS}"
     if verbosity == "minimal":
         prompt += (f'\nFor each file, reply with ONLY a JSON array: '
                    f'[{{"file": "filename.mkv", "season": 1, "episode": 1, "match_type": {match_type_choices}}}]')
@@ -591,14 +595,16 @@ async def review_pack_files(host: str, model: str, release_title: str,
                              candidate_title: str, file_names: list[str],
                              api_style: str = "ollama", template: str = "",
                              verbosity: str = "brief", model_size: str = "medium",
-                             keep_alive_minutes: int = 10) -> Optional[list[dict]]:
+                             keep_alive_minutes: int = 10,
+                             context: str = "") -> Optional[list[dict]]:
     """Per-file episode matching for season/series packs. Returns list of
     [{"file": "...", "season": int, "episode": int, "match_type": one of
     PACK_MATCH_TYPES, "confidence": "high|medium|low", "reason": "..."}]
     or None if unavailable. Fails soft."""
     verbose = verbosity == "verbose"
     files_str = ", ".join(file_names[:50]) if file_names else "No files listed"
-    context = f"This is a multi-file download (pack). Match each file to its episode."
+    if not context.strip():
+        context = "Season pack — one episode per file unless Multi-Episode File."
     prompt = build_pack_prompt(template, release_title, candidate_title, files_str,
                               context, verbosity)
     raw = await _generate(host, model, prompt, api_style, json_format=True,
