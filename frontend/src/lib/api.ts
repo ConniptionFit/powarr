@@ -167,9 +167,9 @@ export interface OllamaSettings {
   breaker_threshold: number;
   breaker_cooldown_minutes: number;
   // Inference tuning (v0.29.0) — 0 max_tokens/timeout = model_size defaults
-  temperature: number;
-  max_tokens: number;
-  timeout_seconds: number;
+  temperature?: number;
+  max_tokens?: number;
+  timeout_seconds?: number;
 }
 
 export interface LlmStats {

@@ -265,6 +265,7 @@ function OllamaCard() {
     match_prompt: "", explain_prompt: "",
     match_enabled: true, explain_enabled: true, match_model: "", explain_model: "",
     breaker_threshold: 5, breaker_cooldown_minutes: 10,
+    temperature: 0, max_tokens: 0, timeout_seconds: 0,
     ...(cfg ?? {}),
     ...(presetProfile ?? {}), // a chosen model preset overrides the profile fields
     enabled, host, model, api_style: apiStyle,
