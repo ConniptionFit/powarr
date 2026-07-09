@@ -116,6 +116,9 @@ CAP_CONTEXT = 400
 CAP_ITEM = 500
 CAP_DET_SUMMARY = 600
 CAP_FILES = 800
+# Max filenames per pack LLM call (v0.31.0). Larger packs are chunked and merged
+# so small models don't collapse a 40-file reply into a single object.
+PACK_CHUNK_SIZE = 15
 
 DEFAULT_MATCH_PROMPT = (
     "You review whether a download release matches a library entry.\n"
@@ -808,23 +811,42 @@ async def review_match(host: str, model: str, release_title: str,
             "rationale": reason[:limit]}
 
 
-async def review_pack_files(host: str, model: str, release_title: str,
+def _validate_pack_matches(parsed: list) -> list[dict]:
+    """Normalize one pack-LLM reply into the closed match_type vocabulary."""
+    type_by_lower = {t.lower(): t for t in PACK_MATCH_TYPES}
+    validated = []
+    for item in parsed:
+        if isinstance(item, dict) and "file" in item and "season" in item and "episode" in item:
+            try:
+                raw_type = str(item.get("match_type", "")).strip().lower()
+                validated.append({
+                    "file": str(item["file"])[:200],
+                    "season": int(item.get("season", 0)),
+                    "episode": int(item.get("episode", 0)),
+                    "match_type": type_by_lower.get(raw_type, "Low Confidence"),
+                    "confidence": str(item.get("confidence", "medium")).lower()[:20],
+                    "reason": str(item.get("reason", ""))[:300],
+                })
+            except (TypeError, ValueError):
+                continue
+    return validated
+
+
+async def _review_pack_chunk(host: str, model: str, release_title: str,
                              candidate_title: str, file_names: list[str],
-                             api_style: str = "ollama", template: str = "",
-                             verbosity: str = "brief", model_size: str = "medium",
-                             keep_alive_minutes: int = 10,
-                             forbid_thinking: bool = True,
-                             folder_name: str = "",
-                             temperature: float = 0.0, max_tokens: int = 0,
-                             timeout_seconds: int = 0) -> Optional[list[dict]]:
-    """Per-file episode matching for season/series packs. Returns list of
-    [{"file": "...", "season": int, "episode": int, "match_type": one of
-    PACK_MATCH_TYPES, "confidence": "high|medium|low", "reason": "..."}]
-    or None if unavailable. Fails soft."""
+                             api_style: str, template: str, verbosity: str,
+                             model_size: str, keep_alive_minutes: int,
+                             forbid_thinking: bool, folder_name: str,
+                             temperature: float, max_tokens: int,
+                             timeout_seconds: int,
+                             chunk_index: int = 0, chunk_total: int = 1) -> Optional[list[dict]]:
+    """One LLM call for a single pack-file chunk."""
     verbose = verbosity == "verbose"
-    files_str = ", ".join(file_names[:50]) if file_names else "No files listed"
+    files_str = ", ".join(file_names) if file_names else "No files listed"
     context = ("Multi-file pack. Use pack name + folder name + each filename. "
                "Match each file to its episode.")
+    if chunk_total > 1:
+        context += f" This is chunk {chunk_index + 1} of {chunk_total} — only map the files listed."
     prompt = build_pack_prompt(template, release_title, candidate_title, files_str,
                               context, verbosity, forbid_thinking=forbid_thinking,
                               folder_name=folder_name)
@@ -838,26 +860,50 @@ async def review_pack_files(host: str, model: str, release_title: str,
     parsed = _parse_pack_matches(raw)
     if not parsed or not isinstance(parsed, list):
         return None
-    # Validate and clean results — ensure each has file, season, episode
-    type_by_lower = {t.lower(): t for t in PACK_MATCH_TYPES}
-    validated = []
-    for item in parsed:
-        if isinstance(item, dict) and "file" in item and "season" in item and "episode" in item:
-            try:
-                raw_type = str(item.get("match_type", "")).strip().lower()
-                validated.append({
-                    "file": str(item["file"])[:200],
-                    "season": int(item.get("season", 0)),
-                    "episode": int(item.get("episode", 0)),
-                    # Fall back to "Low Confidence" for anything outside the closed
-                    # vocabulary — a small model occasionally invents its own label.
-                    "match_type": type_by_lower.get(raw_type, "Low Confidence"),
-                    "confidence": str(item.get("confidence", "medium")).lower()[:20],
-                    "reason": str(item.get("reason", ""))[:300]
-                })
-            except (TypeError, ValueError):
-                continue
+    validated = _validate_pack_matches(parsed)
     return validated if validated else None
+
+
+async def review_pack_files(host: str, model: str, release_title: str,
+                             candidate_title: str, file_names: list[str],
+                             api_style: str = "ollama", template: str = "",
+                             verbosity: str = "brief", model_size: str = "medium",
+                             keep_alive_minutes: int = 10,
+                             forbid_thinking: bool = True,
+                             folder_name: str = "",
+                             temperature: float = 0.0, max_tokens: int = 0,
+                             timeout_seconds: int = 0) -> Optional[list[dict]]:
+    """Per-file episode matching for season/series packs. Returns list of
+    [{"file": "...", "season": int, "episode": int, "match_type": one of
+    PACK_MATCH_TYPES, "confidence": "high|medium|low", "reason": "..."}]
+    or None if unavailable. Fails soft.
+
+    Packs larger than PACK_CHUNK_SIZE are split into sequential chunks and merged
+    by filename (first answer wins) so small models stay within output budgets.
+    """
+    names = list(file_names or [])[:50]
+    if not names:
+        return None
+    chunks = [names[i:i + PACK_CHUNK_SIZE] for i in range(0, len(names), PACK_CHUNK_SIZE)]
+    merged: list[dict] = []
+    seen: set[str] = set()
+    any_ok = False
+    for idx, chunk in enumerate(chunks):
+        part = await _review_pack_chunk(
+            host, model, release_title, candidate_title, chunk,
+            api_style, template, verbosity, model_size, keep_alive_minutes,
+            forbid_thinking, folder_name, temperature, max_tokens, timeout_seconds,
+            chunk_index=idx, chunk_total=len(chunks))
+        if part is None:
+            continue
+        any_ok = True
+        for row in part:
+            key = row["file"].lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+    return merged if any_ok else None
 
 
 async def explain_deletion(host: str, model: str, item_summary: str,

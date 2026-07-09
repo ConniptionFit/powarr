@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 from app.services import llm_assist
 from app.services.llm_assist import (
     CAP_CANDIDATE, CAP_CONTEXT, CAP_DET_SUMMARY, CAP_ITEM, CAP_RELEASE,
-    _limits, _parse_simple, _parse_pack_matches, _strip_think, _truncate,
+    PACK_CHUNK_SIZE, _limits, _parse_simple, _parse_pack_matches, _strip_think, _truncate,
     build_explain_prompt, build_review_prompt, build_pack_prompt,
     PACK_MATCH_TYPES, review_pack_files,
 )
@@ -283,6 +283,31 @@ class TestPackMatchValidation(unittest.TestCase):
             '[{"file": "a.mkv", "season": 1, "episode": 1, "confidence": "medium"}]')
         self.assertEqual(out[0]["match_type"], "Low Confidence")
 
+    def test_large_pack_is_chunked(self):
+        # More files than PACK_CHUNK_SIZE → multiple _generate calls, results merged.
+        import json
+        files = [f"e{i:02d}.mkv" for i in range(PACK_CHUNK_SIZE + 3)]
+        calls = {"n": 0}
+
+        async def fake_generate(*_a, **_k):
+            i = calls["n"]
+            calls["n"] += 1
+            start = i * PACK_CHUNK_SIZE
+            chunk = files[start:start + PACK_CHUNK_SIZE]
+            return json.dumps([
+                {"file": f, "season": 1, "episode": start + j + 1, "match_type": "Number Match"}
+                for j, f in enumerate(chunk)
+            ])
+
+        with patch.object(llm_assist, "_generate", new=AsyncMock(side_effect=fake_generate)):
+            import asyncio
+            out = asyncio.run(llm_assist.review_pack_files(
+                "h", "m", "rel", "cand", files))
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(len(out), len(files))
+        self.assertEqual(out[0]["file"], "e00.mkv")
+        self.assertEqual(out[-1]["file"], files[-1])
+
 
 class TestExplainMinimal(unittest.TestCase):
     def _explain(self, reply, **kwargs):
@@ -390,6 +415,7 @@ class TestRationaleKey(unittest.TestCase):
             self.watch_count = kw.get("watch_count", 0)
             self.last_watched_at = kw.get("last_watched_at")
             self.file_size = kw.get("file_size", 10 ** 9)
+            self.library_section = kw.get("library_section", "Movies")
 
     def _key(self, item=None, **ollama_overrides):
         from app.schemas.settings import OllamaSettings

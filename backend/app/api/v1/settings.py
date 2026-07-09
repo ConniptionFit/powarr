@@ -232,7 +232,9 @@ _BENCH_PACK = {
     "files": ["The.Example.Show.S02E01.mkv", "The.Example.Show.S02E02.mkv"],
     "folder": "The.Example.Show.S02.1080p.WEB-DL-GRP",
 }
-_BENCH_ITEM = "The Example Movie (2011), movie, 8.2 GB, watched 0x, last watched never, deletion score 72.4/100"
+_BENCH_ITEM = ("The Example Movie (2011), movie, library=Movies, 8.2 GB, watched 0x, "
+               "last watched never, deletion score 72.4/100 "
+               "(factors: watch=1.00, size=0.40, age=0.20, release=0.55)")
 
 
 @router.post("/ollama/preview")

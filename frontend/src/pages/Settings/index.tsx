@@ -865,14 +865,16 @@ function LLMAssistSection() {
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>
           <p className="text-white text-sm font-medium">Model Size Profile</p>
-          <p className="text-slate-500 text-xs mt-0.5">Scales reply length and timeouts to the model. Selecting Small also pre-fills Minimal verbosity</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Scales reply length and timeouts to the model. Selecting Small also pre-fills Minimal verbosity and Classified confidence (small models classify better than they calibrate floats)
+          </p>
         </div>
         <select
           value={cfg.model_size}
           onChange={e => {
             const size = e.target.value;
             setCfg(c => c ? (size === "small"
-              ? { ...c, model_size: size, verbosity: "minimal" }
+              ? { ...c, model_size: size, verbosity: "minimal", confidence_style: "classified" }
               : { ...c, model_size: size }) : c);
           }}
           className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"

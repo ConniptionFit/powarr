@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta
 
 from app.schemas.settings import ScoringWeights, ScoringProfiles
-from app.services.scorer import score_item, merge_weights, weights_for_library
+from app.services.scorer import score_item, score_breakdown, merge_weights, weights_for_library
 
 
 def _base(**overrides) -> dict:
@@ -79,6 +79,23 @@ class TestProfiles(unittest.TestCase):
         self.assertEqual(eff.never_watched_boost, 1.0)
         self.assertEqual(weights_for_library(base, profiles, "TV").never_watched_boost,
                          base.never_watched_boost)
+
+
+class TestScoreBreakdown(unittest.TestCase):
+    def test_breakdown_matches_score_item(self):
+        w = ScoringWeights()
+        item = _base()
+        bd = score_breakdown(item, w)
+        self.assertEqual(bd["score"], score_item(item, w))
+        self.assertIn("watch", bd["factors"])
+        self.assertIn("size", bd["factors"])
+
+    def test_series_watched_flag_surfaced(self):
+        w = ScoringWeights(file_size_weight=0, file_age_weight=0, release_date_weight=0)
+        bd = score_breakdown(_base(series_watched=True, watch_count=0,
+                                   series_last_watched_at=datetime.utcnow()), w)
+        self.assertTrue(bd["series_watched"])
+        self.assertLess(bd["factors"]["watch"], 1.0)
 
 
 if __name__ == "__main__":

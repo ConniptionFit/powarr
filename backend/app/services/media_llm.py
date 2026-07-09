@@ -17,6 +17,10 @@ from app.models.media import MediaItem
 from app.schemas.settings import CleanupSettings, OllamaSettings, ScoringWeights
 from app.services import llm_assist
 from app.services.import_matcher import publish
+from app.services.scorer import (
+    _item_score_dict, _series_watch_index, load_scoring_profiles, score_breakdown,
+    weights_for_library,
+)
 
 logger = logging.getLogger("powarr")
 
@@ -36,21 +40,65 @@ def rationale_key(ollama: OllamaSettings, item: MediaItem) -> str:
         "watch_count": item.watch_count,
         "last_watched_at": item.last_watched_at.isoformat() if item.last_watched_at else None,
         "file_size": item.file_size,
+        "library_section": getattr(item, "library_section", None),
+        # Bump when item_summary shape changes so cached prose regenerates.
+        "summary_v": 2,
     }, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-def item_summary(item: MediaItem) -> str:
-    return (f"{item.title} ({item.year or 'unknown year'}), {item.media_type}, "
-            f"{round((item.file_size or 0) / 1024**3, 1)} GB, watched {item.watch_count}x, "
-            f"last watched {item.last_watched_at or 'never'}, deletion score {item.score}/100")
+def item_summary(item: MediaItem, db=None, *, series_idx: dict | None = None,
+                  weights: ScoringWeights | None = None,
+                  profiles=None) -> str:
+    """Compact deletion-candidate line for the explain prompt (v0.31.0).
+
+    Includes library section + per-factor score breakdown when a DB session (or
+    preloaded series index / weights) is available; falls back to the aggregate
+    score alone otherwise.
+    """
+    parts = [
+        f"{item.title} ({item.year or 'unknown year'})",
+        item.media_type or "unknown",
+    ]
+    if item.library_section:
+        parts.append(f"library={item.library_section}")
+    if item.parent_title and item.media_type in ("episode", "track"):
+        parts.append(f"series={item.parent_title}")
+    parts.append(f"{round((item.file_size or 0) / 1024**3, 1)} GB")
+    parts.append(f"watched {item.watch_count or 0}x")
+    parts.append(f"last watched {item.last_watched_at or 'never'}")
+
+    breakdown = None
+    if db is not None or (series_idx is not None and weights is not None):
+        try:
+            if weights is None and db is not None:
+                weights = _load(db, "scoring_weights", ScoringWeights)
+            if profiles is None and db is not None:
+                profiles = load_scoring_profiles(db)
+            if series_idx is None and db is not None:
+                series_idx = _series_watch_index(db)
+            eff = weights_for_library(weights, profiles, item.library_section)
+            breakdown = score_breakdown(_item_score_dict(item, series_idx or {}), eff)
+        except Exception as e:
+            logger.info(f"item_summary breakdown unavailable: {e}")
+
+    if breakdown:
+        factors = breakdown["factors"]
+        factor_bits = ", ".join(f"{k}={v:.2f}" for k, v in factors.items())
+        series_note = "; series watched" if breakdown.get("series_watched") else ""
+        parts.append(
+            f"deletion score {breakdown['score']}/100 "
+            f"(factors: {factor_bits or 'none'}{series_note})")
+    else:
+        parts.append(f"deletion score {item.score}/100")
+    return ", ".join(parts)
 
 
 async def generate_and_store(item: MediaItem, ollama: OllamaSettings, db) -> str | None:
     """One LLM call for one item; persists rationale + timestamp + cache key on
     success. Fail-soft: returns None and stores nothing on no-response."""
     rationale = await llm_assist.explain_deletion(
-        ollama.host, ollama.model_for("explain"), item_summary(item), ollama.api_style,
+        ollama.host, ollama.model_for("explain"), item_summary(item, db), ollama.api_style,
         template=ollama.explain_prompt, verbosity=ollama.verbosity,
         model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes,
         **llm_assist.prompt_kwargs(ollama),

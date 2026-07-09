@@ -50,16 +50,13 @@ def weights_for_library(base: ScoringWeights, profiles: ScoringProfiles | None,
     return merge_weights(base, overlay)
 
 
-def score_item(item: dict, weights: ScoringWeights) -> float:
-    """
-    Returns a score from 0-100. Higher = better deletion candidate.
+def score_breakdown(item: dict, weights: ScoringWeights) -> dict:
+    """Per-factor 0–1 values + final 0–100 score (v0.31.0).
 
-    Watch factor (v0.30): never-watched boost only applies when *neither* the
-    item nor any sibling episode in the same series (`series_watched` /
-    `series_last_watched_at`) has been watched. Size uses a sqrt curve so
-    mid-size files aren't over-prioritized vs huge ones. Watch decay uses
-    `watch_half_life_days` instead of a hard 365-day linear ramp.
+    Shared by `score_item` and deletion LLM `item_summary` so the explain prompt
+    can cite concrete drivers instead of only the aggregate score.
     """
+    factors: dict[str, float] = {}
     score = 0.0
     total_weight = 0.0
     now = _utcnow()
@@ -90,6 +87,7 @@ def score_item(item: dict, weights: ScoringWeights) -> float:
             # Engaged but no usable timestamp
             factor = 0.35
 
+        factors["watch"] = round(factor, 3)
         score += w.watch_history_weight * factor
 
     # --- File size factor (sqrt curve — large files still win, mid-size less extreme) ---
@@ -102,6 +100,7 @@ def score_item(item: dict, weights: ScoringWeights) -> float:
             factor = math.sqrt(linear)
         else:
             factor = 0.0
+        factors["size"] = round(factor, 3)
         score += w.file_size_weight * factor
 
     # --- File age factor (older added_at = higher priority) ---
@@ -113,6 +112,7 @@ def score_item(item: dict, weights: ScoringWeights) -> float:
             factor = min(days_old / w.max_age_days_reference, 1.0)
         else:
             factor = 0.0
+        factors["age"] = round(factor, 3)
         score += w.file_age_weight * factor
 
     # --- Release date factor (older release = higher priority) ---
@@ -124,12 +124,24 @@ def score_item(item: dict, weights: ScoringWeights) -> float:
             factor = min(years_old / w.max_release_age_years_reference, 1.0)
         else:
             factor = 0.0
+        factors["release"] = round(factor, 3)
         score += w.release_date_weight * factor
 
-    if total_weight == 0:
-        return 0.0
+    total = round((score / total_weight) * 100, 2) if total_weight else 0.0
+    return {"score": total, "factors": factors, "series_watched": bool(item.get("series_watched"))}
 
-    return round((score / total_weight) * 100, 2)
+
+def score_item(item: dict, weights: ScoringWeights) -> float:
+    """
+    Returns a score from 0-100. Higher = better deletion candidate.
+
+    Watch factor (v0.30): never-watched boost only applies when *neither* the
+    item nor any sibling episode in the same series (`series_watched` /
+    `series_last_watched_at`) has been watched. Size uses a sqrt curve so
+    mid-size files aren't over-prioritized vs huge ones. Watch decay uses
+    `watch_half_life_days` instead of a hard 365-day linear ramp.
+    """
+    return score_breakdown(item, weights)["score"]
 
 
 def _series_watch_index(db) -> dict[str, dict]:

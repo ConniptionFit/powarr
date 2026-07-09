@@ -296,7 +296,7 @@ async def explain_media_stream(item_id: int, db: Session = Depends(get_db)):
                     yield f"data: {_json.dumps({'delta': full})}\n\n"
             else:
                 async for chunk in llm_assist.explain_deletion_stream(
-                        ollama.host, ollama.model_for("explain"), media_llm.item_summary(item),
+                        ollama.host, ollama.model_for("explain"), media_llm.item_summary(item, sdb),
                         ollama.api_style, template=ollama.explain_prompt,
                         verbosity=ollama.verbosity, model_size=ollama.model_size,
                         keep_alive_minutes=ollama.keep_alive_minutes,

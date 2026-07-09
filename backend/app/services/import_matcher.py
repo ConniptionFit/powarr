@@ -28,11 +28,14 @@ _SEASON_EP_RE = re.compile(r"[sS](\d{1,2})[eE](\d{1,3})")
 _SEASON_RANGE_RE = re.compile(r"\b[sS](\d{1,2})\s*-\s*[sS]?(\d{1,2})\b")
 _SEASON_ONLY_RE = re.compile(r"\b(?:[sS]|[sS]eason[ ._-])(\d{1,2})\b")
 _COMPLETE_RE = re.compile(r"\b(complete|collection|full[ ._-]?series)\b", re.IGNORECASE)
-_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 _JUNK_RE = re.compile(
-    r"\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|web[- ]?dl|webrip|bluray|blu-ray|"
-    r"remux|hdtv|dvdrip|proper|repack|amzn|dsnp|nf|atvp|hulu|flac|mp3|320|v0|aac|dts|"
-    r"truehd|atmos|dv|hdr(10)?|10bit|8bit|multi|vostfr|internal)\b", re.IGNORECASE)
+    r"\b(2160p|1080p|720p|480p|576p|4k|uhd|x264|x265|h264|h265|hevc|avc|av1|"
+    r"web[- ]?dl|webrip|bluray|blu[- ]?ray|bdrip|brrip|remux|hdtv|dvdrip|hdrip|"
+    r"proper|repack|real|amzn|dsnp|nf|atvp|hulu|hmax|pmtv|itunes|"
+    r"flac|mp3|320|v0|aac|dts|ac3|eac3|ddp?5\.?1|truehd|atmos|"
+    r"dv|hdr(10)?(\+)?|dolby|vision|10bit|8bit|multi|dual|vostfr|internal|"
+    r"sample|nfo|readnfo)\b", re.IGNORECASE)
 # Servarr "already have equal-or-better" rejection family (Sonarr episode /
 # Radarr movie / Lidarr album|track). Also Lidarr's "Album already imported"
 # which fires when the album is already in the library at equal-or-better quality.
@@ -87,8 +90,40 @@ def _get_client(name: str, row: Integration):
     return LidarrIntegration(row.url, row.api_key)
 
 
-def _normalize(title: str) -> str:
-    t = (title or "").lower()
+_QUALITY_GROUP_TAIL_RE = re.compile(
+    r"(?i)\b(?:2160p|1080p|720p|480p|576p|4k|uhd|web-?dl|webrip|bluray|blu-?ray|"
+    r"bdrip|brrip|remux|hdtv|dvdrip|x264|x265|h264|h265|hevc|av1)"
+    r"[-.][A-Za-z][\w.-]{1,30}$"
+)
+
+
+def strip_release_junk(title: str) -> str:
+    """Deterministic release-name cleaner (v0.31.0): quality/source/codec tags plus
+    common uploader/release-group wrappers. Used before title similarity so groups
+    like MeGusta / SubsPlease don't dilute the match.
+
+    Conservative on trailing groups: only strip a hyphen/dot suffix when it follows
+    a known quality token (e.g. ``1080p-MeGusta``), never a bare title word — that
+    would eat episode titles like ``The.Winds.of.Winter``.
+    """
+    t = title or ""
+    # Bracket tags: [SubsPlease], [A1B2C3D4], [1080p]
+    t = re.sub(r"\[[^\]]{0,40}\]", " ", t)
+    # Trailing parenthetical only when it looks like a hash/group, not a year
+    t = re.sub(r"\((?!(?:19|20)\d{2}\))[^)]{0,40}\)$", " ", t)
+    # Trailing -Group / .Group only after a quality/source token (replace the
+    # whole match with just the quality token — drop the group suffix).
+    t = _QUALITY_GROUP_TAIL_RE.sub(
+        lambda m: re.split(r"[-.]", m.group(0))[0], t)
+    t = _JUNK_RE.sub(" ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _normalize(title: str, *, is_release: bool = False) -> str:
+    t = title or ""
+    if is_release:
+        t = strip_release_junk(t)
+    t = t.lower()
     t = re.sub(r"[._\-\[\]()+]", " ", t)
     # *arr library titles keep punctuation (commas, colons, apostrophes) that release
     # filenames never carry — left unstripped this breaks the substring-containment
@@ -102,7 +137,7 @@ def _normalize(title: str) -> str:
 
 
 def title_similarity(release_title: str, library_title: str) -> float:
-    a, b = _normalize(release_title), _normalize(library_title)
+    a, b = _normalize(release_title, is_release=True), _normalize(library_title)
     if not a or not b:
         return 0.0
     ratio = SequenceMatcher(None, a, b).ratio()
@@ -110,6 +145,56 @@ def title_similarity(release_title: str, library_title: str) -> float:
     if b in a or a in b:
         ratio = max(ratio, 0.85)
     return min(1.0, ratio)
+
+
+def extract_release_year(title: str) -> int | None:
+    """First plausible 19xx/20xx year token in a release name, or None."""
+    m = _YEAR_RE.search(title or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def candidate_year(lib_item: dict | None, title: str | None = None) -> int | None:
+    """Year from a Sonarr/Radarr library row, falling back to a (YYYY) title suffix."""
+    if lib_item:
+        y = lib_item.get("year")
+        if isinstance(y, int) and 1900 <= y <= 2100:
+            return y
+        if isinstance(y, str) and y.isdigit():
+            yi = int(y)
+            if 1900 <= yi <= 2100:
+                return yi
+    m = re.search(r"\(((?:19|20)\d{2})\)\s*$", title or "")
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def format_alternate_titles(lib_item: dict | None, *, limit: int = 8) -> str:
+    """Compact alternateTitles list from a Sonarr/Radarr library object."""
+    if not lib_item:
+        return ""
+    alts = lib_item.get("alternateTitles") or []
+    titles: list[str] = []
+    seen: set[str] = set()
+    primary = (lib_item.get("title") or lib_item.get("artistName")
+               or lib_item.get("authorName") or "").strip().lower()
+    for a in alts:
+        t = (a.get("title") if isinstance(a, dict) else str(a) or "").strip()
+        if not t:
+            continue
+        key = t.lower()
+        if key == primary or key in seen:
+            continue
+        seen.add(key)
+        titles.append(t)
+        if len(titles) >= limit:
+            break
+    return ", ".join(titles)
 
 
 def _parse_release_numbers(title: str) -> dict:
@@ -557,12 +642,24 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     if not matched_id:
         parts.append("no library match found")
 
+    # Year hard-fail (v0.31.0): when both sides expose a year and they differ,
+    # the match is the wrong movie/show remake — zero confidence, skip LLM.
+    year_mismatch = False
+    if matched_id and app_name in ("sonarr", "radarr"):
+        rel_year = extract_release_year(raw_title)
+        cand_year = candidate_year(lib_by_id.get(matched_id), matched_title)
+        if rel_year is not None and cand_year is not None and rel_year != cand_year:
+            year_mismatch = True
+            confidence = 0.0
+            parts.append(
+                f"year mismatch (release {rel_year} vs library {cand_year}) — hard fail")
+
     # Episode/pack-level refinement — Sonarr only
     pack_label = None
     parsed = _parse_release_numbers(raw_title)
     is_pack = (app_name == "sonarr" and matched_id and parsed["episode"] is None
                and (parsed["pack_seasons"] or parsed["complete"]))
-    if is_pack:
+    if not year_mismatch and is_pack:
         # Season/complete pack: corroborate via sibling queue records sharing the
         # downloadId (free) and file/episode coverage (one-time API calls per new row)
         download_id = rec.get("downloadId")
@@ -588,7 +685,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         if not has_numeric and confidence > cfg.title_only_cap:
             confidence = cfg.title_only_cap
             parts.append(f"no numeric corroboration — confidence capped at {cfg.title_only_cap:.2f}")
-    elif app_name == "sonarr" and matched_id and rec.get("episode"):
+    elif not year_mismatch and app_name == "sonarr" and matched_id and rec.get("episode"):
         series_type = (lib_by_id.get(matched_id) or rec.get("series") or {}).get("seriesType") or ""
         ep_score, has_numeric, ep_parts = score_episode_match(raw_title, rec["episode"], series_type, cfg)
 
@@ -634,10 +731,13 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     llm_confidence = None
     llm_rationale = None
     llm_agrees = None
-    if matched_title and ollama.task_enabled("match"):
+    # Year hard-fail skips the LLM — the deterministic scorer already settled it.
+    if matched_title and not year_mismatch and ollama.task_enabled("match"):
         # Build comprehensive context: triggered series, queue state, pack info
         triggered_id = rec.get(id_key)
-        triggered_title = lib_by_id.get(triggered_id, {}).get(title_key) if triggered_id else None
+        triggered_item = lib_by_id.get(triggered_id) if triggered_id else None
+        triggered_title = triggered_item.get(title_key) if triggered_item else None
+        matched_item = lib_by_id.get(matched_id) if matched_id else None
         llm_context_parts = [
             f"Source app: {app_name}",
             f"Queue status: {_queue_messages(rec)[:150]}",
@@ -659,6 +759,13 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             llm_context_parts.append(
                 f"Item that triggered download: '{triggered_title}' — "
                 f"usually matches the candidate unless it's a season pack.")
+        alts = format_alternate_titles(matched_item)
+        if alts:
+            llm_context_parts.append(f"Library alternate titles: {alts}")
+        if triggered_item and triggered_id != matched_id:
+            trig_alts = format_alternate_titles(triggered_item)
+            if trig_alts:
+                llm_context_parts.append(f"Triggered-item alternate titles: {trig_alts}")
         if pack_label:
             llm_context_parts.append(
                 f"Download type: season pack ({pack_label}). Accepting it imports every "
@@ -1134,6 +1241,11 @@ async def _scan_once_inner(task_id: str) -> dict:
                         "messages": q_messages,
                         "match_rationale": match["match_rationale"],
                         "pack": match["pack"],
+                        # Cached for on-demand LLM rescore (v0.31.0) — avoids a
+                        # second full-library fetch just to re-inject alt titles.
+                        "alternate_titles": format_alternate_titles(
+                            next((x for x in library if x.get("id") == match["matched_id"]), None)
+                        ) if match.get("matched_id") else "",
                     }),
                     matched_title=match["matched_title"],
                     matched_id=match["matched_id"],
@@ -1397,10 +1509,23 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
             else:
                 det_summary = (row.match_rationale or "series/title heuristics only") + \
                     f" (heuristic confidence {row.heuristic_confidence})"
+            try:
+                meta = json.loads(row.raw_metadata or "{}")
+            except (ValueError, TypeError):
+                meta = {}
+            ctx_parts = [
+                f"Source app: {row.source_app}",
+                f"Queue error: {(row.message or '')[:200]}",
+            ]
+            alts = (meta.get("alternate_titles") or "").strip()
+            if alts:
+                ctx_parts.append(f"Library alternate titles: {alts}")
+            if row.pack:
+                ctx_parts.append(f"Download type: season pack ({row.pack}).")
             llm = await llm_assist.review_match(
                 ollama.host, ollama.model_for("match"), row.raw_title, row.matched_title,
                 det_summary=det_summary,
-                context=f"Source app: {row.source_app}. Queue error: {(row.message or '')[:200]}",
+                context=" | ".join(ctx_parts),
                 api_style=ollama.api_style, template=ollama.match_prompt,
                 # On-demand runs always ask for verdict + bullets (verbose tier).
                 verbosity="verbose", model_size=ollama.model_size,

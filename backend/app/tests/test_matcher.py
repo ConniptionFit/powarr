@@ -6,15 +6,22 @@ from app.schemas.settings import ImportMatchingSettings
 from app.services.import_matcher import (_normalize, title_similarity, _is_stuck, _within_grace,
                                          _parse_release_numbers, score_episode_match,
                                          score_pack_match, find_corroborating_episodes,
-                                         is_quality_downgrade, find_suspicious_files)
+                                         is_quality_downgrade, find_suspicious_files,
+                                         strip_release_junk, extract_release_year,
+                                         candidate_year, format_alternate_titles)
 
 CFG = ImportMatchingSettings()  # defaults: title 0.6 / number 0.4, anime numbering on
 
 
 class TestNormalize(unittest.TestCase):
     def test_strips_quality_junk(self):
-        self.assertEqual(_normalize("The.Fifth.Element.1997.2160p.UHD.BluRay.x265.10bit.HDR.DDP5.1-LAMA"),
-                         "the fifth element uhd ddp5 1 lama")
+        out = _normalize("The.Fifth.Element.1997.2160p.UHD.BluRay.x265.10bit.HDR.DDP5.1-LAMA",
+                         is_release=True)
+        self.assertEqual(out, "the fifth element")
+        self.assertNotIn("lama", out)
+        # Non-release path still strips quality tokens but may leave a trailing group
+        self.assertNotIn("2160p", _normalize(
+            "The.Fifth.Element.1997.2160p.UHD.BluRay.x265.10bit.HDR.DDP5.1-LAMA"))
 
     def test_strips_season_episode(self):
         self.assertNotIn("s01e05", _normalize("Show.Name.S01E05.720p.HDTV"))
@@ -31,6 +38,36 @@ class TestNormalize(unittest.TestCase):
     def test_strips_colon_and_apostrophe(self):
         self.assertNotIn(":", _normalize("Show: Subtitle"))
         self.assertNotIn("'", _normalize("Marvel's Show"))
+
+
+class TestStripReleaseJunk(unittest.TestCase):
+    def test_strips_bracket_group(self):
+        self.assertNotIn("subsplease", strip_release_junk(
+            "[SubsPlease] Anime Show - 1047 (1080p) [A1B2C3D4]").lower())
+
+    def test_strips_trailing_group(self):
+        self.assertNotIn("megusta", strip_release_junk(
+            "Show.Name.S01E01.1080p.WEB-DL-MeGusta").lower())
+
+
+class TestYearHardFail(unittest.TestCase):
+    def test_extract_release_year(self):
+        self.assertEqual(extract_release_year("Parasite.2019.2160p.BluRay"), 2019)
+        self.assertIsNone(extract_release_year("Show.S01E01.1080p"))
+
+    def test_candidate_year_from_lib_and_title(self):
+        self.assertEqual(candidate_year({"year": 1997}, "The Fifth Element"), 1997)
+        self.assertEqual(candidate_year({}, "Paradise (2025)"), 2025)
+        self.assertIsNone(candidate_year({}, "No Year Here"))
+
+    def test_format_alternate_titles(self):
+        item = {"title": "Attack on Titan",
+                "alternateTitles": [{"title": "Shingeki no Kyojin"}, {"title": "Attack on Titan"},
+                                    {"title": "進撃の巨人"}]}
+        out = format_alternate_titles(item)
+        self.assertIn("Shingeki no Kyojin", out)
+        self.assertIn("進撃の巨人", out)
+        self.assertNotEqual(out.split(",")[0].strip(), "Attack on Titan")  # primary excluded
 
 
 class TestTitleSimilarity(unittest.TestCase):
@@ -56,6 +93,10 @@ class TestTitleSimilarity(unittest.TestCase):
             "Life.Larry.and.the.Pursuit.of.Unhappiness.An.Almost.History.of.America."
             "S01E02.Farewell.1080p.AMZN.WEB-DL.DDP5.1.Atmos.H.264-RAWR",
             "Life, Larry and the Pursuit of Unhappiness")
+        self.assertGreaterEqual(s, 0.85)
+
+    def test_uploader_group_does_not_hurt_match(self):
+        s = title_similarity("Show.Name.S01E01.1080p.WEB-DL-MeGusta", "Show Name")
         self.assertGreaterEqual(s, 0.85)
 
 
