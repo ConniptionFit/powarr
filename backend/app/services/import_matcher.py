@@ -845,7 +845,8 @@ async def _scan_once_inner(task_id: str) -> dict:
     summary: dict = {"scanned": [], "new_suggestions": 0, "auto_resolved": 0, "skipped_existing": 0,
                      "below_floor": 0, "in_grace": 0, "closed_external": 0, "verified": 0,
                      "resolve_failed": 0, "orphaned": 0, "orphan_pending": 0,
-                     "quality_downgrade_auto_rejected": 0, "suspicious_auto_rejected": 0}
+                     "quality_downgrade_auto_rejected": 0, "suspicious_auto_rejected": 0,
+                     "new_suggestion_ids": []}
     db = SessionLocal()
     scanned_apps = 0
     try:
@@ -997,6 +998,8 @@ async def _scan_once_inner(task_id: str) -> dict:
                     summary["new_suggestions"] += 1
                 db.add(item)
                 db.commit()
+                if item.status == "suggested":
+                    summary["new_suggestion_ids"].append(item.id)
         await _check_orphans(db, cfg, summary)
 
         # Last-scan timestamp for the dashboard's "next scan" countdown — updated on
@@ -1043,10 +1046,47 @@ async def _notify_scan(summary: dict) -> None:
             await notifier.notify(db, "Powarr: failed-import scan",
                                   ", ".join(parts) + " — review in Cleanup → Failed Imports",
                                   priority=priority, tags="arrows_counterclockwise")
+            await _notify_actionable_suggestions(db, summary)
         finally:
             db.close()
     except Exception as e:
         logger.info(f"Scan notification failed (non-fatal): {e}")
+
+
+async def _notify_actionable_suggestions(db, summary: dict) -> None:
+    """Per-item ntfy notification with Accept/Reject action buttons (signed
+    one-time tokens, v0.26.0) — on top of the aggregate summary above. Opt-in
+    (NotificationSettings.actionable_new_suggestions) and needs a reachable
+    public_base_url to build the action links; skipped entirely otherwise.
+    Capped at actionable_max_per_scan — a big batch falls back to the aggregate
+    summary only, so a large scan doesn't fire a wall of notifications."""
+    ids = summary.get("new_suggestion_ids") or []
+    if not ids:
+        return
+    from app.services import notifier
+    cfg = notifier.load_settings(db)
+    if not cfg.actionable_new_suggestions or not cfg.public_base_url:
+        return
+    if len(ids) > cfg.actionable_max_per_scan:
+        return
+    from app.services.action_tokens import make_action_token
+    base = cfg.public_base_url.rstrip("/")
+    for item_id in ids:
+        item = db.query(FailedImport).filter_by(id=item_id).first()
+        if not item:
+            continue
+        accept_token = make_action_token(db, item_id, "accept")
+        reject_token = make_action_token(db, item_id, "reject")
+        actions = [
+            f"http, Accept, {base}/api/v1/imports/notify-action?token={accept_token}, method=GET, clear=true",
+            f"http, Reject, {base}/api/v1/imports/notify-action?token={reject_token}, method=GET, clear=true",
+        ]
+        pct = round((item.confidence or 0) * 100)
+        await notifier.notify(
+            db, f"Powarr: new suggestion — {item.raw_title[:60]}",
+            f"Matched to {item.matched_title or 'unknown'} ({pct}% confidence)",
+            priority="default", tags="mag", actions=actions,
+        )
 
 
 def blend_confidence(deterministic: float, llm: float, weight: float) -> float:

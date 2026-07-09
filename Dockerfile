@@ -10,6 +10,18 @@ RUN npm run build
 FROM python:3.12-slim AS final
 WORKDIR /app
 
+# postgresql-client-16 (matched to this deployment's Postgres 16 server, via the
+# PGDG apt repo — Debian bookworm's own repo only ships v15) for scheduled
+# pg_dump backups (v0.26.0). Build tools removed again after install.
+RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg ca-certificates \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && wget -qO /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get purge -y --auto-remove wget gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

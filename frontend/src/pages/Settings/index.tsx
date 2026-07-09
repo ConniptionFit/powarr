@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play } from "lucide-react";
-import { settingsApi, mediaApi, authApi, importsApi, type ScoringWeights, type ImportMatchingSettings,
-         type CleanupSettings, type SyncSettings, type NotificationSettings, type OllamaSettings } from "../../lib/api";
+import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup } from "lucide-react";
+import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ImportMatchingSettings,
+         type CleanupSettings, type SyncSettings, type NotificationSettings, type OllamaSettings,
+         type LlmScheduleSettings, type BackupSettings, type BackupFile } from "../../lib/api";
 
 function WeightRow({ label, field, value, onChange, description }: {
   label: string;
@@ -368,6 +369,122 @@ function SyncSection() {
           />
           <span className="text-slate-500 text-xs">hours</span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BackupSection() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["backup-settings"], queryFn: settingsApi.getBackup });
+  const { data: files } = useQuery({ queryKey: ["backup-files"], queryFn: settingsApi.listBackups });
+  const [cfg, setCfg] = useState<BackupSettings | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => { if (data) setCfg(data); }, [data]);
+
+  const save = async () => {
+    if (!cfg) return;
+    setMsg(null);
+    try {
+      await settingsApi.updateBackup(cfg);
+      qc.invalidateQueries({ queryKey: ["backup-settings"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+
+  const runNow = async () => {
+    setRunning(true);
+    setMsg(null);
+    try {
+      const r = await settingsApi.runBackupNow();
+      setMsg(r.message);
+      qc.invalidateQueries({ queryKey: ["backup-files"] });
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+    finally { setRunning(false); }
+  };
+
+  if (!cfg) return null;
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center gap-2 pt-5 pb-3">
+        <DatabaseBackup size={14} className="text-brand-light" />
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Automated Backups</h2>
+        <button
+          onClick={save}
+          className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+        >
+          <Save size={13} />
+          {saved ? "Saved!" : "Save"}
+        </button>
+      </div>
+      {msg && <p className="text-xs text-slate-300 pb-2">{msg}</p>}
+      <p className="text-slate-500 text-xs pb-3">
+        Scheduled `pg_dump` (or a plain file copy on the SQLite fallback) to <code>/config/backups</code>, on top of the manual flow in Docker &amp; Deployment.
+      </p>
+
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Enable scheduled backups</p>
+        </div>
+        <input type="checkbox" checked={cfg.enabled} className="accent-purple-500 ml-6"
+               onChange={e => setCfg(c => c ? { ...c, enabled: e.target.checked } : c)} />
+      </label>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Interval</p>
+        </div>
+        <div className="flex items-center gap-2 ml-6">
+          <input type="number" min={1} value={cfg.interval_hours}
+                 onChange={e => setCfg(c => c ? { ...c, interval_hours: Number(e.target.value) } : c)}
+                 className="w-20 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white" />
+          <span className="text-slate-500 text-xs">hours</span>
+        </div>
+      </div>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Retention</p>
+          <p className="text-slate-500 text-xs mt-0.5">Keep the most recent N backup files (0 = unlimited)</p>
+        </div>
+        <input type="number" min={0} value={cfg.retention_count}
+               onChange={e => setCfg(c => c ? { ...c, retention_count: Number(e.target.value) } : c)}
+               className="w-20 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white ml-6" />
+      </div>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Run Backup Now</p>
+        </div>
+        <button
+          onClick={runNow}
+          disabled={running}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors ml-6 disabled:opacity-50"
+        >
+          <Play size={14} />
+          {running ? "Running…" : "Run Now"}
+        </button>
+      </div>
+
+      <div className="py-4">
+        <p className="text-white text-sm font-medium mb-2">Recent Backups</p>
+        {!files || files.length === 0 ? (
+          <p className="text-slate-500 text-xs">No backups yet.</p>
+        ) : (
+          <div className="space-y-1">
+            {files.slice(0, 10).map(f => (
+              <div key={f.name} className="flex items-center justify-between text-xs text-slate-400 py-1 border-b border-purple-900/10 last:border-0">
+                <span className="font-mono truncate">{f.name}</span>
+                <span className="flex-shrink-0 ml-4">{fmtBytes(f.size)} — {fmtDate(f.modified)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -755,6 +872,116 @@ function LLMAssistSection() {
   );
 }
 
+function LlmScheduleSection() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["llm-schedule-settings"], queryFn: settingsApi.getLlmSchedule });
+  const [cfg, setCfg] = useState<LlmScheduleSettings | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => { if (data) setCfg(data); }, [data]);
+
+  if (!cfg) return null;
+
+  const save = async () => {
+    setMsg(null);
+    try {
+      await settingsApi.updateLlmSchedule(cfg);
+      qc.invalidateQueries({ queryKey: ["llm-schedule-settings"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center gap-2 pt-5 pb-3">
+        <Clock size={14} className="text-brand-light" />
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Scheduled LLM Backlog Scanning</h2>
+        <button
+          onClick={save}
+          className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+        >
+          <Save size={13} />
+          {saved ? "Saved!" : "Save"}
+        </button>
+      </div>
+      {msg && <p className="text-xs text-slate-300 pb-2">{msg}</p>}
+      <p className="text-slate-500 text-xs pb-3">
+        Automatically runs the same backlog scans as the "Run Now" buttons above, on a schedule, so you don't have to trigger them by hand. Off by default; respects the existing single-flight guard and batch pacing delay.
+      </p>
+
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Enable scheduled scanning</p>
+          <p className="text-slate-500 text-xs mt-0.5">Runs every maintenance cycle (~5 min) when due</p>
+        </div>
+        <input type="checkbox" checked={cfg.enabled} className="accent-purple-500 ml-6"
+               onChange={e => setCfg(c => c ? { ...c, enabled: e.target.checked } : c)} />
+      </label>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Mode</p>
+          <p className="text-slate-500 text-xs mt-0.5">Quiet hours = only run within a daily window; Trickle = run every cycle, any time</p>
+        </div>
+        <select
+          value={cfg.mode}
+          onChange={e => setCfg(c => c ? { ...c, mode: e.target.value } : c)}
+          className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white ml-6"
+        >
+          <option value="quiet_hours">Quiet hours window</option>
+          <option value="trickle">Always-on trickle</option>
+        </select>
+      </div>
+
+      {cfg.mode === "quiet_hours" && (
+        <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+          <div>
+            <p className="text-white text-sm font-medium">Quiet hours window (UTC)</p>
+            <p className="text-slate-500 text-xs mt-0.5">Hour of day, 0-23 — wraps past midnight if end is earlier than start</p>
+          </div>
+          <div className="flex items-center gap-2 ml-6">
+            <input type="number" min={0} max={23} value={cfg.quiet_hours_start}
+                   onChange={e => setCfg(c => c ? { ...c, quiet_hours_start: Number(e.target.value) } : c)}
+                   className="w-16 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white" />
+            <span className="text-slate-500 text-xs">to</span>
+            <input type="number" min={0} max={23} value={cfg.quiet_hours_end}
+                   onChange={e => setCfg(c => c ? { ...c, quiet_hours_end: Number(e.target.value) } : c)}
+                   className="w-16 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white" />
+          </div>
+        </div>
+      )}
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Max items per pass</p>
+          <p className="text-slate-500 text-xs mt-0.5">Combined cap across imports + candidates each time it runs</p>
+        </div>
+        <input type="number" min={1} value={cfg.max_items_per_pass}
+               onChange={e => setCfg(c => c ? { ...c, max_items_per_pass: Number(e.target.value) } : c)}
+               className="w-20 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white ml-6" />
+      </div>
+
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Scan Failed Imports backlog</p>
+        </div>
+        <input type="checkbox" checked={cfg.scan_imports} className="accent-purple-500 ml-6"
+               onChange={e => setCfg(c => c ? { ...c, scan_imports: e.target.checked } : c)} />
+      </label>
+
+      <label className="py-4 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Scan Cleanup deletion-rationale backlog</p>
+        </div>
+        <input type="checkbox" checked={cfg.scan_media} className="accent-purple-500 ml-6"
+               onChange={e => setCfg(c => c ? { ...c, scan_media: e.target.checked } : c)} />
+      </label>
+    </div>
+  );
+}
+
 function SecuritySection() {
   const qc = useQueryClient();
   const { data: status } = useQuery({ queryKey: ["auth-status"], queryFn: authApi.status });
@@ -1022,6 +1249,31 @@ function NotificationsSection() {
                    className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
           </div>
         </div>
+        <div className="pt-2 border-t border-purple-900/20">
+          <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={cfg.actionable_new_suggestions}
+                   onChange={e => setCfg(c => c ? { ...c, actionable_new_suggestions: e.target.checked } : c)}
+                   className="accent-purple-500" />
+            Send an Accept/Reject actionable notification per new suggestion
+          </label>
+          <p className="text-slate-500 text-xs mt-1 mb-2">
+            Adds click-to-act buttons via signed one-time links (7-day expiry). Needs a URL the ntfy client can reach — falls back to the aggregate summary above if blank, or if a scan produces more than the max below.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-slate-400 mb-1 block">Public Base URL</label>
+              <input type="text" placeholder="https://powarr.pwrs.dev" value={cfg.public_base_url}
+                     onChange={e => setCfg(c => c ? { ...c, public_base_url: e.target.value } : c)}
+                     className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 mb-1 block">Max Actionable per Scan</label>
+              <input type="number" min={1} value={cfg.actionable_max_per_scan}
+                     onChange={e => setCfg(c => c ? { ...c, actionable_max_per_scan: Number(e.target.value) } : c)}
+                     className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
+            </div>
+          </div>
+        </div>
         <div className="flex gap-2">
           <button
             onClick={async () => {
@@ -1117,8 +1369,10 @@ export default function SettingsPage() {
 
       <ImportMatchingSection />
       <LLMAssistSection />
+      <LlmScheduleSection />
       <CleanupSection />
       <SyncSection />
+      <BackupSection />
       <NotificationsSection />
       <SecuritySection />
     </div>

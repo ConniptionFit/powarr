@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from app.database import SessionLocal
 from app.models.app_setting import AppSetting
 from app.models.media import MediaItem
-from app.schemas.settings import CleanupSettings, SyncSettings
+from app.schemas.settings import CleanupSettings, SyncSettings, LlmScheduleSettings, BackupSettings
 
 logger = logging.getLogger("powarr")
 
@@ -64,6 +64,69 @@ async def _scheduled_plex_sync(db) -> None:
     logger.info(f"Scheduled Plex sync: {result}")
 
 
+def in_quiet_hours(hour: int, start: int, end: int) -> bool:
+    """Pure hour-of-day window check (0-23), wrapping past midnight when
+    end <= start (e.g. start=22, end=6 covers 22:00-05:59). end == start means
+    the window is the single hour `start` only, never a full-day window —
+    matches the plain-English "quiet hours are 1am to 1am" reading of an empty
+    span rather than silently meaning "always on"."""
+    start, end, hour = start % 24, end % 24, hour % 24
+    if start == end:
+        return hour == start
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+async def _scheduled_llm_run(db) -> None:
+    cfg = _get_setting(db, "llm_schedule", LlmScheduleSettings)
+    if not cfg.enabled:
+        return
+    if cfg.mode == "quiet_hours" and not in_quiet_hours(
+        datetime.utcnow().hour, cfg.quiet_hours_start, cfg.quiet_hours_end
+    ):
+        return
+    remaining = max(0, cfg.max_items_per_pass)
+    if remaining == 0:
+        return
+    from app.services import llm_assist
+    if llm_assist.slot_active():
+        return  # an on-demand run (or a previous scheduled pass) is active — try next cycle
+    if cfg.scan_imports:
+        from app.services.import_matcher import llm_rescore
+        result = await llm_rescore(ids=None, limit=remaining)
+        remaining -= result.get("scored", 0) + result.get("skipped", 0)
+    if cfg.scan_media and remaining > 0:
+        from app.services.media_llm import llm_media_run
+        await llm_media_run(ids=None, limit=remaining)
+
+
+async def _scheduled_backup(db) -> None:
+    cfg = _get_setting(db, "backup", BackupSettings)
+    if not cfg.enabled or cfg.interval_hours <= 0:
+        return
+    row = db.query(AppSetting).filter_by(key="last_backup").first()
+    if row and row.value:
+        try:
+            last = datetime.fromisoformat(row.value)
+            if datetime.utcnow() - last < timedelta(hours=cfg.interval_hours):
+                return
+        except ValueError:
+            pass
+    from app.services.backup import run_backup, prune_backups
+    result = await run_backup()
+    if not result["ok"]:
+        logger.error(f"Scheduled backup failed: {result['message']}")
+        return
+    if not row:
+        row = AppSetting(key="last_backup")
+        db.add(row)
+    row.value = datetime.utcnow().isoformat()
+    db.commit()
+    pruned = prune_backups(cfg.retention_count)
+    logger.info(f"Scheduled backup: {result['message']}" + (f", pruned {pruned} old backup(s)" if pruned else ""))
+
+
 async def maintenance_loop():
     logger.info("Maintenance scheduler started")
     while True:
@@ -72,6 +135,8 @@ async def maintenance_loop():
             try:
                 await _purge_due_soft_deletes(db)
                 await _scheduled_plex_sync(db)
+                await _scheduled_llm_run(db)
+                await _scheduled_backup(db)
             finally:
                 db.close()
         except asyncio.CancelledError:

@@ -88,10 +88,41 @@ class SyncSettings(BaseModel):
     plex_sync_interval_hours: int = 0  # 0 = manual sync only
 
 
+class LlmScheduleSettings(BaseModel):
+    # Automatic LLM backlog scanning during downtime, on top of the existing
+    # on-demand "Run Now" paths (v0.4.0/v0.9.0). Off by default — this is purely
+    # additive scheduling around llm_rescore()/llm_media_run(), which already
+    # enforce single-flight + batch_delay_ms, so no separate rate limiting is
+    # needed here.
+    enabled: bool = False
+    mode: str = "quiet_hours"  # "quiet_hours" (only within a daily window) | "trickle" (every maintenance cycle)
+    quiet_hours_start: int = 0  # UTC hour, 0-23 inclusive — server runs UTC in Docker by default
+    quiet_hours_end: int = 6  # UTC hour, 0-23 — window wraps past midnight when <= start
+    max_items_per_pass: int = 20  # combined cap across imports + media per maintenance cycle (every 5 min)
+    scan_imports: bool = True  # include the Failed Import Matching backlog
+    scan_media: bool = True  # include the Cleanup deletion-rationale backlog
+
+
+class BackupSettings(BaseModel):
+    # Scheduled pg_dump (or SQLite file copy) to {data_dir}/backups/, on top of
+    # the existing manual `docker exec postgres pg_dump ...` flow documented in
+    # Docker & Deployment. Off by default.
+    enabled: bool = False
+    interval_hours: int = 24
+    retention_count: int = 7  # keep the most recent N backup files; 0 = unlimited
+
+
 class NotificationSettings(BaseModel):
     enabled: bool = False
     ntfy_url: str = ""  # e.g. http://10.1.1.2:8091
     topic: str = "powarr"
+    # Click-to-act links (v0.26.0) — Accept/Reject buttons on a new-suggestion
+    # ntfy notification, via signed one-time tokens (see action_tokens.py).
+    # Needs a reachable public_base_url to build the action URLs; both default
+    # off/blank so nothing changes until explicitly configured.
+    public_base_url: str = ""  # e.g. https://powarr.pwrs.dev — must be reachable by the ntfy client
+    actionable_new_suggestions: bool = False
+    actionable_max_per_scan: int = 5  # a scan with more new suggestions than this falls back to the aggregate summary only
 
 
 class IntegrationConfig(BaseModel):

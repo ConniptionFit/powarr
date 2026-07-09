@@ -15,11 +15,13 @@ logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.25.0", docs_url="/api/docs")
+app = FastAPI(title="Powarr", version="0.26.0", docs_url="/api/docs")
 
-# Paths that stay reachable without a session: the auth flow itself, and the
-# health endpoint (Docker healthcheck probes from inside the container).
-_AUTH_EXEMPT = ("/api/v1/auth/", "/api/v1/system/health")
+# Paths that stay reachable without a session: the auth flow itself, the
+# health endpoint (Docker healthcheck probes from inside the container), and
+# the ntfy click-to-act notification target (v0.26.0) — gated by its own
+# signed, expiring, single-action token instead of a session.
+_AUTH_EXEMPT = ("/api/v1/auth/", "/api/v1/system/health", "/api/v1/imports/notify-action")
 
 
 @app.middleware("http")

@@ -150,6 +150,28 @@ export interface OllamaSettings {
   explain_prompt: string;
 }
 
+export interface LlmScheduleSettings {
+  enabled: boolean;
+  mode: string; // "quiet_hours" | "trickle"
+  quiet_hours_start: number; // UTC hour 0-23
+  quiet_hours_end: number; // UTC hour 0-23
+  max_items_per_pass: number;
+  scan_imports: boolean;
+  scan_media: boolean;
+}
+
+export interface BackupSettings {
+  enabled: boolean;
+  interval_hours: number;
+  retention_count: number;
+}
+
+export interface BackupFile {
+  name: string;
+  size: number;
+  modified: string;
+}
+
 export interface CleanupSettings {
   excluded_libraries: string[];
   soft_delete_days: number;
@@ -164,6 +186,9 @@ export interface NotificationSettings {
   enabled: boolean;
   ntfy_url: string;
   topic: string;
+  public_base_url: string;
+  actionable_new_suggestions: boolean;
+  actionable_max_per_scan: number;
 }
 
 export const settingsApi = {
@@ -176,6 +201,14 @@ export const settingsApi = {
   getOllama: () => req<OllamaSettings>("/settings/ollama"),
   updateOllama: (s: OllamaSettings) =>
     req<OllamaSettings>("/settings/ollama", { method: "PUT", body: JSON.stringify(s) }),
+  getLlmSchedule: () => req<LlmScheduleSettings>("/settings/llm-schedule"),
+  updateLlmSchedule: (s: LlmScheduleSettings) =>
+    req<LlmScheduleSettings>("/settings/llm-schedule", { method: "PUT", body: JSON.stringify(s) }),
+  getBackup: () => req<BackupSettings>("/settings/backup"),
+  updateBackup: (s: BackupSettings) =>
+    req<BackupSettings>("/settings/backup", { method: "PUT", body: JSON.stringify(s) }),
+  runBackupNow: () => req<{ ok: boolean; path: string | null; message: string }>("/settings/backup/run", { method: "POST" }),
+  listBackups: () => req<BackupFile[]>("/settings/backup/list"),
   getCleanup: () => req<CleanupSettings>("/settings/cleanup"),
   updateCleanup: (s: CleanupSettings) =>
     req<CleanupSettings>("/settings/cleanup", { method: "PUT", body: JSON.stringify(s) }),

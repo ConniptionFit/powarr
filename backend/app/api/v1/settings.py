@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.app_setting import AppSetting
 from app.schemas.settings import (ScoringWeights, ImportMatchingSettings, OllamaSettings,
-                                  CleanupSettings, SyncSettings, NotificationSettings)
+                                  CleanupSettings, SyncSettings, NotificationSettings,
+                                  LlmScheduleSettings, BackupSettings)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -73,6 +74,51 @@ def get_ollama(db: Session = Depends(get_db)):
 def update_ollama(body: OllamaSettings, db: Session = Depends(get_db)):
     _put_json_setting(db, "ollama", body)
     return body
+
+
+@router.get("/llm-schedule", response_model=LlmScheduleSettings)
+def get_llm_schedule(db: Session = Depends(get_db)):
+    return _get_json_setting(db, "llm_schedule", LlmScheduleSettings)
+
+
+@router.put("/llm-schedule", response_model=LlmScheduleSettings)
+def update_llm_schedule(body: LlmScheduleSettings, db: Session = Depends(get_db)):
+    _put_json_setting(db, "llm_schedule", body)
+    return body
+
+
+@router.get("/backup", response_model=BackupSettings)
+def get_backup(db: Session = Depends(get_db)):
+    return _get_json_setting(db, "backup", BackupSettings)
+
+
+@router.put("/backup", response_model=BackupSettings)
+def update_backup(body: BackupSettings, db: Session = Depends(get_db)):
+    _put_json_setting(db, "backup", body)
+    return body
+
+
+@router.post("/backup/run")
+async def run_backup_now(db: Session = Depends(get_db)):
+    from app.services.backup import run_backup, prune_backups
+    result = await run_backup()
+    if result["ok"]:
+        cfg = _get_json_setting(db, "backup", BackupSettings)
+        prune_backups(cfg.retention_count)
+        row = db.query(AppSetting).filter_by(key="last_backup").first()
+        if not row:
+            row = AppSetting(key="last_backup")
+            db.add(row)
+        import datetime as _dt
+        row.value = _dt.datetime.utcnow().isoformat()
+        db.commit()
+    return result
+
+
+@router.get("/backup/list")
+def list_backup_files():
+    from app.services.backup import list_backups
+    return list_backups()
 
 
 @router.get("/cleanup", response_model=CleanupSettings)

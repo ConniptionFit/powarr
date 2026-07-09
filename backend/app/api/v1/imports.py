@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -17,6 +17,32 @@ router = APIRouter(prefix="/imports", tags=["imports"])
 
 STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "closed_external",
             "resolve_failed", "orphan_pending", "orphaned")
+
+
+@router.get("/notify-action")
+async def notify_action(token: str, db: Session = Depends(get_db)):
+    """Click-to-act target for the ntfy Accept/Reject notification buttons
+    (v0.26.0) — auth-exempt (see main.py's _AUTH_EXEMPT) since the click comes
+    from the ntfy client/app, not a browser session; a signed, expiring,
+    action-scoped token is the gate instead. Explicitly re-checks the row's
+    status (rather than trusting _accept/_reject, which have no such guard) so
+    a stale or replayed link is a safe no-op instead of a duplicate *arr push."""
+    from app.services.action_tokens import verify_action_token
+    result = verify_action_token(db, token)
+    if not result:
+        return HTMLResponse("<h3>This link has expired or is invalid.</h3>", status_code=400)
+    item_id, action = result
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        return HTMLResponse("<h3>This suggestion no longer exists.</h3>", status_code=404)
+    if item.status not in ("suggested", "resolve_failed"):
+        return HTMLResponse(f"<h3>Already {item.status.replace('_', ' ')} — no action taken.</h3>")
+    try:
+        result_data = await _accept(item_id, db) if action == "accept" else _reject(item_id, db)
+    except HTTPException as e:
+        return HTMLResponse(f"<h3>Couldn't {action} '{item.raw_title}'.</h3><p>{e.detail}</p>", status_code=e.status_code)
+    verb = "accepted" if action == "accept" else "rejected"
+    return HTMLResponse(f"<h3>'{item.raw_title}' {verb}.</h3><p>{result_data.get('message', '')}</p>")
 
 
 @router.get("", response_model=list[FailedImportOut])

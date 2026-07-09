@@ -18,7 +18,11 @@ def load_settings(db) -> NotificationSettings:
     return NotificationSettings(**json.loads(row.value))
 
 
-async def notify(db, title: str, message: str, priority: str = "default", tags: str = "") -> bool:
+async def notify(db, title: str, message: str, priority: str = "default", tags: str = "",
+                 actions: list[str] | None = None) -> bool:
+    """`actions` is a list of ntfy action specs (e.g. "http, Accept, <url>,
+    method=GET, clear=true") — joined into the `Actions` header. See
+    https://docs.ntfy.sh/publish/#action-buttons. Click-to-act links (v0.26.0)."""
     cfg = load_settings(db)
     if not cfg.enabled or not cfg.ntfy_url or not cfg.topic:
         return False
@@ -26,6 +30,8 @@ async def notify(db, title: str, message: str, priority: str = "default", tags: 
     headers = {"Title": title, "Priority": priority}
     if tags:
         headers["Tags"] = tags
+    if actions:
+        headers["Actions"] = "; ".join(actions)
     try:
         async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
             r = await client.post(url, content=message.encode(), headers=headers)
