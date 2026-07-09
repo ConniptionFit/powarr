@@ -386,6 +386,7 @@ export default function FailedImports() {
   const [statusFilter, setStatusFilter] = usePersistedState<string>("powarr.failedImports.statusFilter", "suggested");
   const [scanning, setScanning] = useState(false);
   const [confirmAccept, setConfirmAccept] = useState<number | null>(null);
+  const [acceptingIds, setAcceptingIds] = useState<Set<number>>(new Set()); // per-item Pushing… (v0.33.0)
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [llmQueued, setLlmQueued] = useState<number | null>(null); // queue position, null = not queued
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -516,8 +517,10 @@ export default function FailedImports() {
           const parts = [`${data.ok ?? 0} imported`];
           if (data.orphaned) parts.push(`${data.orphaned} gone (orphaned)`);
           if (data.failed) parts.push(`${data.failed} failed`);
-          setActionMsg(`Batch import finished: ${parts.join(", ")}`);
+          setActionMsg(`Import finished: ${parts.join(", ")}`);
           setSelected(new Set());
+          setAcceptingIds(new Set());
+          setConfirmAccept(null);
         }
       } catch { /* keepalive */ }
     };
@@ -526,8 +529,28 @@ export default function FailedImports() {
 
   const acceptMut = useMutation({
     mutationFn: (id: number) => importsApi.accept(id),
-    onSuccess: r => { setActionMsg(r.ok ? `Import pushed: ${r.message}` : `Push failed: ${r.message}`); setConfirmAccept(null); invalidate(); },
-    onError: (e: Error) => { setActionMsg(`Accept failed: ${e.message}`); setConfirmAccept(null); },
+    onMutate: (id) => {
+      setAcceptingIds(prev => new Set(prev).add(id));
+      setConfirmAccept(null);
+    },
+    onSuccess: (r, id) => {
+      if (r.async) {
+        setActionMsg(
+          r.coalesced
+            ? `Queued — now importing ${r.total ?? "?"} item(s) (Active Processes)`
+            : `Importing ${r.total ?? 1} item(s) — progress in Active Processes`,
+        );
+        // Keep acceptingIds until import_batch SSE clears them
+        return;
+      }
+      setAcceptingIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+      setActionMsg(r.ok ? `Import pushed: ${r.message}` : `Push failed: ${r.message}`);
+      invalidate();
+    },
+    onError: (e: Error, id) => {
+      setAcceptingIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+      setActionMsg(`Accept failed: ${e.message}`);
+    },
   });
 
   const rejectMut = useMutation({
@@ -540,16 +563,41 @@ export default function FailedImports() {
 
   const batchMut = useMutation({
     mutationFn: ({ ids, action }: { ids: number[]; action: "accept" | "reject" | "confirm_orphan" }) => importsApi.batch(ids, action),
+    onMutate: (vars) => {
+      if (vars.action === "accept") {
+        setAcceptingIds(prev => {
+          const n = new Set(prev);
+          for (const id of vars.ids) n.add(id);
+          return n;
+        });
+      }
+    },
     onSuccess: (r, vars) => {
       if (r.async && r.task_id) {
-        setActionMsg(`Importing ${r.total ?? vars.ids.length} item(s) — progress in Active Processes`);
-        // Selection cleared when the import_batch SSE event arrives
+        setActionMsg(
+          r.coalesced
+            ? `Queued — now importing ${r.total ?? vars.ids.length} item(s) (Active Processes)`
+            : `Importing ${r.total ?? vars.ids.length} item(s) — progress in Active Processes`,
+        );
+        // Selection / acceptingIds cleared when the import_batch SSE event arrives
         return;
       }
+      setAcceptingIds(prev => {
+        const n = new Set(prev);
+        for (const id of vars.ids) n.delete(id);
+        return n;
+      });
       setActionMsg(`Batch done: ${r.results.length} item(s) processed`);
       invalidate();
     },
-    onError: (e: Error) => setActionMsg(`Batch failed: ${e.message}`),
+    onError: (e: Error, vars) => {
+      setAcceptingIds(prev => {
+        const n = new Set(prev);
+        for (const id of vars.ids) n.delete(id);
+        return n;
+      });
+      setActionMsg(`Batch failed: ${e.message}`);
+    },
   });
 
   const processEligible = () => {
@@ -1042,18 +1090,17 @@ export default function FailedImports() {
                         )}
                         {actionable && (
                           <div className="flex items-center gap-1.5 justify-end">
-                            {confirmAccept === item.id ? (
+                            {acceptingIds.has(item.id) ? (
+                              <span className="px-2 py-1 text-green-400 text-xs tabular-nums">Pushing…</span>
+                            ) : confirmAccept === item.id ? (
                               <div className="flex gap-1">
                                 <button
                                   onClick={() => acceptMut.mutate(item.id)}
-                                  disabled={acceptMut.isPending}
-                                  className="px-2 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-xs disabled:opacity-50"
+                                  className="px-2 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-xs"
                                 >
-                                  {acceptMut.isPending
-                                    ? "Pushing…"
-                                    : item.partial_import
-                                      ? "Import Missing/Upgrades"
-                                      : "Confirm Import"}
+                                  {item.partial_import
+                                    ? "Import Missing/Upgrades"
+                                    : "Confirm Import"}
                                 </button>
                                 <button onClick={() => setConfirmAccept(null)} className="px-2 py-1 bg-surface-overlay hover:bg-white/10 text-slate-300 rounded text-xs">Cancel</button>
                               </div>

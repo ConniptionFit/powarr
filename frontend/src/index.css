@@ -18,3 +18,10 @@ body {
   100% { transform: translateX(350%); }
 }
 .progress-indeterminate { animation: progress-indeterminate 1.3s ease-in-out infinite; }
+
+/* Stacked tray cards slide up from the corner when a new kind appears (v0.33.0). */
+@keyframes tray-card-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.tray-card-enter { animation: tray-card-enter 220ms ease-out both; }

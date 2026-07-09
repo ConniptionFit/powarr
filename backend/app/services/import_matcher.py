@@ -1485,45 +1485,92 @@ def llm_run_active() -> bool:
 _llm_queue: list[list[int] | None] = []
 
 
+# Shared tray card for coalesced on-demand LLM runs (v0.33.0) — additional
+# Run-LLM clicks bump this card's total instead of stacking duplicate llm_run cards.
+_llm_tray_task_id: str | None = None
+_llm_tray_scored = 0
+_llm_tray_skipped = 0
+
+
+def _estimate_llm_items(ids: list[int] | None, limit: int = 50) -> int:
+    if ids:
+        return min(len(ids), limit)
+    return 1  # backlog size unknown until the run opens a DB session
+
+
 def queue_llm_run(ids: list[int] | None) -> int:
-    """Append a pending on-demand run; returns its 1-based position in the queue."""
+    """Append a pending on-demand run; returns its 1-based position in the queue.
+    Bumps the running llm_run tray card's total when one exists (v0.33.0)."""
+    from app.services import tasks
     _llm_queue.append(ids)
-    publish({"type": "llm_queued", "position": len(_llm_queue)})
-    return len(_llm_queue)
+    position = len(_llm_queue)
+    add = _estimate_llm_items(ids)
+    if _llm_tray_task_id and tasks.get_task(_llm_tray_task_id):
+        t = tasks.get_task(_llm_tray_task_id)
+        if t and t.status == "running":
+            new_total = (t.total or 0) + add
+            tasks.bump_total(
+                _llm_tray_task_id, add,
+                label=f"Scoring {new_total} import(s) with the LLM",
+                message=f"+{add} queued (position {position}) — {new_total} total",
+            )
+    publish({"type": "llm_queued", "position": position})
+    return position
 
 
 def llm_queue_depth() -> int:
     return len(_llm_queue)
 
 
-async def llm_rescore(ids: list[int] | None = None, limit: int = 50) -> dict:
+async def llm_rescore(ids: list[int] | None = None, limit: int = 50,
+                      *, continue_tray: bool = False) -> dict:
     """On-demand LLM scoring of failed-import rows — either the given ids, or the
     backlog of open rows that never got an LLM signal. Sequential (one call at a
     time) to be gentle on the LLM host. Publishes an SSE event when done, and when
     it releases the slot pulls the next queued run (if any) automatically. Thin
     wrapper around _llm_rescore_inner() so the tracked task always resolves
-    (done/failed) without a third level of nested try/finally."""
+    (done/failed) without a third level of nested try/finally.
+
+    continue_tray (v0.33.0): when True, reuse the existing coalesced llm_run tray
+    card instead of creating a new one (used when draining the on-demand queue).
+    """
+    global _llm_tray_task_id, _llm_tray_scored, _llm_tray_skipped
     if not llm_assist.acquire_slot():
         return {"scored": 0, "skipped": 0, "message": "An LLM run is already in progress"}
     publish({"type": "llm_run_started"})
     from app.services import tasks
-    task_id = tasks.create_task("llm_run", "Scoring imports with the LLM")
+    if continue_tray and _llm_tray_task_id and tasks.get_task(_llm_tray_task_id) \
+            and tasks.get_task(_llm_tray_task_id).status == "running":
+        task_id = _llm_tray_task_id
+    else:
+        _llm_tray_scored = _llm_tray_skipped = 0
+        est = _estimate_llm_items(ids, limit)
+        task_id = tasks.create_task(
+            "llm_run", f"Scoring {est} import(s) with the LLM", total=est)
+        _llm_tray_task_id = task_id
     try:
         result = await _llm_rescore_inner(ids, limit, task_id)
-        tasks.finish_task(task_id, "done", result["message"])
+        # Only finish the tray card when nothing else is queued behind us.
+        if not _llm_queue:
+            tasks.finish_task(
+                task_id, "done",
+                f"{_llm_tray_scored} scored, {_llm_tray_skipped} skipped")
+            _llm_tray_task_id = None
         return result
     except Exception as e:
         tasks.finish_task(task_id, "failed", str(e))
+        _llm_tray_task_id = None
         raise
     finally:
         llm_assist.release_slot()
         if _llm_queue:
             next_ids = _llm_queue.pop(0)
             from app.services import tasks
-            tasks.spawn_background(llm_rescore(next_ids))
+            tasks.spawn_background(llm_rescore(next_ids, continue_tray=True))
 
 
 async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) -> dict:
+    global _llm_tray_scored, _llm_tray_skipped
     from app.services import tasks
     scored = skipped = 0
     db = SessionLocal()
@@ -1538,11 +1585,25 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
             q = q.filter(FailedImport.status.in_(("suggested", "resolve_failed")),
                          FailedImport.llm_confidence.is_(None))
         rows = q.order_by(FailedImport.created_at.desc()).limit(limit).all()
-        tasks.update_task(task_id, total=len(rows))
+        # Align tray total with the real row count for this batch (may differ from
+        # the estimate used at create/bump time). Never shrink below current.
+        t = tasks.get_task(task_id)
+        base_current = (t.current or 0) if t else 0
+        needed = base_current + len(rows)
+        if t and (t.total or 0) < needed:
+            tasks.update_task(task_id, total=needed,
+                              label=f"Scoring {needed} import(s) with the LLM")
+        elif t and not t.total:
+            tasks.update_task(task_id, total=len(rows),
+                              label=f"Scoring {len(rows)} import(s) with the LLM")
         for i, row in enumerate(rows, 1):
+            cur = base_current + i
             if not row.matched_title:
                 skipped += 1
-                tasks.update_task(task_id, current=i)
+                _llm_tray_skipped += 1
+                tasks.update_task(
+                    task_id, current=cur,
+                    message=f"{_llm_tray_scored} scored, {_llm_tray_skipped} skipped")
                 continue
             if row.heuristic_confidence is None:
                 row.heuristic_confidence = row.confidence
@@ -1581,7 +1642,10 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 **llm_assist.inference_kwargs(ollama))
             if not llm:
                 skipped += 1
-                tasks.update_task(task_id, current=i, message=f"{scored} scored, {skipped} skipped")
+                _llm_tray_skipped += 1
+                tasks.update_task(
+                    task_id, current=cur,
+                    message=f"{_llm_tray_scored} scored, {_llm_tray_skipped} skipped")
                 continue
             row.llm_confidence = round(
                 max(0.0, min(1.0, row.heuristic_confidence + llm["confidence_adjustment"])), 3)
@@ -1591,7 +1655,10 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                                               cfg.llm_blend_weight)
             db.commit()
             scored += 1
-            tasks.update_task(task_id, current=i, message=f"{scored} scored, {skipped} skipped")
+            _llm_tray_scored += 1
+            tasks.update_task(
+                task_id, current=cur,
+                message=f"{_llm_tray_scored} scored, {_llm_tray_skipped} skipped")
             if ollama.batch_delay_ms > 0:
                 await asyncio.sleep(ollama.batch_delay_ms / 1000)
     finally:

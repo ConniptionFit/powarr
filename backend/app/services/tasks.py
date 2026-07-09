@@ -65,6 +65,18 @@ def create_task(kind: str, label: str, total: Optional[int] = None) -> str:
     return task_id
 
 
+def get_task(task_id: str) -> Optional[TaskProgress]:
+    return _tasks.get(task_id)
+
+
+def find_running(kind: str) -> Optional[TaskProgress]:
+    """Most recently started running task of this kind (v0.33.0 coalesce helper)."""
+    running = [t for t in _tasks.values() if t.status == "running" and t.kind == kind]
+    if not running:
+        return None
+    return max(running, key=lambda t: t.started_at)
+
+
 def update_task(task_id: str, current: Optional[int] = None, total: Optional[int] = None,
                 message: Optional[str] = None, label: Optional[str] = None) -> None:
     task = _tasks.get(task_id)
@@ -78,6 +90,20 @@ def update_task(task_id: str, current: Optional[int] = None, total: Optional[int
         task.message = message
     if label is not None:
         task.label = label
+    publish({"type": "task_update", "task": task.model_dump()})
+
+
+def bump_total(task_id: str, add: int = 1, *, label: Optional[str] = None,
+               message: Optional[str] = None) -> None:
+    """Grow a running task's total when more work is coalesced onto it (v0.33.0)."""
+    task = _tasks.get(task_id)
+    if not task or task.status != "running" or add <= 0:
+        return
+    task.total = (task.total or 0) + add
+    if label is not None:
+        task.label = label
+    if message is not None:
+        task.message = message
     publish({"type": "task_update", "task": task.model_dump()})
 
 

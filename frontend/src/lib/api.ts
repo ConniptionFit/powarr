@@ -366,12 +366,15 @@ export const importsApi = {
   autoEligible: () => req<AutoEligible>("/imports/auto-eligible"),
   scan: () => req<Record<string, unknown>>("/imports/scan", { method: "POST" }),
   accept: (id: number) =>
-    req<{ id: number; status: string; ok: boolean; message: string }>(`/imports/${id}/accept`, { method: "POST" }),
+    req<{ async?: boolean; task_id?: string; total?: number; added?: number; coalesced?: boolean;
+          ok?: boolean; message?: string; status?: string; id?: number }>(
+      `/imports/${id}/accept`, { method: "POST" }),
   reject: (id: number, removeDownload = false) =>
     req<{ id: number; status: string; download_client?: string[] }>(
       `/imports/${id}/reject?remove_download=${removeDownload}`, { method: "POST" }),
   batch: (ids: number[], action: "accept" | "reject" | "confirm_orphan") =>
-    req<{ async?: boolean; task_id?: string; total?: number; results: Array<Record<string, unknown>> }>("/imports/batch", {
+    req<{ async?: boolean; task_id?: string; total?: number; added?: number; coalesced?: boolean;
+          results: Array<Record<string, unknown>> }>("/imports/batch", {
       method: "POST", body: JSON.stringify({ ids, action }),
     }),
   confirmOrphan: (id: number) =>

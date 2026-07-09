@@ -293,44 +293,73 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
     return {"matches": matches or [], "file_count": len(file_names)}
 
 
-@router.post("/batch")
-async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db)):
-    """Accept / reject / confirm_orphan several suggestions at once.
+# Coalesced accept queue (v0.33.0): single-item Accept and batch Accept share one
+# running import_batch tray card; additional Accepts bump total instead of stacking
+# duplicate cards of the same kind. Different kinds (LLM vs import) still stack.
+_accept_lock = asyncio.Lock()
+_accept_pending: list[int] = []
+_accept_task_id: str | None = None
+_accept_worker_running = False
 
-    Body: {"ids": [...], "action": "accept"|"reject"|"confirm_orphan"}.
-    Accept runs in the background (v0.28.0) so large batches don't 504 at the
-    reverse proxy — returns {async: true, task_id, total} immediately; progress
-    lands in the Active Processes tray via the tasks SSE bus. Reject and
-    confirm_orphan stay synchronous (cheap DB writes).
-    """
+
+async def _enqueue_accepts(ids: list[int]) -> dict:
+    """Append ids to the coalesced accept queue; start a worker if needed.
+    Returns {async, task_id, total, added, coalesced} for the API response.
+    Locked so concurrent Accepts can't spawn duplicate workers/cards."""
+    global _accept_task_id, _accept_worker_running
     from app.services import tasks
-    ids = payload.get("ids") or []
-    action = payload.get("action")
-    if action not in ("accept", "reject", "confirm_orphan") or not ids:
-        raise HTTPException(status_code=400, detail="Body must be {ids: [...], action: accept|reject|confirm_orphan}")
-    if action == "accept":
-        task_id = tasks.create_task("import_batch", f"Importing {len(ids)} item(s)", total=len(ids))
-        tasks.spawn_background(_batch_accept_bg(list(ids), task_id))
-        return {"async": True, "task_id": task_id, "total": len(ids), "results": []}
-    results = []
-    for item_id in ids:
-        try:
-            if action == "confirm_orphan":
-                results.append(_confirm_orphan(item_id, db))
+    async with _accept_lock:
+        pending_set = set(_accept_pending)
+        added = [i for i in ids if i not in pending_set]
+        _accept_pending.extend(added)
+        t = tasks.get_task(_accept_task_id) if _accept_task_id else None
+        # Live card: bump total so the tray count grows as more Accepts land.
+        if t and t.status == "running" and _accept_worker_running:
+            if added:
+                total = (t.total or 0) + len(added)
+                tasks.bump_total(
+                    _accept_task_id, len(added),
+                    label=f"Importing {total} item(s)",
+                    message=f"+{len(added)} queued — {total} total",
+                )
             else:
-                results.append(_reject(item_id, db))
-        except HTTPException as e:
-            results.append({"id": item_id, "error": e.detail})
-    return {"async": False, "results": results}
+                total = t.total or 0
+            return {"async": True, "task_id": _accept_task_id, "total": total,
+                    "added": len(added), "coalesced": True, "results": []}
+        # Worker is shutting down (or between finish and finally) — leave items
+        # in pending; the worker's finally block starts the next card+worker.
+        if _accept_worker_running:
+            return {"async": True, "task_id": _accept_task_id or "",
+                    "total": (t.total if t else 0) or len(_accept_pending),
+                    "added": len(added), "coalesced": True, "results": []}
+        # Idle — open a fresh tray card and worker.
+        total = len(_accept_pending)
+        if total == 0:
+            return {"async": True, "task_id": "", "total": 0,
+                    "added": 0, "coalesced": False, "results": []}
+        _accept_task_id = tasks.create_task(
+            "import_batch", f"Importing {total} item(s)", total=total)
+        _accept_worker_running = True
+        tasks.spawn_background(_accept_worker())
+        return {"async": True, "task_id": _accept_task_id, "total": total,
+                "added": len(added), "coalesced": False, "results": []}
 
 
-async def _batch_accept_bg(ids: list[int], task_id: str) -> None:
-    """Background accept loop — own SessionLocal per item so a long batch
-    doesn't hold one transaction open across many *arr round-trips."""
+async def _accept_worker() -> None:
+    """Drain the coalesced accept queue; own SessionLocal per item."""
+    global _accept_worker_running, _accept_task_id
     from app.services import tasks
-    ok, orphaned, failed = 0, 0, 0
+    ok = orphaned = failed = 0
+    processed = 0
+    task_id = _accept_task_id
     try:
-        for i, item_id in enumerate(ids, 1):
+        while True:
+            async with _accept_lock:
+                if not _accept_pending:
+                    break
+                item_id = _accept_pending.pop(0)
+                task_id = _accept_task_id or task_id
+            processed += 1
             db = SessionLocal()
             try:
                 result = await _accept(item_id, db)
@@ -348,29 +377,85 @@ async def _batch_accept_bg(ids: list[int], task_id: str) -> None:
                 msg = ", ".join(parts)
                 if result.get("message"):
                     msg = f"{msg} — {result['message']}"
-                tasks.update_task(task_id, current=i, message=msg)
+                t = tasks.get_task(task_id) if task_id else None
+                total = t.total if t and t.total else processed
+                if t:
+                    tasks.update_task(
+                        task_id, current=processed, total=total,
+                        label=f"Importing {total} item(s)", message=msg)
             except HTTPException as e:
                 failed += 1
-                tasks.update_task(task_id, current=i, message=f"{ok} imported, {orphaned} gone, {failed} failed — {e.detail}")
+                if task_id:
+                    tasks.update_task(
+                        task_id, current=processed,
+                        message=f"{ok} imported, {orphaned} gone, {failed} failed — {e.detail}")
             except Exception as e:
                 failed += 1
-                tasks.update_task(task_id, current=i, message=f"{ok} imported, {orphaned} gone, {failed} failed — {e}")
+                if task_id:
+                    tasks.update_task(
+                        task_id, current=processed,
+                        message=f"{ok} imported, {orphaned} gone, {failed} failed — {e}")
             finally:
                 db.close()
-        status = "done" if failed == 0 else ("failed" if ok == 0 and orphaned == 0 else "done")
         finish = f"{ok} imported, {orphaned} gone (orphaned), {failed} failed"
-        tasks.finish_task(task_id, status, finish)
+        status = "done" if failed == 0 else ("failed" if ok == 0 and orphaned == 0 else "done")
+        if task_id:
+            tasks.finish_task(task_id, status, finish)
         import_matcher.publish({
             "type": "import_batch",
-            "ok": ok, "orphaned": orphaned, "failed": failed, "total": len(ids), "task_id": task_id,
+            "ok": ok, "orphaned": orphaned, "failed": failed,
+            "total": processed, "task_id": task_id,
         })
     except Exception as e:
-        tasks.finish_task(task_id, "failed", str(e))
+        if task_id:
+            tasks.finish_task(task_id, "failed", str(e))
         import_matcher.publish({
             "type": "import_batch",
-            "ok": ok, "orphaned": orphaned, "failed": failed, "total": len(ids),
-            "task_id": task_id, "error": str(e),
+            "ok": ok, "orphaned": orphaned, "failed": failed,
+            "total": processed, "task_id": task_id, "error": str(e),
         })
+    finally:
+        # Under the lock: clear the worker flag and, if Accepts arrived during
+        # finish, start a fresh card+worker so nothing is orphaned.
+        async with _accept_lock:
+            _accept_worker_running = False
+            if _accept_pending:
+                total = len(_accept_pending)
+                _accept_task_id = tasks.create_task(
+                    "import_batch", f"Importing {total} item(s)", total=total)
+                _accept_worker_running = True
+                tasks.spawn_background(_accept_worker())
+            else:
+                _accept_task_id = None
+
+
+@router.post("/batch")
+async def batch_action(payload: dict = Body(...), db: Session = Depends(get_db)):
+    """Accept / reject / confirm_orphan several suggestions at once.
+
+    Body: {"ids": [...], "action": "accept"|"reject"|"confirm_orphan"}.
+    Accept runs in the background (v0.28.0) so large batches don't 504 at the
+    reverse proxy — returns {async: true, task_id, total} immediately; progress
+    lands in the Active Processes tray via the tasks SSE bus. Additional Accepts
+    while one is running coalesce onto the same tray card (v0.33.0). Reject and
+    confirm_orphan stay synchronous (cheap DB writes).
+    """
+    ids = payload.get("ids") or []
+    action = payload.get("action")
+    if action not in ("accept", "reject", "confirm_orphan") or not ids:
+        raise HTTPException(status_code=400, detail="Body must be {ids: [...], action: accept|reject|confirm_orphan}")
+    if action == "accept":
+        return await _enqueue_accepts(list(ids))
+    results = []
+    for item_id in ids:
+        try:
+            if action == "confirm_orphan":
+                results.append(_confirm_orphan(item_id, db))
+            else:
+                results.append(_reject(item_id, db))
+        except HTTPException as e:
+            results.append({"id": item_id, "error": e.detail})
+    return {"async": False, "results": results}
 
 
 @router.get("/{item_id}/files")
@@ -602,7 +687,13 @@ def set_match(item_id: int, body: dict = Body(...), db: Session = Depends(get_db
 
 @router.post("/{item_id}/accept")
 async def accept_import(item_id: int, db: Session = Depends(get_db)):
-    return await _accept(item_id, db)
+    """Queue a single Accept onto the coalesced import_batch tray card (v0.33.0).
+    Returns immediately with {async, task_id, …}; progress streams via Active Processes."""
+    # Validate the row exists before queueing so the UI gets a fast 404.
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    return await _enqueue_accepts([item_id])
 
 
 @router.post("/{item_id}/confirm-orphan")
