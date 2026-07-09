@@ -152,7 +152,7 @@ _NO_THINK_INSTRUCTION = (
 
 _REASON_BULLETS = (
     "a brief Markdown verdict line, then 2–4 bullet reasons using \"- \" "
-    "(bold key terms with **text**). No prose paragraphs."
+    "(bold key terms with **text**). No prose paragraphs. Write in English."
 )
 
 
@@ -241,7 +241,7 @@ _APP_MATCH_GUIDANCE = {
         "different album than the candidate's album, the answer is no."
         "\nBoth yes → agrees true. Either no → agrees false."
         "\nIf Context contains an 'App check' line, it reports these two checks computed "
-        "exactly — trust it over your own reading."
+        "exactly — your two answers MUST match it, even if your own reading differs."
         "\nThe app already verified years, editions (Deluxe/Remaster), audio format "
         "(FLAC/CD/WEB/bitrate), and uploader tags. Do not mention them."
         "\nReason: one bullet per check, like: - **Artist**: Prof — found in release"

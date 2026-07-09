@@ -48,7 +48,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         ))}
       </nav>
       <div className="px-5 py-3 text-xs text-slate-600 border-t border-purple-900/40">
-        v0.36.0
+        v0.36.1
       </div>
     </>
   );
