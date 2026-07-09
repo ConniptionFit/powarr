@@ -457,7 +457,7 @@ function OllamaCard() {
 
 function QdrantCard() {
   const qc = useQueryClient();
-  const { data: cfg } = useQuery({ queryKey: ["sp-settings"], queryFn: () => req<any>("/api/v1/smart-playlists/settings") });
+  const { data: cfg } = useQuery({ queryKey: ["sp-settings"], queryFn: () => req<any>("/smart-playlists/settings") });
   const [qdrantUrl, setQdrantUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [collection, setCollection] = useState("music_affinity_space");
@@ -477,7 +477,7 @@ function QdrantCard() {
     setTesting(true);
     setTestResult(null);
     try {
-      const r = await req<any>("/api/v1/smart-playlists/qdrant/test", { method: "POST" });
+      const r = await req<any>("/smart-playlists/qdrant/test", { method: "POST" });
       setTestResult(r);
     } catch (e: unknown) {
       setTestResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
@@ -487,7 +487,7 @@ function QdrantCard() {
   };
 
   const saveMut = useMutation({
-    mutationFn: () => req("/api/v1/smart-playlists/settings", {
+    mutationFn: () => req("/smart-playlists/settings", {
       method: "PUT",
       body: JSON.stringify({ qdrant_url: qdrantUrl, collection, qdrant_api_key: apiKey || undefined }),
     }),
