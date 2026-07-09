@@ -147,6 +147,12 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
         return {"matches": [], "message": "No files found in this download"}
 
     ollama_cfg = json.loads(cfg.value) if cfg.value else {}
+    pack_context_parts = [f"Source app: {item.source_app}"]
+    if item.pack:
+        pack_context_parts.append(f"Pack scope: {item.pack}")
+    pack_context_parts.append(
+        f"Matched series: '{item.matched_title}' (ID {item.matched_id}) — authoritative target for every file."
+    )
     matches = await llm_assist.review_pack_files(
         host=ollama_cfg.get("host"), model=ollama_cfg.get("model"),
         release_title=item.raw_title, candidate_title=item.matched_title,
@@ -155,7 +161,8 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
         template=ollama_cfg.get("pack_prompt", ""),
         verbosity=ollama_cfg.get("verbosity", "brief"),
         model_size=ollama_cfg.get("model_size", "medium"),
-        keep_alive_minutes=ollama_cfg.get("keep_alive_minutes", 10)
+        keep_alive_minutes=ollama_cfg.get("keep_alive_minutes", 10),
+        context=" | ".join(pack_context_parts),
     )
 
     # Persist results to database

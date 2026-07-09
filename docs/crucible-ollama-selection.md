@@ -103,6 +103,33 @@ From your docker host (or any machine reaching Powarr at `10.1.1.2:7979`):
 ./scripts/crucible-powarr-config.sh <crucible-ip> qwen2.5:3b http://10.1.1.2:7979
 ```
 
+This applies the **episode-alignment prompts** (match + pack) plus the Small/Simple/Classified profile.
+
+### Backend prompts (built-in defaults since v0.24.x)
+
+**Import matching** (`match_prompt` — empty uses default):
+
+```
+Same work + season + episode (TV) = match. Ignore codec/resolution/group tags.
+Release: {release}
+Library: {candidate}
+{context}
+```
+
+Powarr appends the deterministic scorer summary, compact rules, and (with Simple/Classified) asks for one line:
+`agree or disagree | more or less or same | short reason`
+
+**Season pack mapping** (`pack_prompt` — empty uses default):
+
+```
+Map each file to season+episode for "{candidate}". Parse S##E## or absolute ep# from filenames.
+Pack: {release}
+Files: {files}
+{context}
+```
+
+Powarr appends short match-type definitions (minimal verbosity) and a JSON array reply.
+
 Or manually in the UI:
 
 1. **Integrations → Ollama:** enable, host `http://<crucible-ip>:11434`, model `qwen2.5:3b`, select preset "qwen2.5:3b — solid small all-rounder"

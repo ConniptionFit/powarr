@@ -34,6 +34,14 @@ CURRENT=$(curl -sf "${POWARR_URL}/api/v1/settings/ollama" 2>/dev/null || echo '{
 PAYLOAD=$(python3 - <<PY
 import json
 current = json.loads('''$CURRENT''' or '{}')
+match_prompt = current.get("match_prompt") or (
+    "Same work + season + episode (TV) = match. Ignore codec/resolution/group tags.\\n"
+    "Release: {release}\\nLibrary: {candidate}\\n{context}"
+)
+pack_prompt = current.get("pack_prompt") or (
+    "Map each file to season+episode for \\"{candidate}\\". Parse S##E## or absolute ep# from filenames.\\n"
+    "Pack: {release}\\nFiles: {files}\\n{context}"
+)
 payload = {
     "enabled": True,
     "host": "$OLLAMA_HOST",
@@ -45,9 +53,9 @@ payload = {
     "reply_format": "$REPLY_FORMAT",
     "confidence_style": "$CONFIDENCE_STYLE",
     "batch_delay_ms": 1500,
-    "match_prompt": current.get("match_prompt", ""),
+    "match_prompt": match_prompt,
     "explain_prompt": current.get("explain_prompt", ""),
-    "pack_prompt": current.get("pack_prompt", ""),
+    "pack_prompt": pack_prompt,
 }
 print(json.dumps(payload))
 PY

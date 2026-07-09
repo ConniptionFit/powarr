@@ -375,10 +375,14 @@ function SyncSection() {
 
 // Preset prompt suggestions per task. Placeholders are substituted by the backend;
 // the JSON reply-format instruction is appended automatically, so templates stay clean.
-const PROMPT_PRESETS: Record<"match" | "explain", { label: string; text: string }[]> = {
+const PROMPT_PRESETS: Record<"match" | "pack" | "explain", { label: string; text: string }[]> = {
   match: [
     {
-      label: "Strict matcher (default style)",
+      label: "Episode aligner (default) — CPU/small models",
+      text: "Same work + season + episode (TV) = match. Ignore codec/resolution/group tags.\nRelease: {release}\nLibrary: {candidate}\n{context}",
+    },
+    {
+      label: "Strict matcher (legacy style)",
       text: "You match download release names to media library entries.\nRelease name: {release}\nCandidate library entry: {candidate}\nContext: {context}",
     },
     {
@@ -388,6 +392,20 @@ const PROMPT_PRESETS: Record<"match" | "explain", { label: string; text: string 
     {
       label: "Conservative — punish year/edition mismatch",
       text: "You match download release names to media library entries. Be conservative: lower your confidence sharply when the year, edition, or cut (e.g. Director's Cut, remaster) differs between release and candidate.\nRelease name: {release}\nCandidate library entry: {candidate}\nContext: {context}",
+    },
+  ],
+  pack: [
+    {
+      label: "Episode mapper (default) — CPU/small models",
+      text: "Map each file to season+episode for \"{candidate}\". Parse S##E## or absolute ep# from filenames.\nPack: {release}\nFiles: {files}\n{context}",
+    },
+    {
+      label: "Strict — require explicit S##E##",
+      text: "Map each filename to season and episode for \"{candidate}\". Only use Number Match or Exact Match when S##E## or absolute episode numbers appear in the filename; otherwise Low Confidence.\nPack: {release}\nFiles: {files}\n{context}",
+    },
+    {
+      label: "Triggered-series priority",
+      text: "Map pack files to episodes for \"{candidate}\". The matched series in context is authoritative — filenames may use alternate titles or numbering.\nPack: {release}\nFiles: {files}\n{context}",
     },
   ],
   explain: [
@@ -408,13 +426,18 @@ const PROMPT_PRESETS: Record<"match" | "explain", { label: string; text: string 
 
 // Worst-case injected-data token overhead per task, from the CAP_* truncation
 // limits in llm_assist.py (chars/4) plus the fixed reply-instruction scaffold.
-const INJECTED_TOKENS = { match: Math.ceil((300 + 300 + 400 + 600) / 4) + 60, explain: Math.ceil(500 / 4) + 30 };
-const DEFAULT_TEMPLATE_TOKENS = { match: 40, explain: 35 }; // built-in defaults, when the textarea is empty
+const INJECTED_TOKENS = {
+  match: Math.ceil((300 + 300 + 400 + 600) / 4) + 60,
+  pack: Math.ceil((300 + 300 + 800 + 400) / 4) + 80,
+  explain: Math.ceil(500 / 4) + 30,
+};
+const DEFAULT_TEMPLATE_TOKENS = { match: 35, pack: 40, explain: 35 };
 
 // Placeholders each prompt task's scaffold substitutes — kept here so the
 // clickable insert buttons and the static help text can't drift apart.
-const PROMPT_PLACEHOLDERS: Record<"match" | "explain", string[]> = {
+const PROMPT_PLACEHOLDERS: Record<"match" | "pack" | "explain", string[]> = {
   match: ["{release}", "{candidate}", "{context}"],
+  pack: ["{release}", "{candidate}", "{files}", "{context}"],
   explain: ["{item}"],
 };
 
@@ -423,7 +446,7 @@ function LLMAssistSection() {
   const { data } = useQuery({ queryKey: ["ollama-settings"], queryFn: settingsApi.getOllama });
   const { data: ctx } = useQuery({ queryKey: ["ollama-ctx"], queryFn: settingsApi.ollamaContextLength });
   const [cfg, setCfg] = useState<OllamaSettings | null>(null);
-  const [task, setTask] = useState<"match" | "explain">("match");
+  const [task, setTask] = useState<"match" | "pack" | "explain">("match");
   const [msg, setMsg] = useState<string | null>(null);
   const [refining, setRefining] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -435,7 +458,7 @@ function LLMAssistSection() {
 
   if (!cfg) return null;
 
-  const promptField = task === "match" ? "match_prompt" : "explain_prompt";
+  const promptField = task === "match" ? "match_prompt" : task === "pack" ? "pack_prompt" : "explain_prompt";
   const promptValue = cfg[promptField];
   const setPrompt = (text: string) => setCfg(c => (c ? { ...c, [promptField]: text } : c));
 
@@ -466,6 +489,7 @@ function LLMAssistSection() {
   };
 
   const refine = async () => {
+    if (task === "pack") { setMsg("Pack prompts can't be auto-refined yet — use a preset or edit manually."); return; }
     if (!promptValue.trim()) { setMsg("Write a rough draft in the box first, then I'll clean it up."); return; }
     setRefining(true);
     setMsg(null);
@@ -495,6 +519,7 @@ function LLMAssistSection() {
   };
 
   const testWithRealData = async () => {
+    if (task === "pack") { setMsg("Dry-run preview is only available for Import Matching and Deletion Rationale."); return; }
     setTesting(true);
     setTestResult(null);
     setMsg(null);
@@ -506,7 +531,7 @@ function LLMAssistSection() {
   };
 
   // Live template-size estimate (item 12) vs the model's detected context window (item 9).
-  const promptTokens = Math.ceil((cfg?.[task === "match" ? "match_prompt" : "explain_prompt"] ?? "").length / 4)
+  const promptTokens = Math.ceil((cfg?.[promptField] ?? "").length / 4)
     || DEFAULT_TEMPLATE_TOKENS[task];
   const estTokens = promptTokens + INJECTED_TOKENS[task];
   const ctxLimit = ctx?.context_length ?? null;
@@ -640,6 +665,10 @@ function LLMAssistSection() {
                     className={`px-3 py-1.5 text-sm transition-colors ${task === "match" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
               Import Matching
             </button>
+            <button onClick={() => setTask("pack")}
+                    className={`px-3 py-1.5 text-sm transition-colors ${task === "pack" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
+              Pack Mapping
+            </button>
             <button onClick={() => setTask("explain")}
                     className={`px-3 py-1.5 text-sm transition-colors ${task === "explain" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
               Deletion Rationale
@@ -658,8 +687,8 @@ function LLMAssistSection() {
           </select>
           <button
             onClick={refine}
-            disabled={refining}
-            title="Send your rough draft to the LLM and have it rewritten as a clean template"
+            disabled={refining || task === "pack"}
+            title={task === "pack" ? "Pack prompts use presets for now" : "Send your rough draft to the LLM and have it rewritten as a clean template"}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors disabled:opacity-50"
           >
             <Wand2 size={13} className={refining ? "animate-pulse" : ""} />
@@ -692,7 +721,8 @@ function LLMAssistSection() {
           rows={5}
           value={promptValue}
           onChange={e => setPrompt(e.target.value)}
-          placeholder={`(using built-in default — type here or load a suggestion to customize the ${task === "match" ? "matching" : "rationale"} prompt)`}
+          placeholder={`(using built-in default — type here or load a suggestion to customize the ${
+            task === "match" ? "matching" : task === "pack" ? "pack file mapping" : "rationale"} prompt)`}
           className="w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-xs font-mono text-white placeholder:text-slate-600"
         />
         <div className="flex items-center justify-between mt-1">
@@ -703,8 +733,8 @@ function LLMAssistSection() {
           </p>
           <button
             onClick={testWithRealData}
-            disabled={testing}
-            title="Save, then dry-run the current prompt/model settings against one real item from your data — nothing is stored"
+            disabled={testing || task === "pack"}
+            title={task === "pack" ? "Preview dry-run not available for pack prompts" : "Save, then dry-run the current prompt/model settings against one real item from your data — nothing is stored"}
             className="px-3 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-xs transition-colors disabled:opacity-50"
           >
             {testing ? "Testing…" : "Test with Real Data"}
