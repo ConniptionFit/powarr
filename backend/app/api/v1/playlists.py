@@ -231,3 +231,45 @@ def update_playlist(playlist_id: int, body: dict = Body(...),
         **{k: getattr(pl, k) for k in PlaylistDetailOut.model_fields},
         pending_count=pending
     )
+
+
+@router.post("/qdrant/test")
+async def test_qdrant(db: Session = Depends(get_db)):
+    """Test Qdrant connection and return collection stats."""
+    cfg = playlist_generator.load_settings(db)
+    if not cfg.qdrant_url:
+        return {"ok": False, "message": "Qdrant URL not configured"}
+
+    from app.integrations.qdrant import QdrantIntegration
+    from app.services.secret_box import decrypt
+
+    try:
+        client = QdrantIntegration(
+            cfg.qdrant_url,
+            decrypt(cfg.qdrant_api_key) or "",
+            cfg.collection
+        )
+        # Test connection
+        test = await client.test_connection()
+        if not test.get("ok"):
+            return test
+
+        # Get collection info
+        info = await client.get_collection_info()
+        if "error" in info:
+            return {"ok": False, "message": f"Failed to get collection info: {info.get('error')}"}
+
+        # Get sample of monitored artists to show available data
+        points, _ = await client.scroll_monitored_artists(limit=1)
+        sample_payload = points[0].get("payload", {}) if points else {}
+
+        return {
+            "ok": True,
+            "message": "Connected to Qdrant",
+            "collection": cfg.collection,
+            "collection_info": info,
+            "sample_payload_keys": list(sample_payload.keys()) if sample_payload else [],
+            "sample_artist": sample_payload.get("artist_name") if sample_payload else None,
+        }
+    except Exception as e:
+        return {"ok": False, "message": f"Error: {str(e)}"}
