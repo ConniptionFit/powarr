@@ -231,6 +231,32 @@ class TestMusicMatchEvidence(unittest.TestCase):
         self.assertEqual(music_match_evidence("", "A - B"), "")
 
 
+class TestEnforceMusicEvidence(unittest.TestCase):
+    def test_agree_against_failed_check_is_overridden(self):
+        result = {"agrees": True, "confidence_adjustment": 0.1, "rationale": "- ok"}
+        out = llm_assist.enforce_music_evidence(result, (True, False))
+        self.assertFalse(out["agrees"])
+        self.assertLessEqual(out["confidence_adjustment"], -0.15)
+        self.assertIn("App check", out["rationale"])
+        self.assertIn("album not found", out["rationale"])
+
+    def test_missing_artist_named_in_note(self):
+        out = llm_assist.enforce_music_evidence(
+            {"agrees": True, "confidence_adjustment": 0.0, "rationale": ""},
+            (False, True))
+        self.assertIn("artist not found", out["rationale"])
+
+    def test_disagree_and_yes_yes_and_no_checks_pass_through(self):
+        disagree = {"agrees": False, "confidence_adjustment": -0.3, "rationale": "x"}
+        self.assertEqual(llm_assist.enforce_music_evidence(dict(disagree), (True, False)),
+                         disagree)
+        agree = {"agrees": True, "confidence_adjustment": 0.2, "rationale": "y"}
+        self.assertEqual(llm_assist.enforce_music_evidence(dict(agree), (True, True)),
+                         agree)
+        self.assertEqual(llm_assist.enforce_music_evidence(dict(agree), None), agree)
+        self.assertIsNone(llm_assist.enforce_music_evidence(None, (True, False)))
+
+
 class TestCompactDetSummary(unittest.TestCase):
     def test_includes_heuristic_and_tokens(self):
         from app.services.llm_assist import compact_det_summary

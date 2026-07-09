@@ -927,6 +927,9 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             source_app=app_name,
             **llm_assist.prompt_kwargs(ollama),
             **llm_assist.inference_kwargs(ollama))
+        if llm and app_name == "lidarr":
+            llm = llm_assist.enforce_music_evidence(
+                llm, llm_assist.music_match_checks(raw_title, matched_title))
         if llm:
             llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
             llm_rationale = llm["rationale"]
@@ -1847,6 +1850,9 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 source_app=row.source_app,
                 **llm_assist.prompt_kwargs(ollama),
                 **llm_assist.inference_kwargs(ollama))
+            if llm and row.source_app == "lidarr":
+                llm = llm_assist.enforce_music_evidence(
+                    llm, llm_assist.music_match_checks(row.raw_title, row.matched_title))
             if not llm:
                 skipped += 1
                 _llm_tray_skipped += 1

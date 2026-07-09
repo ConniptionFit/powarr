@@ -265,31 +265,65 @@ def _evidence_norm(text: str) -> str:
     return _EVIDENCE_NORM_RE.sub(" ", (text or "").lower()).strip()
 
 
-def music_match_evidence(release: str, candidate: str) -> str:
+def music_match_checks(release: str, candidate: str) -> Optional[tuple[bool, bool]]:
     """Deterministic artist/album containment check for music matches (v0.36.0).
 
     Small local models cannot reliably tokenize scene names like
     'Prof-Good_Time_Boy-SINGLE-WEB-2026-FATHEAD' and read the trailing uploader tag
     as the artist. This computes the two checks the lidarr judging guidance asks
-    for and injects them as an authoritative 'App check' context line. Both names
-    are compared punctuation/case/separator-blind; the first artist occurrence is
-    removed before the album check so self-titled albums resolve correctly in both
-    directions. Returns "" when the candidate isn't 'Artist - Album'-shaped."""
+    for. Both names are compared punctuation/case/separator-blind; the first artist
+    occurrence is removed before the album check so self-titled albums resolve
+    correctly in both directions. Returns (artist_found, album_found), or None when
+    the candidate isn't 'Artist - Album'-shaped."""
     candidate = candidate or ""
     if " - " not in candidate:
-        return ""
+        return None
     artist, album = candidate.split(" - ", 1)
     rel = _evidence_norm(release)
     art = _evidence_norm(artist)
     alb = _evidence_norm(album)
     if not rel or not art or not alb:
-        return ""
+        return None
     artist_found = art in rel
     remainder = rel.replace(art, " ", 1) if artist_found else rel
     album_found = alb in remainder
+    return artist_found, album_found
+
+
+def music_match_evidence(release: str, candidate: str) -> str:
+    """The 'App check' context line for the lidarr judging guidance, or ""."""
+    checks = music_match_checks(release, candidate)
+    if checks is None:
+        return ""
+    artist_found, album_found = checks
     return (f"App check — candidate artist in release name: "
             f"{'YES' if artist_found else 'NO'}; "
             f"candidate album in release name: {'YES' if album_found else 'NO'}")
+
+
+def enforce_music_evidence(result: Optional[dict],
+                           checks: Optional[tuple[bool, bool]]) -> Optional[dict]:
+    """The App check is authoritative in the negative direction (v0.36.2): when
+    either containment check failed, an LLM AGREE may not stand — models
+    occasionally answer their own inverted question instead of the evidence line.
+    YES/YES is deliberately NOT forced to agree: short album titles can
+    false-positive against years or tags, so an LLM disagree stands there."""
+    if not result or not checks or all(checks):
+        return result
+    if result.get("agrees"):
+        artist_found, _ = checks
+        missing = "artist" if not artist_found else "album"
+        result["agrees"] = False
+        try:
+            adjustment = float(result.get("confidence_adjustment") or 0.0)
+        except (TypeError, ValueError):
+            adjustment = 0.0
+        result["confidence_adjustment"] = min(adjustment, -0.15)
+        note = (f"- **App check**: candidate {missing} not found in release — "
+                f"verdict set to disagree")
+        result["rationale"] = ((result.get("rationale") or "").rstrip()
+                               + "\n" + note).strip()[:1500]
+    return result
 
 
 def build_review_prompt(template: str, release: str, candidate: str, context: str,
@@ -349,8 +383,10 @@ def build_review_prompt(template: str, release: str, candidate: str, context: st
                     '\nconfidence_adjustment: 0 to 0.3 when "agrees" is true; '
                     '-0.3 to 0 when "agrees" is false.'
                 )
-            # An unescaped quote inside reason breaks the whole JSON reply.
-            prompt += "\nDo not use double-quote characters inside the reason text."
+            # An unescaped quote inside reason breaks the whole JSON reply; qwen-family
+            # models drift into Chinese without an explicit standalone language line.
+            prompt += ("\nDo not use double-quote characters inside the reason text."
+                       "\nThe reason text must be written in English.")
     return prompt
 
 
