@@ -513,9 +513,9 @@ export default function FailedImports() {
       qc.invalidateQueries({ queryKey: ["import-auto-eligible"] });
       try {
         const data = JSON.parse(ev.data);
-        if (data.type === "llm_run") setActionMsg(`LLM run finished: ${data.scored} scored, ${data.skipped} skipped`);
+        if (data.type === "llm_run") setActionMsg(`LLM run finished: ${data.scored} scored, ${data.skipped} skipped${data.auto_queued ? `, ${data.auto_queued} queued for auto-import` : ""}`);
         if (data.type === "llm_run_started") setLlmQueued(null);
-        if (data.type === "rescore") setActionMsg(`Rescore finished: ${data.rescored} rescored, ${data.skipped} skipped`);
+        if (data.type === "rescore") setActionMsg(`Rescore finished: ${data.rescored} rescored, ${data.skipped} skipped${data.auto_queued ? `, ${data.auto_queued} queued for auto-import` : ""}`);
         if (data.type === "import_batch") {
           const parts = [`${data.ok ?? 0} imported`];
           if (data.orphaned) parts.push(`${data.orphaned} gone (orphaned)`);

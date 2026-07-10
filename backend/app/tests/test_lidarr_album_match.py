@@ -62,6 +62,37 @@ class TestApplyMusicChecks(unittest.TestCase):
         self.assertEqual(conf, 0.7)
 
 
+class TestCollectAutoEligible(unittest.TestCase):
+    """v0.37.1: rescored rows meeting the auto-import bar get queued for accept."""
+
+    def _row(self, **kw):
+        from types import SimpleNamespace
+        base = dict(id=1, status="suggested", matched_id=5, confidence=0.95)
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    def _cfg(self, **kw):
+        from app.schemas.settings import ImportMatchingSettings
+        base = dict(auto_resolve_enabled=True, high_confidence_threshold=0.9)
+        base.update(kw)
+        return ImportMatchingSettings(**base)
+
+    def test_eligible_rows_collected(self):
+        from app.services.import_matcher import collect_auto_eligible
+        rows = [self._row(id=1, confidence=0.95),
+                self._row(id=2, confidence=0.89),          # below threshold
+                self._row(id=3, status="orphaned"),        # wrong status
+                self._row(id=4, matched_id=None),          # no match
+                self._row(id=5, status="resolve_failed")]  # retry allowed
+        self.assertEqual(collect_auto_eligible(rows, self._cfg()), [1, 5])
+
+    def test_disabled_auto_resolve_collects_nothing(self):
+        from app.services.import_matcher import collect_auto_eligible
+        rows = [self._row()]
+        self.assertEqual(
+            collect_auto_eligible(rows, self._cfg(auto_resolve_enabled=False)), [])
+
+
 class TestLidarrAlbumMatch(unittest.TestCase):
     def test_history_album_id(self):
         library = [{

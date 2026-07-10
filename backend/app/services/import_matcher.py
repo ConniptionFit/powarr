@@ -1826,6 +1826,27 @@ async def rematch_music_row(db, row: FailedImport, lib_cache: dict[str, list],
     return True
 
 
+def collect_auto_eligible(rows, cfg) -> list[int]:
+    """Ids among freshly rescored rows whose new blended confidence qualifies for
+    auto-import (same predicate as Process N Items — auto_resolve_enabled,
+    open status, matched, confidence >= high_confidence_threshold)."""
+    from app.services import auto_eligible
+    return [r.id for r in rows if auto_eligible.is_auto_eligible(r, cfg)]
+
+
+async def _queue_auto_imports(ids: list[int]) -> int:
+    """Push auto-eligible rescored rows through the canonical coalesced accept
+    pipeline (tray card, pack mapping, partial import, orphan detection at
+    accept — identical to a user Accept). Lazy import: the pipeline lives in
+    the API layer, which imports this module."""
+    if not ids:
+        return 0
+    from app.api.v1.imports import _enqueue_accepts
+    await _enqueue_accepts(ids)
+    logger.info(f"Rescore: queued {len(ids)} auto-eligible row(s) for import")
+    return len(ids)
+
+
 async def rescore_music(ids: list[int] | None = None, limit: int = 500) -> dict:
     """Deterministic (no-LLM) rescore for Lidarr/Readarr rows (v0.37.0): re-runs
     the containment-check-aware album/book matcher and rewrites heuristic
@@ -1859,8 +1880,10 @@ async def rescore_music(ids: list[int] | None = None, limit: int = 500) -> dict:
                     row.heuristic_confidence, row.llm_confidence, cfg.llm_blend_weight)
             rescored += 1
         db.commit()
-        publish({"type": "rescore", "rescored": rescored, "skipped": skipped})
-        return {"rescored": rescored, "skipped": skipped}
+        auto_queued = await _queue_auto_imports(collect_auto_eligible(rows, cfg))
+        publish({"type": "rescore", "rescored": rescored, "skipped": skipped,
+                 "auto_queued": auto_queued})
+        return {"rescored": rescored, "skipped": skipped, "auto_queued": auto_queued}
     finally:
         db.close()
 
@@ -1869,6 +1892,7 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
     global _llm_tray_scored, _llm_tray_skipped
     from app.services import tasks
     scored = skipped = 0
+    auto_ids: list[int] = []
     db = SessionLocal()
     try:
         cfg, ollama = load_settings(db)
@@ -1973,11 +1997,15 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 message=f"{_llm_tray_scored} scored, {_llm_tray_skipped} skipped")
             if ollama.batch_delay_ms > 0:
                 await asyncio.sleep(ollama.batch_delay_ms / 1000)
+        auto_ids = collect_auto_eligible(rows, cfg)
     finally:
         db.close()
     logger.info(f"LLM rescore: {scored} scored, {skipped} skipped")
-    publish({"type": "llm_run", "scored": scored, "skipped": skipped})
-    return {"scored": scored, "skipped": skipped, "message": f"{scored} scored, {skipped} skipped"}
+    auto_queued = await _queue_auto_imports(auto_ids)
+    publish({"type": "llm_run", "scored": scored, "skipped": skipped,
+             "auto_queued": auto_queued})
+    return {"scored": scored, "skipped": skipped, "auto_queued": auto_queued,
+            "message": f"{scored} scored, {skipped} skipped"}
 
 
 async def poller_loop():
