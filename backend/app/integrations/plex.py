@@ -157,3 +157,25 @@ class PlexIntegration(BaseIntegration):
                 if r.status_code in (200, 201, 204):
                     added += len(keys)
             return added
+
+    async def rename_playlist(self, playlist_rating_key: str, title: str) -> bool:
+        """Rename a Powarr-owned Plex playlist. Returns True on success."""
+        if not playlist_rating_key or not (title or "").strip():
+            return False
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+            r = await client.put(
+                f"{self.url}/playlists/{playlist_rating_key}",
+                headers=headers, params={"title": title.strip()})
+            return r.status_code in (200, 201, 204)
+
+    async def delete_playlist(self, playlist_rating_key: str) -> bool:
+        """Delete a Powarr-owned Plex playlist. Returns True on success or already-gone."""
+        if not playlist_rating_key:
+            return True
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+            r = await client.delete(
+                f"{self.url}/playlists/{playlist_rating_key}", headers=headers)
+            # 404 = already removed on Plex — treat as success so Powarr can clean up
+            return r.status_code in (200, 201, 204, 404)

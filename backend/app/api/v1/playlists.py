@@ -191,15 +191,22 @@ def get_playlist_tracks(playlist_id: int, limit: int = Query(500, ge=1, le=1000)
 
 
 @router.put("/{playlist_id}", response_model=PlaylistDetailOut)
-def update_playlist(playlist_id: int, body: dict = Body(...),
-                   db: Session = Depends(get_db)):
-    """Update playlist settings (auto_add_override, max_tracks_override, etc.)."""
+async def update_playlist(playlist_id: int, body: dict = Body(...),
+                          db: Session = Depends(get_db)):
+    """Update playlist settings. Title changes are synced to Plex when pushed."""
     pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
     if not pl:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
-    # Only allow updating override fields
-    allowed = {"auto_add_override", "max_tracks_override", "enabled", "title"}
+    if "title" in body and body["title"] is not None:
+        new_title = str(body["title"]).strip()
+        if new_title and new_title != pl.title:
+            result = await playlist_generator.rename_playlist(playlist_id, new_title)
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("message") or "Rename failed")
+            pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+
+    allowed = {"auto_add_override", "max_tracks_override", "enabled"}
     for key in allowed:
         if key in body:
             setattr(pl, key, body[key])
@@ -211,6 +218,17 @@ def update_playlist(playlist_id: int, body: dict = Body(...),
         **{k: getattr(pl, k) for k in PlaylistDetailOut.model_fields},
         pending_count=pending
     )
+
+
+@router.delete("/{playlist_id}")
+async def delete_playlist(playlist_id: int):
+    """Delete playlist from Powarr and remove the Powarr-owned Plex playlist."""
+    result = await playlist_generator.delete_playlist(playlist_id)
+    if not result.get("ok") and result.get("message") == "Playlist not found":
+        raise HTTPException(status_code=404, detail=result["message"])
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "Delete failed")
+    return result
 
 
 @router.post("/{playlist_id}/approve")

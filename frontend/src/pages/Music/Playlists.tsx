@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListMusic, Play, Check, X, RefreshCw, Music, Pencil, Settings, Sparkles, Upload } from "lucide-react";
+import { ListMusic, Play, Check, X, RefreshCw, Music, Pencil, Settings, Sparkles, Upload, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { req, fmtRelative } from "../../lib/api";
 
@@ -44,6 +44,8 @@ const api = {
     req<{ ok: boolean; message: string }>(`/smart-playlists/candidates/${id}/reject`, { method: "POST" }),
   updatePlaylist: (id: number, body: Partial<PlaylistDetail>) =>
     req<PlaylistDetail>(`/smart-playlists/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deletePlaylist: (id: number) =>
+    req<{ ok: boolean; message: string }>(`/smart-playlists/${id}`, { method: "DELETE" }),
   approve: (id: number) =>
     req<{ ok: boolean; message: string }>(`/smart-playlists/${id}/approve`, { method: "POST" }),
   suggestName: (id: number) =>
@@ -54,6 +56,7 @@ const api = {
 function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const { data: detail } = useQuery({
     queryKey: ["sp-detail", pl.id], queryFn: () => api.detail(pl.id), enabled: editing,
   });
@@ -65,6 +68,7 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
     setAutoAdd(detail?.auto_add_override === true ? "on" : detail?.auto_add_override === false ? "off" : "");
     setMaxTracks(detail?.max_tracks_override != null ? String(detail.max_tracks_override) : "");
     setTitleDraft(pl.title);
+    setConfirmDelete(false);
     setEditing(true);
   };
 
@@ -76,9 +80,24 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
     }),
     onSuccess: () => {
       setEditing(false);
+      onMsg(pl.plex_playlist_id && titleDraft.trim() !== pl.title
+        ? "Saved — Plex title updated"
+        : "Saved");
       qc.invalidateQueries({ queryKey: ["sp-list"] });
       qc.invalidateQueries({ queryKey: ["sp-detail", pl.id] });
     },
+    onError: (e: Error) => onMsg(e.message),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: () => api.deletePlaylist(pl.id),
+    onSuccess: (r) => {
+      onMsg(r.message);
+      setConfirmDelete(false);
+      qc.invalidateQueries({ queryKey: ["sp-list"] });
+      qc.invalidateQueries({ queryKey: ["sp-candidates"] });
+    },
+    onError: (e: Error) => onMsg(e.message),
   });
 
   const approveMut = useMutation({
@@ -133,8 +152,13 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
             <Sparkles size={13} />
           </button>
           <button onClick={() => (editing ? setEditing(false) : openEdit())}
-            className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white" title="Edit overrides">
+            className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white" title="Rename / edit">
             <Pencil size={13} />
+          </button>
+          <button onClick={() => { setConfirmDelete(v => !v); setEditing(false); }}
+            className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300"
+            title="Delete playlist">
+            <Trash2 size={13} />
           </button>
         </div>
       </div>
@@ -147,10 +171,31 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
         <p className="text-xs text-slate-500 mb-2">Status: {pl.last_run_message}</p>
       )}
 
+      {confirmDelete && (
+        <div className="border-t border-red-900/40 mt-2 pt-3 space-y-2">
+          <p className="text-sm text-red-200">
+            Delete <span className="font-medium text-white">{pl.title}</span>?
+            {pl.plex_playlist_id
+              ? " This also removes the playlist from Plex."
+              : " Draft only — nothing on Plex."}
+          </p>
+          <div className="flex gap-2">
+            <button onClick={() => deleteMut.mutate()} disabled={deleteMut.isPending}
+              className="px-3 py-1.5 rounded-lg bg-red-900/50 text-red-100 text-sm hover:bg-red-900/70 disabled:opacity-50">
+              {deleteMut.isPending ? "Deleting…" : "Delete"}
+            </button>
+            <button onClick={() => setConfirmDelete(false)}
+              className="px-3 py-1.5 rounded-lg text-slate-400 text-sm hover:text-white">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {editing && (
         <div className="border-t border-purple-900/30 mt-2 pt-3 grid sm:grid-cols-2 gap-3">
           <label className="text-xs text-slate-400 block sm:col-span-2">
-            Title
+            Title {pl.plex_playlist_id && <span className="text-slate-600">(synced to Plex on save)</span>}
             <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white"
               value={titleDraft} onChange={e => setTitleDraft(e.target.value)} />
           </label>

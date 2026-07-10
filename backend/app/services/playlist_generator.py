@@ -340,6 +340,94 @@ async def approve_playlist(playlist_id: int) -> dict[str, Any]:
         db.close()
 
 
+def _plex_client(db):
+    plex_row = db.query(Integration).filter_by(name="plex", enabled=True).first()
+    if not plex_row:
+        return None
+    from app.api.v1.integrations import _get_client
+    return _get_client(plex_row)
+
+
+async def rename_playlist(playlist_id: int, title: str) -> dict[str, Any]:
+    """Rename a smart playlist in Powarr and, if pushed, on Plex."""
+    title = (title or "").strip()
+    if not title:
+        return {"ok": False, "message": "Title is required"}
+    db = SessionLocal()
+    try:
+        pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+        if not pl:
+            return {"ok": False, "message": "Playlist not found"}
+        old = pl.title
+        if title == old and not pl.plex_playlist_id:
+            return {"ok": True, "message": "Unchanged", "title": title}
+
+        plex_renamed = False
+        if pl.plex_playlist_id:
+            plex = _plex_client(db)
+            if not plex:
+                return {"ok": False, "message": "Plex integration not enabled — cannot rename on Plex"}
+            ok = await plex.rename_playlist(pl.plex_playlist_id, title)
+            if not ok:
+                return {"ok": False, "message": "Plex rename failed"}
+            plex_renamed = True
+
+        pl.title = title
+        pl.updated_at = datetime.utcnow()
+        db.commit()
+        msg = f"Renamed to '{title}'"
+        if plex_renamed:
+            msg += " (Plex updated)"
+        return {"ok": True, "message": msg, "title": title, "plex_renamed": plex_renamed}
+    except Exception as e:
+        logger.warning(f"Rename playlist {playlist_id} failed: {e}")
+        return {"ok": False, "message": str(e)}
+    finally:
+        db.close()
+
+
+async def delete_playlist(playlist_id: int) -> dict[str, Any]:
+    """Delete a smart playlist from Powarr and remove it from Plex when present.
+
+    Only deletes Plex playlists Powarr created (plex_playlist_id set). Related
+    candidates/tracks/runs are removed with the definition.
+    """
+    db = SessionLocal()
+    try:
+        pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+        if not pl:
+            return {"ok": False, "message": "Playlist not found"}
+
+        plex_deleted = False
+        plex_id = pl.plex_playlist_id
+        if plex_id:
+            plex = _plex_client(db)
+            if not plex:
+                return {"ok": False, "message": "Plex integration not enabled — cannot remove from Plex"}
+            ok = await plex.delete_playlist(plex_id)
+            if not ok:
+                return {"ok": False, "message": "Plex delete failed — Powarr row left intact"}
+            plex_deleted = True
+
+        title = pl.title
+        db.query(SmartPlaylistTrack).filter_by(playlist_id=pl.id).delete()
+        db.query(SmartPlaylistCandidate).filter_by(playlist_id=pl.id).delete()
+        db.query(SmartPlaylistRun).filter_by(playlist_id=pl.id).delete()
+        db.delete(pl)
+        db.commit()
+        msg = f"Deleted '{title}'"
+        if plex_deleted:
+            msg += " (removed from Plex)"
+        elif plex_id is None:
+            msg += " (draft — nothing on Plex)"
+        return {"ok": True, "message": msg, "plex_deleted": plex_deleted}
+    except Exception as e:
+        logger.warning(f"Delete playlist {playlist_id} failed: {e}")
+        return {"ok": False, "message": str(e)}
+    finally:
+        db.close()
+
+
 async def run_scheduled_generation() -> dict[str, Any]:
     """Scheduled Smart Playlists generation with auto-update of approved playlists.
 
