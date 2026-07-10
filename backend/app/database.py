@@ -28,6 +28,7 @@ def get_db():
 def init_db():
     from app.models import media, integration, app_setting, failed_import, deletion_log  # noqa: F401
     from app.models import smart_playlist  # noqa: F401
+    from app.models import artist_discovery  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate()
 

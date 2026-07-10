@@ -143,6 +143,43 @@ class LidarrIntegration(BaseIntegration):
         except Exception as e:
             return self._manual_import_error_result(e)
 
+    async def lookup_artist(self, term: str) -> list[dict]:
+        """GET /artist/lookup?term= — MusicBrainz search via Lidarr's proxy.
+        Use `lidarr:<mbid>` as term to search by MBID (avoids fuzzy name matching
+        and upstream proxy timeouts), matching the n8n curator's convention."""
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/artist/lookup", headers=self._headers(),
+                                 params={"term": term})
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, list) else []
+
+    async def add_artist(self, payload: dict) -> dict:
+        """POST /artist. Caller should treat HTTP 400 (already exists) as success —
+        Lidarr rejects duplicate adds rather than returning the existing artist."""
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            r = await client.post(f"{self._base()}/artist", headers=self._headers(), json=payload)
+            r.raise_for_status()
+            return r.json()
+
+    async def get_root_folders(self) -> list[dict]:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/rootfolder", headers=self._headers())
+            r.raise_for_status()
+            return r.json()
+
+    async def get_quality_profiles(self) -> list[dict]:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/qualityprofile", headers=self._headers())
+            r.raise_for_status()
+            return r.json()
+
+    async def get_metadata_profiles(self) -> list[dict]:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/metadataprofile", headers=self._headers())
+            r.raise_for_status()
+            return r.json()
+
     async def unmonitor_artist(self, artist_id: int) -> bool:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             r = await client.get(f"{self._base()}/artist/{artist_id}", headers=self._headers())

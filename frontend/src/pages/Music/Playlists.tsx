@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListMusic, Play, Check, X, RefreshCw, Clock, Settings, Music } from "lucide-react";
+import { ListMusic, Play, Check, X, RefreshCw, Clock, Settings, Music, Pencil } from "lucide-react";
 import { req } from "../../lib/api";
 
 interface Playlist {
@@ -58,6 +58,8 @@ const api = {
     req<{ ok: boolean; message: string }>(`/smart-playlists/candidates/${id}/accept`, { method: "POST" }),
   reject: (id: number) =>
     req<{ ok: boolean; message: string }>(`/smart-playlists/candidates/${id}/reject`, { method: "POST" }),
+  updatePlaylist: (id: number, body: Partial<PlaylistDetail>) =>
+    req<PlaylistDetail>(`/smart-playlists/${id}`, { method: "PUT", body: JSON.stringify(body) }),
 };
 
 function formatDate(isoDate: string | null | undefined): string {
@@ -72,6 +74,90 @@ function formatDate(isoDate: string | null | undefined): string {
   if (diffHours < 24) return `${diffHours}h ago`;
   const diffDays = Math.floor(diffHours / 24);
   return `${diffDays}d ago`;
+}
+
+function PlaylistCard({ pl }: { pl: Playlist }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const { data: detail } = useQuery({
+    queryKey: ["sp-detail", pl.id], queryFn: () => api.detail(pl.id), enabled: editing,
+  });
+  const [autoAdd, setAutoAdd] = useState<"" | "on" | "off">("");
+  const [maxTracks, setMaxTracks] = useState("");
+
+  const openEdit = () => {
+    setAutoAdd(detail?.auto_add_override === true ? "on" : detail?.auto_add_override === false ? "off" : "");
+    setMaxTracks(detail?.max_tracks_override != null ? String(detail.max_tracks_override) : "");
+    setEditing(true);
+  };
+
+  const saveMut = useMutation({
+    mutationFn: () => api.updatePlaylist(pl.id, {
+      auto_add_override: autoAdd === "" ? null : autoAdd === "on",
+      max_tracks_override: maxTracks.trim() === "" ? null : parseInt(maxTracks),
+    }),
+    onSuccess: () => {
+      setEditing(false);
+      qc.invalidateQueries({ queryKey: ["sp-list"] });
+      qc.invalidateQueries({ queryKey: ["sp-detail", pl.id] });
+    },
+  });
+
+  return (
+    <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-4">
+      <div className="flex items-start justify-between mb-2">
+        <div>
+          <p className="text-white text-sm font-medium">{pl.title}</p>
+          <p className="text-slate-500 text-xs">Genre: {pl.genre_tag}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {pl.plex_playlist_id && (
+            <span className="text-xs bg-purple-900/40 text-purple-200 px-2 py-1 rounded">
+              Plex #{pl.plex_playlist_id}
+            </span>
+          )}
+          <button onClick={() => (editing ? setEditing(false) : openEdit())}
+            className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white" title="Edit overrides">
+            <Pencil size={13} />
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-2 text-xs text-slate-400 mb-2">
+        <span>Tracks: {pl.track_count}</span>
+        <span>Pending: {pl.pending_count}</span>
+        <span>Last gen: {formatDate(pl.last_generated_at)}</span>
+      </div>
+      {pl.last_run_message && (
+        <p className="text-xs text-slate-500 mb-2">Status: {pl.last_run_message}</p>
+      )}
+
+      {editing && (
+        <div className="border-t border-purple-900/30 mt-2 pt-3 grid sm:grid-cols-2 gap-3">
+          <label className="text-xs text-slate-400 block">
+            Auto-add override
+            <select className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white"
+              value={autoAdd} onChange={e => setAutoAdd(e.target.value as "" | "on" | "off")}>
+              <option value="">Use global default</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <label className="text-xs text-slate-400 block">
+            Max tracks override
+            <input type="number" placeholder="Use global default"
+              className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white placeholder:text-slate-600"
+              value={maxTracks} onChange={e => setMaxTracks(e.target.value)} />
+          </label>
+          <div className="sm:col-span-2">
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}
+              className="px-3 py-1.5 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
+              Save Overrides
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function SmartPlaylists() {
@@ -134,6 +220,10 @@ export default function SmartPlaylists() {
               <input type="checkbox" checked={!!form.enabled} onChange={e => set("enabled", e.target.checked)} />
               Enabled
             </label>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input type="checkbox" checked={!!form.auto_create_playlists} onChange={e => set("auto_create_playlists", e.target.checked)} />
+              Auto-create Plex playlists on scheduled runs (not just manual Accept)
+            </label>
 
             <div className="grid sm:grid-cols-2 gap-3">
               <label className="text-xs text-slate-400 block">
@@ -155,6 +245,12 @@ export default function SmartPlaylists() {
                 Max tracks per playlist
                 <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
                   value={form.max_tracks_per_playlist || 200} onChange={e => set("max_tracks_per_playlist", parseInt(e.target.value))} />
+              </label>
+              <label className="text-xs text-slate-400 block sm:col-span-2">
+                Excluded genres <span className="text-slate-600">(comma-separated)</span>
+                <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
+                  value={(form.excluded_genres || []).join(", ")}
+                  onChange={e => set("excluded_genres", e.target.value.split(",").map(g => g.trim()).filter(Boolean))} />
               </label>
               <label className="text-xs text-slate-400 block sm:col-span-2">
                 Qdrant API key {settings?.qdrant_api_key_set ? "(saved — leave blank to keep)" : ""}
@@ -207,29 +303,7 @@ export default function SmartPlaylists() {
           <p className="text-slate-500 text-sm">No genre playlists yet — configure Qdrant and Generate.</p>
         ) : (
           <div className="grid gap-2">
-            {playlists.map(pl => (
-              <div key={pl.id} className="bg-surface-raised border border-purple-900/30 rounded-lg p-4">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <p className="text-white text-sm font-medium">{pl.title}</p>
-                    <p className="text-slate-500 text-xs">Genre: {pl.genre_tag}</p>
-                  </div>
-                  {pl.plex_playlist_id && (
-                    <span className="text-xs bg-purple-900/40 text-purple-200 px-2 py-1 rounded">
-                      Plex #{pl.plex_playlist_id}
-                    </span>
-                  )}
-                </div>
-                <div className="grid grid-cols-3 gap-2 text-xs text-slate-400 mb-2">
-                  <span>Tracks: {pl.track_count}</span>
-                  <span>Pending: {pl.pending_count}</span>
-                  <span>Last gen: {formatDate(pl.last_generated_at)}</span>
-                </div>
-                {pl.last_run_message && (
-                  <p className="text-xs text-slate-500 mb-2">Status: {pl.last_run_message}</p>
-                )}
-              </div>
-            ))}
+            {playlists.map(pl => <PlaylistCard key={pl.id} pl={pl} />)}
           </div>
         )}
       </section>

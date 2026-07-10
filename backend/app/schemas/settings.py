@@ -183,6 +183,36 @@ class SmartPlaylistSettings(BaseModel):
     schedule_interval_hours: int = 24
 
 
+class ArtistDiscoverySettings(BaseModel):
+    """Artist Discovery — native port of the n8n Music Curator (Last.fm scrobbles →
+    Ollama embeddings → Qdrant taste-centroid similarity + related-artist graph →
+    Lidarr). Writes to the same `music_affinity_space` collection Smart Playlists
+    reads (soft-delete semantics — never deletes points, only flips flags)."""
+    enabled: bool = False
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
+    collection: str = "music_affinity_space"
+    ollama_host: str = ""  # blank = reuse the main Ollama connection's host
+    embed_model: str = "all-minilm"
+    max_candidates_per_run: int = 5
+    related_artists_limit: int = 3  # top-N similar artists kept per seed (graph sync)
+    auto_add_connection_threshold: int = 3  # seed connections before a graph candidate qualifies
+    related_artists_refresh_days: int = 30  # re-scan a seed's similar artists after this many days
+    similarity_threshold: float = 0.75  # cosine score floor for centroid-search candidates
+    scrobble_lookback_days: int = 30
+    # Off by default (user-confirmed) — graph candidates crossing the connection
+    # threshold otherwise wait in the review queue like every other candidate,
+    # same pattern as Smart Playlists' auto_add_tracks_default.
+    auto_promote: bool = False
+    root_folder_path: str = ""  # "" = use Lidarr's first available root folder
+    quality_profile_id: int = 0  # 0 = use Lidarr's first available quality profile
+    metadata_profile_id: int = 0  # 0 = use Lidarr's first available metadata profile
+    schedule_enabled: bool = False
+    schedule_interval_hours: int = 24  # full discovery cycle: ingest + centroid + graph
+    sync_schedule_enabled: bool = False
+    sync_interval_hours: int = 1  # differential sync: Lidarr/Last.fm stats -> Qdrant
+
+
 class NotificationSettings(BaseModel):
     enabled: bool = False
     ntfy_url: str = ""  # e.g. http://10.1.1.2:8091

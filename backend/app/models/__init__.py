@@ -6,6 +6,8 @@ from app.models.failed_import import FailedImport
 from app.models.smart_playlist import (
     SmartPlaylist, SmartPlaylistCandidate, SmartPlaylistRun, SmartPlaylistTrack
 )
+from app.models.artist_discovery import DiscoveredArtist, ArtistDiscoveryRun
 
 __all__ = ["MediaItem", "Integration", "AppSetting", "FailedImport", "DeletionLog",
-           "SmartPlaylist", "SmartPlaylistCandidate", "SmartPlaylistRun", "SmartPlaylistTrack"]
+           "SmartPlaylist", "SmartPlaylistCandidate", "SmartPlaylistRun", "SmartPlaylistTrack",
+           "DiscoveredArtist", "ArtistDiscoveryRun"]

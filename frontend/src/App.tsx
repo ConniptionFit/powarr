@@ -127,7 +127,7 @@ export default function App() {
               <Route path="/imports/match-review" element={<div className="p-4 sm:p-8"><MatchReview /></div>} />
 
               <Route path="/music" element={<Navigate to="/music/discovery" replace />} />
-              <Route path="/music/discovery" element={<div className="p-4 sm:p-8"><ArtistDiscovery /></div>} />
+              <Route path="/music/discovery" element={<ArtistDiscovery />} />
               <Route path="/music/playlists" element={<Playlists />} />
 
               <Route path="/settings" element={<SettingsPage />} />

@@ -10,14 +10,14 @@ import uuid
 from fastapi.responses import JSONResponse
 
 from app.database import init_db
-from app.api.v1 import media, settings, integrations, imports, system, auth, tasks, playlists
+from app.api.v1 import media, settings, integrations, imports, system, auth, tasks, playlists, artist_discovery
 from app import log_buffer
 
 logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.38.0", docs_url="/api/docs", openapi_url=None)
+app = FastAPI(title="Powarr", version="0.39.0", docs_url="/api/docs", openapi_url=None)
 
 # Paths that stay reachable without a session: the auth flow itself, the
 # health endpoint (Docker healthcheck probes from inside the container), and
@@ -87,7 +87,7 @@ def _seed_integrations():
     db = SessionLocal()
     try:
         for name in ("plex", "tautulli", "sonarr", "radarr", "lidarr",
-                     "readarr", "seerr", "qbittorrent", "transmission"):
+                     "readarr", "seerr", "qbittorrent", "transmission", "lastfm"):
             if not db.query(Integration).filter_by(name=name).first():
                 db.add(Integration(name=name))
         db.commit()
@@ -154,6 +154,7 @@ app.include_router(system.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(tasks.router, prefix="/api/v1")
 app.include_router(playlists.router, prefix="/api/v1")
+app.include_router(artist_discovery.router, prefix="/api/v1")
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 

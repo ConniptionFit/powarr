@@ -10,7 +10,7 @@ from app.models.app_setting import AppSetting
 from app.models.media import MediaItem
 from app.schemas.settings import (
     CleanupSettings, SyncSettings, LlmScheduleSettings, BackupSettings,
-    NotificationSettings, SmartPlaylistSettings,
+    NotificationSettings, SmartPlaylistSettings, ArtistDiscoverySettings,
 )
 
 logger = logging.getLogger("powarr")
@@ -172,6 +172,52 @@ async def _scheduled_playlist_generation(db) -> None:
         logger.info(f"Scheduled playlist generation: {result.get('message')}")
 
 
+async def _scheduled_artist_discovery(db) -> None:
+    """Scheduled full discovery cycle (ingest + centroid + graph sync)."""
+    cfg = _get_setting(db, "artist_discovery", ArtistDiscoverySettings)
+    if not cfg.enabled or not cfg.schedule_enabled:
+        return
+    row = db.query(AppSetting).filter_by(key="last_artist_discovery_run").first()
+    if row and row.value:
+        try:
+            last = datetime.fromisoformat(row.value)
+            if datetime.utcnow() - last < timedelta(hours=cfg.schedule_interval_hours):
+                return
+        except ValueError:
+            pass
+    from app.services.artist_discovery import run_full_discovery_cycle
+    result = await run_full_discovery_cycle(db)
+    if not row:
+        row = AppSetting(key="last_artist_discovery_run")
+        db.add(row)
+    row.value = datetime.utcnow().isoformat()
+    db.commit()
+    logger.info(f"Scheduled Artist Discovery run: {result.get('message')}")
+
+
+async def _scheduled_artist_discovery_sync(db) -> None:
+    """Scheduled differential sync (Lidarr/Last.fm stats -> Qdrant)."""
+    cfg = _get_setting(db, "artist_discovery", ArtistDiscoverySettings)
+    if not cfg.enabled or not cfg.sync_schedule_enabled:
+        return
+    row = db.query(AppSetting).filter_by(key="last_artist_discovery_sync").first()
+    if row and row.value:
+        try:
+            last = datetime.fromisoformat(row.value)
+            if datetime.utcnow() - last < timedelta(hours=cfg.sync_interval_hours):
+                return
+        except ValueError:
+            pass
+    from app.services.artist_discovery import run_differential_sync
+    result = await run_differential_sync(db)
+    if not row:
+        row = AppSetting(key="last_artist_discovery_sync")
+        db.add(row)
+    row.value = datetime.utcnow().isoformat()
+    db.commit()
+    logger.info(f"Scheduled Artist Discovery sync: {result.get('message')}")
+
+
 async def maintenance_loop():
     logger.info("Maintenance scheduler started")
     while True:
@@ -184,6 +230,8 @@ async def maintenance_loop():
                 await _scheduled_backup(db)
                 await _scheduled_weekly_digest(db)
                 await _scheduled_playlist_generation(db)
+                await _scheduled_artist_discovery(db)
+                await _scheduled_artist_discovery_sync(db)
             finally:
                 db.close()
         except asyncio.CancelledError:
