@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListMusic, Play, Check, X, RefreshCw, Music, Pencil, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
-import { req } from "../../lib/api";
+import { req, fmtRelative } from "../../lib/api";
 
 interface Playlist {
   id: number;
@@ -45,20 +45,6 @@ const api = {
   updatePlaylist: (id: number, body: Partial<PlaylistDetail>) =>
     req<PlaylistDetail>(`/smart-playlists/${id}`, { method: "PUT", body: JSON.stringify(body) }),
 };
-
-function formatDate(isoDate: string | null | undefined): string {
-  if (!isoDate) return "Never";
-  const date = new Date(isoDate);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d ago`;
-}
 
 function PlaylistCard({ pl }: { pl: Playlist }) {
   const qc = useQueryClient();
@@ -109,7 +95,7 @@ function PlaylistCard({ pl }: { pl: Playlist }) {
       <div className="grid grid-cols-3 gap-2 text-xs text-slate-400 mb-2">
         <span>Tracks: {pl.track_count}</span>
         <span>Pending: {pl.pending_count}</span>
-        <span>Last gen: {formatDate(pl.last_generated_at)}</span>
+        <span>Last gen: {fmtRelative(pl.last_generated_at)}</span>
       </div>
       {pl.last_run_message && (
         <p className="text-xs text-slate-500 mb-2">Status: {pl.last_run_message}</p>

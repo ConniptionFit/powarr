@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity, AlertTriangle, Shuffle, ChevronRight } from "lucide-react";
-import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes, type DepHealth } from "../../lib/api";
+import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes, parseApiDate, type DepHealth } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
 
 function PipelineChip({ icon: Icon, label, count, color, onClick }: {
@@ -134,7 +134,7 @@ function CountdownStat({ icon, label, color, targetIso, disabledLabel, sub, erro
   const value = error
     ? "—"
     : targetIso
-      ? fmtCountdown(new Date(targetIso).getTime() - Date.now())
+      ? fmtCountdown(parseApiDate(targetIso).getTime() - Date.now())
       : disabledLabel;
   return (
     <StatCard
@@ -223,7 +223,7 @@ export default function Dashboard() {
           <p className="text-slate-400 text-sm mt-1">
             Media library overview
             {stats?.last_synced && (
-              <span className="text-slate-500"> — last synced {new Date(stats.last_synced).toLocaleString()}</span>
+              <span className="text-slate-500"> — last synced {parseApiDate(stats.last_synced).toLocaleString()}</span>
             )}
           </p>
         </div>

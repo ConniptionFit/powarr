@@ -544,7 +544,26 @@ export function fmtBytes(bytes: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
+// Backend timestamps are naive UTC with no timezone suffix; treat suffix-less
+// date-times as UTC so they render correctly in the browser's local zone.
+// Date-only strings (no "T") and suffixed strings pass through unchanged.
+export function parseApiDate(iso: string): Date {
+  if (iso.includes("T") && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso)) return new Date(iso + "Z");
+  return new Date(iso);
+}
+
 export function fmtDate(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleDateString();
+  return parseApiDate(iso).toLocaleDateString();
+}
+
+export function fmtRelative(iso: string | null | undefined, empty = "Never"): string {
+  if (!iso) return empty;
+  const diffMs = Date.now() - parseApiDate(iso).getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
 }

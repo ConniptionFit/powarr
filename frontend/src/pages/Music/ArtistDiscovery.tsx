@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Compass, Play, RefreshCw, Check, X, Sparkles, Settings, Music2, ChevronDown, ChevronUp, History } from "lucide-react";
 import { Link } from "react-router-dom";
-import { req } from "../../lib/api";
+import { req, fmtRelative, parseApiDate } from "../../lib/api";
 
 interface Candidate {
   id: number;
@@ -55,18 +55,6 @@ const api = {
   reject: (id: number) =>
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/reject`, { method: "POST" }),
 };
-
-function formatDate(isoDate: string | null | undefined): string {
-  if (!isoDate) return "Never";
-  const date = new Date(isoDate);
-  const diffMs = Date.now() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return `${Math.floor(diffHours / 24)}d ago`;
-}
 
 function ArtistAvatar({ url, name }: { url: string | null; name: string }) {
   const [failed, setFailed] = useState(false);
@@ -166,7 +154,7 @@ function CandidateCard({ c, onAccept, onReject, pending }: {
 
 function runDuration(r: DiscoveryRun): string {
   if (!r.started_at || !r.finished_at) return "—";
-  const secs = Math.max(0, Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000));
+  const secs = Math.max(0, Math.round((parseApiDate(r.finished_at).getTime() - parseApiDate(r.started_at).getTime()) / 1000));
   return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }
 
@@ -201,7 +189,7 @@ function RecentRuns() {
                 {runs.map(r => (
                   <tr key={r.id} className="border-b border-purple-900/20 text-slate-300">
                     <td className="py-2 pr-4 capitalize">{r.run_type}</td>
-                    <td className="py-2 pr-4 whitespace-nowrap">{formatDate(r.started_at)}</td>
+                    <td className="py-2 pr-4 whitespace-nowrap">{fmtRelative(r.started_at)}</td>
                     <td className="py-2 pr-4">{runDuration(r)}</td>
                     <td className="py-2 pr-4">{r.candidates_found}</td>
                     <td className="py-2 pr-4">{r.candidates_added}</td>
@@ -291,7 +279,7 @@ export default function ArtistDiscovery() {
           </div>
           <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-3">
             <p className="text-xs text-slate-500">Last run</p>
-            <p className="text-white text-sm font-medium">{formatDate(stats.last_run_at)}</p>
+            <p className="text-white text-sm font-medium">{fmtRelative(stats.last_run_at)}</p>
           </div>
         </div>
       )}
