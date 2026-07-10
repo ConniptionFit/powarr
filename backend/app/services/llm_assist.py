@@ -191,8 +191,10 @@ def compact_det_summary(match_rationale: str, heuristic_confidence: float | None
     ):
         if any(n in low for n in needles):
             parts.append(label)
-    # Keep a short slice of the original for any unique detail
-    snippet = (match_rationale or "").replace("\n", " ")
+    # Keep a short slice of the original for any unique detail. The rationale is
+    # Markdown bullets since v0.37.3 — flatten to plain prose for the prompt.
+    snippet = ((match_rationale or "").replace("\n- ", "; ").replace("**", "")
+               .lstrip("- ").replace("\n", " "))
     if len(snippet) > 180:
         snippet = snippet[:179].rstrip() + "…"
     if snippet:

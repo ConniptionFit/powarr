@@ -923,7 +923,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             parts.append(f"no numeric corroboration — confidence capped at {cfg.title_only_cap:.2f}")
 
     heuristic_confidence = round(min(1.0, confidence), 3)
-    match_rationale = "; ".join(parts)
+    match_rationale = format_rationale(parts)
     llm_confidence = None
     llm_rationale = None
     llm_agrees = None
@@ -1821,9 +1821,28 @@ async def rematch_music_row(db, row: FailedImport, lib_cache: dict[str, list],
     row.matched_title = title
     row.heuristic_confidence = round(min(1.0, conf), 3)
     row.confidence = row.heuristic_confidence
-    meta["match_rationale"] = "; ".join(parts)
+    meta["match_rationale"] = format_rationale(parts)
     row.raw_metadata = json.dumps(meta)
     return True
+
+
+# Percentages ("92%") and confidence values ("0.88") — bolded in Match Notes.
+_RATIONALE_NUM_RE = re.compile(r"(\d+(?:\.\d+)?%|\b[01]\.\d+\b)")
+
+
+def format_rationale(parts: list[str]) -> str:
+    """Render the deterministic scorer's findings as a Markdown bullet list
+    (v0.37.3) — same shape as the LLM Notes column: one '- ' bullet per finding,
+    capitalized, with percentages and confidence values bolded. Pre-v0.37.3 rows
+    keep their prose form until rescored/rescanned."""
+    bullets = []
+    for part in parts:
+        part = (part or "").strip()
+        if not part:
+            continue
+        part = part[0].upper() + part[1:]
+        bullets.append(f"- {_RATIONALE_NUM_RE.sub(r'**\1**', part)}")
+    return "\n".join(bullets)
 
 
 def collect_auto_eligible(rows, cfg) -> list[int]:

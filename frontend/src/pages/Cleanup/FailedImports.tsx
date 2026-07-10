@@ -16,6 +16,10 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   return !!target.closest("button, a, input, select, textarea, label, [role='button']");
 }
 
+/** Flatten Markdown bullets/bold into plain prose for title tooltips. */
+const stripMd = (text?: string | null) =>
+  (text ?? "").replace(/\n- /g, "; ").replace(/^- /, "").replace(/\*\*/g, "");
+
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   suggested: { label: "Suggested", cls: "bg-yellow-900/60 text-yellow-300" },
   auto_resolved: { label: "Auto-resolved", cls: "bg-green-900/60 text-green-300" },
@@ -727,18 +731,18 @@ export default function FailedImports() {
         return <span className="block truncate text-slate-300" title={item.matched_title ?? ""}>{item.matched_title ?? "—"}</span>;
       case "match_pct":
         return (
-          <span title={item.match_rationale ?? ""}>
+          <span title={stripMd(item.match_rationale)}>
             <ConfidenceBadge value={item.heuristic_confidence ?? item.confidence} />
           </span>
         );
       case "match_notes":
         return item.match_rationale ? (
-          <ClampedText text={item.match_rationale} />
+          <ClampedText text={item.match_rationale} markdown />
         ) : <span className="text-slate-600 text-xs">—</span>;
       case "llm_pct":
         return item.llm_confidence !== null ? (
           <span className="flex items-center gap-1">
-            <span title={item.llm_rationale ?? ""}><ConfidenceBadge value={item.llm_confidence} /></span>
+            <span title={stripMd(item.llm_rationale)}><ConfidenceBadge value={item.llm_confidence} /></span>
             {item.llm_agrees === true && (
               <span title="LLM agrees with the match"><ThumbsUp size={12} className="text-green-400" /></span>
             )}

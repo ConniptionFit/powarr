@@ -62,6 +62,32 @@ class TestApplyMusicChecks(unittest.TestCase):
         self.assertEqual(conf, 0.7)
 
 
+class TestFormatRationale(unittest.TestCase):
+    """v0.37.3: Match Notes render as Markdown bullets like the LLM Notes."""
+
+    def test_parts_become_bullets_with_bold_numbers(self):
+        from app.services.import_matcher import format_rationale
+        out = format_rationale([
+            "grab history links this downloadId to the library album (title similarity 92%)",
+            "release name contains both the candidate artist and album — confidence raised to 0.88",
+        ])
+        self.assertEqual(out.split("\n"), [
+            "- Grab history links this downloadId to the library album (title similarity **92%**)",
+            "- Release name contains both the candidate artist and album — confidence raised to **0.88**",
+        ])
+
+    def test_empty_parts_skipped(self):
+        from app.services.import_matcher import format_rationale
+        self.assertEqual(format_rationale(["", "  ", "one thing"]), "- One thing")
+
+    def test_compact_det_summary_flattens_bullets(self):
+        from app.services.llm_assist import compact_det_summary
+        out = compact_det_summary("- Title similarity **92%**\n- Numbers match", 0.9)
+        self.assertNotIn("**", out)
+        self.assertNotIn("\n", out)
+        self.assertIn("Title similarity 92%; Numbers match", out)
+
+
 class TestCollectAutoEligible(unittest.TestCase):
     """v0.37.1: rescored rows meeting the auto-import bar get queued for accept."""
 
