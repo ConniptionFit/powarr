@@ -107,29 +107,33 @@ Then open `http://<host>:7979`:
 1. **Settings → Integrations** → configure Plex (required) and any of Tautulli, Sonarr, Radarr, Lidarr, Readarr, Seerr, qBittorrent, Transmission, Qdrant, Last.fm, Ollama
 2. Run **Sync Library** (Overview page)
 3. **Library** → review deletion suggestions and history; **Imports** → Import Queue (detection) and Match Review (confidence scoring/triage)
-4. **Settings** → categorized Matching & Scoring, Automation, LLM Assist, Notifications, Security
+4. **Settings** → categorized Matching & Scoring, Automation, LLM Assist, Notifications, Security, Music
 
 ### Navigation (v0.38.0)
 A left icon rail replaces the old always-expanded sidebar. Rail areas: **Overview**, **Library**
 (Deletion Suggestions / Deletion History), **Imports** (Import Queue / Match Review — split from
 the old combined Failed Imports table), **Music** (Artist Discovery / Playlists), and
 **Settings** (category grid: Integrations, Matching & Scoring, Automation, LLM Assist,
-Notifications, Security — replaces the separate top-level Integrations page). Logs sits below a
-divider as a utility item. Match Review defaults to a card-per-item layout with a table-view
-toggle for the old dense table.
+Notifications, Security, Music — replaces the separate top-level Integrations page). Logs sits
+below a divider as a utility item. Match Review defaults to a card-per-item layout with a
+table-view toggle for the old dense table.
 
-### Music — Artist Discovery (v0.39.0)
+### Music — Artist Discovery (v0.39.0; refined v0.40.0)
 Native port of an external n8n taste-mapping pipeline: **Last.fm** scrobble history is embedded
-via **Ollama** (`all-minilm`), mapped into the same Qdrant `music_affinity_space` collection Smart
-Playlists reads, and used two ways — a **taste-centroid similarity search** surfaces new artists
-close to what you already listen to, and a **related-artist graph** expands outward from your
-monitored Lidarr artists via Last.fm's similar-artist API. Both land in a pending review queue;
-accepting adds the artist to Lidarr (root folder / quality / metadata profile configurable, else
-Lidarr's first available). An opt-in **auto-promote** setting (off by default) lets graph
-candidates that cross a configurable connection-count threshold skip the queue. A **differential
-sync** keeps `is_monitored_lidarr` / fulfillment / play-count flags on every Qdrant point current
-without ever deleting a point (soft-delete semantics). Both the discovery cycle and the sync run
-on independent optional schedules, or on demand.
+via a standalone **Ollama** connection (`all-minilm`, independent of the separate LLM Assist
+Ollama connection), mapped into the shared Qdrant `music_affinity_space` collection (configured
+once under Settings → Integrations, also used by Smart Playlists), and used two ways — a
+**taste-centroid similarity search** surfaces new artists close to what you already listen to,
+and a **related-artist graph** expands outward from your monitored Lidarr artists via Last.fm's
+similar-artist API. Both land in a pending review queue, each candidate showing a **thumbnail,
+bio, genres, and active years** pulled from Lidarr (primary) and MusicBrainz/Wikipedia
+(fallback). Accepting adds the artist to Lidarr (root folder / quality / metadata profile
+configurable, else Lidarr's first available). An opt-in **auto-promote** setting (off by default)
+lets graph candidates that cross a configurable connection-count threshold skip the queue. A
+**differential sync** keeps `is_monitored_lidarr` / fulfillment / play-count flags on every Qdrant
+point current without ever deleting a point (soft-delete semantics). Both the discovery cycle and
+the sync run on independent optional schedules, or on demand. Both this page and Playlists are
+queue-only — all configuration lives at **Settings → Music**.
 
 ## Configuration Notes
 

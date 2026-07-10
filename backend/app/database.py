@@ -71,6 +71,11 @@ def _migrate():
             "auto_add_override": "BOOLEAN",
             "max_tracks_override": "INTEGER",
         },
+        "discovered_artists": {
+            "image_url": "VARCHAR",
+            "bio": "TEXT",
+            "years_active": "VARCHAR",
+        },
     }
     with engine.connect() as conn:
         for table, pending in pending_by_table.items():

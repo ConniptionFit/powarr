@@ -552,7 +552,7 @@ function LastFmCard({ cfg }: { cfg: IntegrationConfig }) {
 
 function QdrantCard() {
   const qc = useQueryClient();
-  const { data: cfg } = useQuery({ queryKey: ["sp-settings"], queryFn: () => req<any>("/smart-playlists/settings") });
+  const { data: cfg } = useQuery({ queryKey: ["qdrant-settings"], queryFn: () => req<any>("/integrations/qdrant/settings") });
   const [qdrantUrl, setQdrantUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [collection, setCollection] = useState("music_affinity_space");
@@ -562,9 +562,9 @@ function QdrantCard() {
 
   useEffect(() => {
     if (cfg) {
-      setQdrantUrl(cfg.qdrant_url || "");
+      setQdrantUrl(cfg.url || "");
       setCollection(cfg.collection || "music_affinity_space");
-      setApiKeySet(cfg.qdrant_api_key_set || false);
+      setApiKeySet(cfg.api_key_set || false);
     }
   }, [cfg]);
 
@@ -572,7 +572,7 @@ function QdrantCard() {
     setTesting(true);
     setTestResult(null);
     try {
-      const r = await req<any>("/smart-playlists/qdrant/test", { method: "POST" });
+      const r = await req<any>("/integrations/qdrant/test", { method: "POST" });
       setTestResult(r);
     } catch (e: unknown) {
       setTestResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
@@ -582,13 +582,13 @@ function QdrantCard() {
   };
 
   const saveMut = useMutation({
-    mutationFn: () => req("/smart-playlists/settings", {
+    mutationFn: () => req("/integrations/qdrant/settings", {
       method: "PUT",
-      body: JSON.stringify({ qdrant_url: qdrantUrl, collection, qdrant_api_key: apiKey || undefined }),
+      body: JSON.stringify({ url: qdrantUrl, collection, api_key: apiKey || undefined }),
     }),
     onSuccess: () => {
       setApiKey("");
-      qc.invalidateQueries({ queryKey: ["sp-settings"] });
+      qc.invalidateQueries({ queryKey: ["qdrant-settings"] });
     },
   });
 
@@ -599,7 +599,7 @@ function QdrantCard() {
         <div className="px-2 py-0.5 rounded text-xs font-bold text-white bg-violet-600 flex items-center gap-1">
           <Sparkles size={12} /> Qdrant
         </div>
-        <span className="text-slate-500 text-xs">Vector DB for music affinity, discovery, and intelligent playlisting</span>
+        <span className="text-slate-500 text-xs">Shared vector DB connection for Artist Discovery and Smart Playlists</span>
       </div>
 
       <div className="space-y-3">

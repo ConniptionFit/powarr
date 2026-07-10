@@ -43,13 +43,12 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
     db = SessionLocal()
     try:
         cfg = load_settings(db)
-        if not cfg.enabled or not cfg.qdrant_url:
-            return {"ok": False, "message": "Smart Playlists disabled or Qdrant URL not set",
+        from app.services import qdrant_config
+        client = qdrant_config.client(db)
+        if not cfg.enabled or not client:
+            return {"ok": False, "message": "Smart Playlists disabled or Qdrant not configured "
+                                             "(Settings → Integrations → Qdrant)",
                     "genres": 0, "candidates": 0}
-        from app.integrations.qdrant import QdrantIntegration
-        from app.services.secret_box import decrypt
-        client = QdrantIntegration(
-            cfg.qdrant_url, decrypt(cfg.qdrant_api_key) or "", cfg.collection)
 
         excluded = {g.lower() for g in (cfg.excluded_genres or [])}
         by_genre: dict[str, list[dict]] = defaultdict(list)

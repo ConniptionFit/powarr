@@ -1,5 +1,4 @@
 """Smart Playlists API (MOD-01, v0.35+) — scheduling, auto-add, track tracking."""
-import json
 from datetime import datetime
 from typing import Optional
 
@@ -14,7 +13,6 @@ from app.models.smart_playlist import (
 )
 from app.schemas.settings import SmartPlaylistSettings
 from app.services import playlist_generator
-from app.services.secret_box import encrypt
 
 router = APIRouter(prefix="/smart-playlists", tags=["smart-playlists"])
 
@@ -77,38 +75,20 @@ class PlaylistRunOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class SmartPlaylistSettingsOut(SmartPlaylistSettings):
-    qdrant_api_key_set: bool = False
-
-
-@router.get("/settings", response_model=SmartPlaylistSettingsOut)
+@router.get("/settings", response_model=SmartPlaylistSettings)
 def get_settings(db: Session = Depends(get_db)):
-    cfg = playlist_generator.load_settings(db)
-    out = SmartPlaylistSettingsOut(**cfg.model_dump())
-    out.qdrant_api_key_set = bool(cfg.qdrant_api_key)
-    out.qdrant_api_key = ""  # never echo
-    return out
+    return playlist_generator.load_settings(db)
 
 
-@router.put("/settings", response_model=SmartPlaylistSettingsOut)
+@router.put("/settings", response_model=SmartPlaylistSettings)
 def put_settings(body: SmartPlaylistSettings, db: Session = Depends(get_db)):
     row = db.query(AppSetting).filter_by(key="smart_playlists").first()
-    current = playlist_generator.load_settings(db)
-    data = body.model_dump()
-    # Blank key = keep existing (same posture as integration secrets)
-    if not (body.qdrant_api_key or "").strip():
-        data["qdrant_api_key"] = current.qdrant_api_key
-    else:
-        data["qdrant_api_key"] = encrypt(body.qdrant_api_key) or body.qdrant_api_key
     if not row:
         row = AppSetting(key="smart_playlists")
         db.add(row)
-    row.value = json.dumps(data)
+    row.value = body.model_dump_json()
     db.commit()
-    out = SmartPlaylistSettingsOut(**SmartPlaylistSettings(**data).model_dump())
-    out.qdrant_api_key_set = bool(data.get("qdrant_api_key"))
-    out.qdrant_api_key = ""
-    return out
+    return body
 
 
 @router.get("", response_model=list[PlaylistOut])
@@ -231,45 +211,3 @@ def update_playlist(playlist_id: int, body: dict = Body(...),
         **{k: getattr(pl, k) for k in PlaylistDetailOut.model_fields},
         pending_count=pending
     )
-
-
-@router.post("/qdrant/test")
-async def test_qdrant(db: Session = Depends(get_db)):
-    """Test Qdrant connection and return collection stats."""
-    cfg = playlist_generator.load_settings(db)
-    if not cfg.qdrant_url:
-        return {"ok": False, "message": "Qdrant URL not configured"}
-
-    from app.integrations.qdrant import QdrantIntegration
-    from app.services.secret_box import decrypt
-
-    try:
-        client = QdrantIntegration(
-            cfg.qdrant_url,
-            decrypt(cfg.qdrant_api_key) or "",
-            cfg.collection
-        )
-        # Test connection
-        test = await client.test_connection()
-        if not test.get("ok"):
-            return test
-
-        # Get collection info
-        info = await client.get_collection_info()
-        if "error" in info:
-            return {"ok": False, "message": f"Failed to get collection info: {info.get('error')}"}
-
-        # Get sample of monitored artists to show available data
-        points, _ = await client.scroll_monitored_artists(limit=1)
-        sample_payload = points[0].get("payload", {}) if points else {}
-
-        return {
-            "ok": True,
-            "message": "Connected to Qdrant",
-            "collection": cfg.collection,
-            "collection_info": info,
-            "sample_payload_keys": list(sample_payload.keys()) if sample_payload else [],
-            "sample_artist": sample_payload.get("artist_name") if sample_payload else None,
-        }
-    except Exception as e:
-        return {"ok": False, "message": f"Error: {str(e)}"}

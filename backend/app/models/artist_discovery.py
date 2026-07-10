@@ -27,6 +27,12 @@ class DiscoveredArtist(Base):
     lidarr_artist_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
+    # Enrichment (v0.40.0) — Lidarr lookup primary, MusicBrainz (+ Wikipedia via its
+    # url-rels) fallback for whichever of image/bio is still missing. Populated once
+    # at candidate-creation time, not re-fetched on every read.
+    image_url = Column(String, nullable=True)
+    bio = Column(Text, nullable=True)
+    years_active = Column(String, nullable=True)
 
 
 class ArtistDiscoveryRun(Base):

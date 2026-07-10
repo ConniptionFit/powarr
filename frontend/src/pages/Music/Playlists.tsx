@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListMusic, Play, Check, X, RefreshCw, Clock, Settings, Music, Pencil } from "lucide-react";
+import { ListMusic, Play, Check, X, RefreshCw, Music, Pencil, Settings } from "lucide-react";
+import { Link } from "react-router-dom";
 import { req } from "../../lib/api";
 
 interface Playlist {
@@ -30,25 +31,8 @@ interface Candidate {
   status: string;
 }
 
-interface SPSettings {
-  enabled: boolean;
-  qdrant_url: string;
-  qdrant_api_key: string;
-  qdrant_api_key_set: boolean;
-  collection: string;
-  auto_create_playlists: boolean;
-  auto_add_tracks_default: boolean;
-  min_artists_per_genre: number;
-  excluded_genres: string[];
-  max_tracks_per_playlist: number;
-  schedule_enabled: boolean;
-  schedule_interval_hours: number;
-}
-
 const api = {
-  settings: () => req<SPSettings>("/smart-playlists/settings"),
-  saveSettings: (s: Partial<SPSettings>) =>
-    req<SPSettings>("/smart-playlists/settings", { method: "PUT", body: JSON.stringify(s) }),
+  settings: () => req<{ enabled: boolean }>("/smart-playlists/settings"),
   list: () => req<Playlist[]>("/smart-playlists"),
   detail: (id: number) => req<PlaylistDetail>(`/smart-playlists/${id}`),
   candidates: (status = "pending") =>
@@ -165,15 +149,8 @@ export default function SmartPlaylists() {
   const { data: settings } = useQuery({ queryKey: ["sp-settings"], queryFn: api.settings });
   const { data: playlists = [] } = useQuery({ queryKey: ["sp-list"], queryFn: api.list });
   const { data: candidates = [] } = useQuery({ queryKey: ["sp-candidates"], queryFn: () => api.candidates("pending") });
-  const [draft, setDraft] = useState<Partial<SPSettings> | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-  const form = draft ?? settings ?? null;
 
-  const saveMut = useMutation({
-    mutationFn: () => api.saveSettings(form || {}),
-    onSuccess: () => { setDraft(null); setMsg("Settings saved"); qc.invalidateQueries({ queryKey: ["sp-settings"] }); },
-    onError: (e: Error) => setMsg(e.message),
-  });
   const runMut = useMutation({
     mutationFn: api.run,
     onSuccess: (r) => {
@@ -194,106 +171,38 @@ export default function SmartPlaylists() {
     onError: (e: Error) => setMsg(e.message),
   });
 
-  const set = <K extends keyof SPSettings>(k: K, v: SPSettings[K]) =>
-    setDraft(prev => ({ ...(prev ?? settings ?? {}), [k]: v }));
+  const enabled = !!settings?.enabled;
 
   return (
-    <div className="p-4 sm:p-8 max-w-6xl">
-      <div className="flex items-center gap-3 mb-6">
-        <ListMusic className="text-brand-light" size={22} />
-        <div>
-          <h1 className="text-2xl font-bold text-white">Smart Playlists</h1>
-          <p className="text-slate-400 text-sm">Genre playlists from Qdrant → Plex with scheduling & auto-add</p>
+    <div className="p-4 sm:p-8 max-w-4xl">
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <ListMusic className="text-brand-light" size={22} />
+          <div>
+            <h1 className="text-2xl font-bold text-white">Playlists</h1>
+            <p className="text-slate-400 text-sm">Genre playlists from Qdrant → Plex with scheduling & auto-add</p>
+          </div>
         </div>
+        <Link to="/settings/music" title="Configure"
+          className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-surface-raised transition-colors">
+          <Settings size={18} />
+        </Link>
       </div>
 
-      {msg && <p className="mb-4 text-sm text-slate-300">{msg}</p>}
-
-      {form && (
-        <section className="bg-surface-raised border border-purple-900/30 rounded-xl p-5 mb-6 space-y-4">
-          <h2 className="text-white font-semibold text-sm uppercase tracking-wider flex items-center gap-2">
-            <Settings size={16} /> Configuration
-          </h2>
-
-          <div className="space-y-3">
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              <input type="checkbox" checked={!!form.enabled} onChange={e => set("enabled", e.target.checked)} />
-              Enabled
-            </label>
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              <input type="checkbox" checked={!!form.auto_create_playlists} onChange={e => set("auto_create_playlists", e.target.checked)} />
-              Auto-create Plex playlists on scheduled runs (not just manual Accept)
-            </label>
-
-            <div className="grid sm:grid-cols-2 gap-3">
-              <label className="text-xs text-slate-400 block">
-                Qdrant URL
-                <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                  value={form.qdrant_url || ""} onChange={e => set("qdrant_url", e.target.value)} />
-              </label>
-              <label className="text-xs text-slate-400 block">
-                Collection
-                <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                  value={form.collection || ""} onChange={e => set("collection", e.target.value)} />
-              </label>
-              <label className="text-xs text-slate-400 block">
-                Min artists per genre
-                <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                  value={form.min_artists_per_genre || 3} onChange={e => set("min_artists_per_genre", parseInt(e.target.value))} />
-              </label>
-              <label className="text-xs text-slate-400 block">
-                Max tracks per playlist
-                <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                  value={form.max_tracks_per_playlist || 200} onChange={e => set("max_tracks_per_playlist", parseInt(e.target.value))} />
-              </label>
-              <label className="text-xs text-slate-400 block sm:col-span-2">
-                Excluded genres <span className="text-slate-600">(comma-separated)</span>
-                <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                  value={(form.excluded_genres || []).join(", ")}
-                  onChange={e => set("excluded_genres", e.target.value.split(",").map(g => g.trim()).filter(Boolean))} />
-              </label>
-              <label className="text-xs text-slate-400 block sm:col-span-2">
-                Qdrant API key {settings?.qdrant_api_key_set ? "(saved — leave blank to keep)" : ""}
-                <input type="password" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                  value={form.qdrant_api_key || ""} onChange={e => set("qdrant_api_key", e.target.value)}
-                  placeholder={settings?.qdrant_api_key_set ? "••••••••" : ""} />
-              </label>
-            </div>
-          </div>
-
-          <div className="border-t border-purple-900/30 pt-4 space-y-3">
-            <h3 className="text-slate-300 font-semibold text-xs uppercase tracking-wider flex items-center gap-2">
-              <Clock size={14} /> Scheduling
-            </h3>
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              <input type="checkbox" checked={!!form.schedule_enabled} onChange={e => set("schedule_enabled", e.target.checked)} />
-              Enable scheduled generation
-            </label>
-            {form.schedule_enabled && (
-              <label className="text-xs text-slate-400 block">
-                Interval (hours)
-                <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                  value={form.schedule_interval_hours || 24} onChange={e => set("schedule_interval_hours", parseInt(e.target.value))} />
-              </label>
-            )}
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              <input type="checkbox" checked={!!form.auto_add_tracks_default} onChange={e => set("auto_add_tracks_default", e.target.checked)} />
-              Auto-add tracks to playlists (default)
-            </label>
-          </div>
-
-          <div className="flex gap-2 pt-2">
-            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}
-              className="px-3 py-2 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
-              Save Settings
-            </button>
-            <button onClick={() => runMut.mutate()} disabled={runMut.isPending || !form.enabled}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface border border-purple-900/40 text-slate-300 text-sm hover:text-white disabled:opacity-50">
-              <Play size={14} /> {runMut.isPending ? "Running…" : "Generate Now"}
-            </button>
-          </div>
-        </section>
+      {!enabled && (
+        <div className="mb-6 bg-amber-900/20 border border-amber-800/40 rounded-lg px-4 py-3 text-sm text-amber-200 flex items-center justify-between">
+          <span>Smart Playlists is disabled.</span>
+          <Link to="/settings/music" className="underline hover:text-white">Configure it →</Link>
+        </div>
       )}
+
+      <div className="flex flex-wrap items-center gap-2 mb-6">
+        <button onClick={() => runMut.mutate()} disabled={runMut.isPending || !enabled}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
+          <Play size={14} /> {runMut.isPending ? "Running…" : "Generate Now"}
+        </button>
+        {msg && <span className="text-sm text-slate-400">{msg}</span>}
+      </div>
 
       <section className="mb-6">
         <h2 className="text-white font-semibold text-sm uppercase tracking-wider mb-3 flex items-center gap-2">

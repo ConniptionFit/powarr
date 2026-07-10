@@ -22,7 +22,7 @@ from app.database import SessionLocal
 from app.models.app_setting import AppSetting
 from app.models.artist_discovery import ArtistDiscoveryRun, DiscoveredArtist
 from app.models.integration import Integration
-from app.schemas.settings import ArtistDiscoverySettings, OllamaSettings
+from app.schemas.settings import ArtistDiscoverySettings
 
 logger = logging.getLogger("powarr")
 
@@ -65,10 +65,10 @@ def _save_state(db, state: dict) -> None:
     db.commit()
 
 
-def _qdrant(cfg: ArtistDiscoverySettings):
-    from app.integrations.qdrant import QdrantIntegration
-    from app.services.secret_box import decrypt
-    return QdrantIntegration(cfg.qdrant_url, decrypt(cfg.qdrant_api_key) or "", cfg.collection)
+def _qdrant(db):
+    """Shared Qdrant connection (Settings -> Integrations), not per-module config."""
+    from app.services import qdrant_config
+    return qdrant_config.client(db)
 
 
 def _lastfm_client(db):
@@ -79,20 +79,32 @@ def _lastfm_client(db):
     return _get_client(row)
 
 
-def _ollama_host(db, cfg: ArtistDiscoverySettings) -> str:
-    if cfg.ollama_host:
-        return cfg.ollama_host
-    row = db.query(AppSetting).filter_by(key="ollama").first()
-    if row and row.value:
-        return OllamaSettings(**json.loads(row.value)).host
-    return ""
+def _lidarr_client(db):
+    row = db.query(Integration).filter_by(name="lidarr", enabled=True).first()
+    if not row:
+        return None
+    from app.api.v1.integrations import _get_client
+    return _get_client(row)
 
 
-async def _embed_artist(db, cfg: ArtistDiscoverySettings, name: str, tags: list[str]) -> list[float] | None:
+async def _enrich_candidate(db, mbid: str | None, name: str) -> dict[str, Any]:
+    """Best-effort image/bio/genres/years_active — never raises, never blocks
+    candidate creation on failure."""
+    try:
+        from app.services import artist_enrichment
+        return await artist_enrichment.enrich(_lidarr_client(db), mbid, name)
+    except Exception as e:
+        logger.debug(f"Artist Discovery: enrichment failed for {name}: {e}")
+        return {"image_url": None, "bio": None, "genres": [], "years_active": None}
+
+
+async def _embed_artist(cfg: ArtistDiscoverySettings, name: str, tags: list[str]) -> list[float] | None:
+    """Artist Discovery's Ollama connection is fully standalone — it never falls
+    back to (or depends on) the separate Local LLM Assist Ollama configuration,
+    even though both may point at the same host in practice."""
     from app.services import embeddings
-    host = _ollama_host(db, cfg)
     text = f"Artist: {name}. Tags: {', '.join(tags or [])}."
-    return await embeddings.embed(host, cfg.embed_model, text)
+    return await embeddings.embed(cfg.ollama_host, cfg.embed_model, text)
 
 
 def _candidate_exists(db, mbid: str | None, name: str) -> bool:
@@ -113,7 +125,9 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     lastfm = _lastfm_client(db)
     if not lastfm:
         return {"ok": False, "message": "Last.fm integration not configured", "ingested": 0}
-    qdrant = _qdrant(cfg)
+    qdrant = _qdrant(db)
+    if not qdrant:
+        return {"ok": False, "message": "Qdrant not configured (Settings → Integrations)", "ingested": 0}
     try:
         top_artists = await lastfm.get_top_artists(limit=200)
     except Exception as e:
@@ -141,7 +155,7 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             tags = await lastfm.get_top_tags(name, mbid)
         except Exception:
             tags = []
-        vector = await _embed_artist(db, cfg, name, tags)
+        vector = await _embed_artist(cfg, name, tags)
         if not vector:
             continue
         payload = {
@@ -175,8 +189,10 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
 
 # --- Centroid similarity search --------------------------------------------------
 
-async def compute_taste_centroid(cfg: ArtistDiscoverySettings) -> list[float] | None:
-    qdrant = _qdrant(cfg)
+async def compute_taste_centroid(db) -> list[float] | None:
+    qdrant = _qdrant(db)
+    if not qdrant:
+        return None
     points: list[dict] = []
     offset = None
     pages = 0
@@ -199,10 +215,12 @@ async def compute_taste_centroid(cfg: ArtistDiscoverySettings) -> list[float] | 
 
 
 async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
-    centroid = await compute_taste_centroid(cfg)
+    centroid = await compute_taste_centroid(db)
     if not centroid:
         return {"ok": True, "message": "No taste centroid yet (no discovered artists)", "candidates": 0}
-    qdrant = _qdrant(cfg)
+    qdrant = _qdrant(db)
+    if not qdrant:
+        return {"ok": False, "message": "Qdrant not configured (Settings → Integrations)", "candidates": 0}
     hits = await qdrant.search(
         centroid, limit=cfg.max_candidates_per_run, score_threshold=cfg.similarity_threshold,
         must=[{"key": "is_discovered", "match": {"value": False}}])
@@ -215,12 +233,16 @@ async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, 
         mbid = payload.get("musicbrainz_id") or None
         if _candidate_exists(db, mbid, name):
             continue
+        enrichment = await _enrich_candidate(db, mbid, name)
+        genres_list = payload.get("genres") or enrichment["genres"]
         db.add(DiscoveredArtist(
             musicbrainz_id=mbid, artist_name=name,
-            genres=json.dumps(payload.get("genres") or []),
+            genres=json.dumps(genres_list),
             mood_tags=json.dumps(payload.get("mood_tags") or []),
             era=payload.get("era"), source="centroid",
             similarity_score=h.get("score"), status="pending",
+            image_url=enrichment["image_url"], bio=enrichment["bio"],
+            years_active=enrichment["years_active"],
         ))
         created += 1
     db.commit()
@@ -233,7 +255,9 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     lastfm = _lastfm_client(db)
     if not lastfm:
         return {"ok": False, "message": "Last.fm integration not configured", "candidates": 0, "promoted": 0}
-    qdrant = _qdrant(cfg)
+    qdrant = _qdrant(db)
+    if not qdrant:
+        return {"ok": False, "message": "Qdrant not configured (Settings → Integrations)", "candidates": 0, "promoted": 0}
     cutoff = int((datetime.utcnow() - timedelta(days=cfg.related_artists_refresh_days)).timestamp())
     seeds, _ = await qdrant.scroll(
         filter={"must": [{"key": "is_monitored_lidarr", "match": {"value": True}}]}, limit=256)
@@ -282,7 +306,7 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                     tags = await lastfm.get_top_tags(rname, rmbid)
                 except Exception:
                     tags = []
-                vector = await _embed_artist(db, cfg, rname, tags)
+                vector = await _embed_artist(cfg, rname, tags)
                 if not vector:
                     continue
                 epayload = {
@@ -304,13 +328,17 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                 continue
             if _candidate_exists(db, rmbid, rname):
                 continue
+            enrichment = await _enrich_candidate(db, rmbid, rname)
+            genres_list = epayload.get("genres") or enrichment["genres"]
             cand = DiscoveredArtist(
                 musicbrainz_id=rmbid, artist_name=rname,
-                genres=json.dumps(epayload.get("genres") or []),
+                genres=json.dumps(genres_list),
                 mood_tags=json.dumps(epayload.get("mood_tags") or []),
                 era=epayload.get("era"), source="graph",
                 associated_seed_mbids=json.dumps(epayload.get("associated_seed_mbids") or []),
                 seed_artist_name=seed_name, status="pending",
+                image_url=enrichment["image_url"], bio=enrichment["bio"],
+                years_active=enrichment["years_active"],
             )
             db.add(cand)
             db.flush()
@@ -342,7 +370,7 @@ async def run_full_discovery_cycle(db=None) -> dict[str, Any]:
     db.flush()
     try:
         cfg = load_settings(db)
-        if not cfg.enabled or not cfg.qdrant_url:
+        if not cfg.enabled or not _qdrant(db):
             run.message = "Artist Discovery disabled or Qdrant not configured"
             run.finished_at = datetime.utcnow()
             db.commit()
@@ -380,7 +408,8 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
     db.flush()
     try:
         cfg = load_settings(db)
-        if not cfg.enabled or not cfg.qdrant_url:
+        qdrant = _qdrant(db)
+        if not cfg.enabled or not qdrant:
             run.message = "Artist Discovery disabled or Qdrant not configured"
             run.finished_at = datetime.utcnow()
             db.commit()
@@ -393,7 +422,6 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
             return {"ok": False, "message": run.message}
         from app.api.v1.integrations import _get_client
         lidarr = _get_client(lidarr_row)
-        qdrant = _qdrant(cfg)
 
         artists = await lidarr.get_artists()
         by_mbid = {a.get("foreignArtistId"): a for a in artists if a.get("foreignArtistId")}
@@ -526,12 +554,13 @@ async def add_to_lidarr(db, candidate_id: int) -> dict[str, Any]:
     except Exception as e:
         return {"ok": False, "message": f"Lidarr add failed: {e}"}
 
-    qdrant = _qdrant(cfg)
-    pid = qdrant.point_id(cand.musicbrainz_id, cand.artist_name)
-    try:
-        await qdrant.set_payload([pid], {"is_monitored_lidarr": True})
-    except Exception as e:
-        logger.warning(f"Artist Discovery: Qdrant flag update failed for {cand.artist_name}: {e}")
+    qdrant = _qdrant(db)
+    if qdrant:
+        pid = qdrant.point_id(cand.musicbrainz_id, cand.artist_name)
+        try:
+            await qdrant.set_payload([pid], {"is_monitored_lidarr": True})
+        except Exception as e:
+            logger.warning(f"Artist Discovery: Qdrant flag update failed for {cand.artist_name}: {e}")
 
     cand.status = "accepted"
     cand.lidarr_artist_id = lidarr_artist_id
@@ -574,9 +603,10 @@ async def get_stats(db) -> dict[str, Any]:
     accepted = db.query(DiscoveredArtist).filter_by(status="accepted").count()
     rejected = db.query(DiscoveredArtist).filter_by(status="rejected").count()
     tracked = None
-    if cfg.enabled and cfg.qdrant_url:
+    qdrant = _qdrant(db)
+    if cfg.enabled and qdrant:
         try:
-            info = await _qdrant(cfg).get_collection_info()
+            info = await qdrant.get_collection_info()
             tracked = (info or {}).get("points_count")
         except Exception:
             tracked = None

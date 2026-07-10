@@ -5,7 +5,7 @@ from typing import Any
 
 from app.database import get_db
 from app.models.integration import Integration
-from app.schemas.settings import IntegrationConfig, IntegrationConfigUpdate
+from app.schemas.settings import IntegrationConfig, IntegrationConfigUpdate, QdrantSettings
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
@@ -83,6 +83,52 @@ async def ollama_test(db: Session = Depends(get_db)) -> dict[str, Any]:
     from app.services import llm_assist
     cfg = _ollama_settings(db)
     return await llm_assist.test_connection(cfg.host, cfg.model, cfg.api_style)
+
+
+# --- Qdrant (v0.40.0; shared by Smart Playlists + Artist Discovery) ---
+# Registered before the generic /{name} routes so "qdrant" never falls through.
+
+class QdrantSettingsOut(QdrantSettings):
+    api_key_set: bool = False
+
+
+@router.get("/qdrant/settings", response_model=QdrantSettingsOut)
+def get_qdrant_settings(db: Session = Depends(get_db)):
+    from app.services import qdrant_config
+    cfg = qdrant_config.load_settings(db)
+    out = QdrantSettingsOut(**cfg.model_dump())
+    out.api_key_set = bool(cfg.api_key)
+    out.api_key = ""
+    return out
+
+
+@router.put("/qdrant/settings", response_model=QdrantSettingsOut)
+def put_qdrant_settings(body: QdrantSettings, db: Session = Depends(get_db)):
+    from app.services import qdrant_config
+    from app.services.secret_box import encrypt
+    current = qdrant_config.load_settings(db)
+    api_key = current.api_key
+    if (body.api_key or "").strip():
+        api_key = encrypt(body.api_key) or body.api_key
+    cfg = QdrantSettings(url=body.url, api_key=api_key, collection=body.collection)
+    qdrant_config.save_settings(db, cfg)
+    out = QdrantSettingsOut(**cfg.model_dump())
+    out.api_key_set = bool(cfg.api_key)
+    out.api_key = ""
+    return out
+
+
+@router.post("/qdrant/test")
+async def qdrant_test(db: Session = Depends(get_db)) -> dict[str, Any]:
+    from app.services import qdrant_config
+    client = qdrant_config.client(db)
+    if not client:
+        return {"ok": False, "message": "Qdrant URL not configured"}
+    result = await client.test_connection()
+    if not result.get("ok"):
+        return result
+    info = await client.get_collection_info()
+    return {**result, "collection_info": info}
 
 
 @router.post("/seerr/sync")

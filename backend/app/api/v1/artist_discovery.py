@@ -9,18 +9,12 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.app_setting import AppSetting
 from app.models.artist_discovery import DiscoveredArtist
 from app.schemas.settings import ArtistDiscoverySettings
 from app.services import artist_discovery as service
-from app.services.secret_box import encrypt
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/artist-discovery", tags=["artist-discovery"])
-
-
-class ArtistDiscoverySettingsOut(ArtistDiscoverySettings):
-    qdrant_api_key_set: bool = False
 
 
 class CandidateOut(BaseModel):
@@ -37,6 +31,9 @@ class CandidateOut(BaseModel):
     status: str
     lidarr_artist_id: Optional[int] = None
     created_at: Optional[datetime] = None
+    image_url: Optional[str] = None
+    bio: Optional[str] = None
+    years_active: Optional[str] = None
 
 
 def _candidate_out(row: DiscoveredArtist) -> CandidateOut:
@@ -48,36 +45,19 @@ def _candidate_out(row: DiscoveredArtist) -> CandidateOut:
         associated_seed_mbids=json.loads(row.associated_seed_mbids) if row.associated_seed_mbids else [],
         seed_artist_name=row.seed_artist_name, status=row.status,
         lidarr_artist_id=row.lidarr_artist_id, created_at=row.created_at,
+        image_url=row.image_url, bio=row.bio, years_active=row.years_active,
     )
 
 
-@router.get("/settings", response_model=ArtistDiscoverySettingsOut)
+@router.get("/settings", response_model=ArtistDiscoverySettings)
 def get_settings(db: Session = Depends(get_db)):
-    cfg = service.load_settings(db)
-    out = ArtistDiscoverySettingsOut(**cfg.model_dump())
-    out.qdrant_api_key_set = bool(cfg.qdrant_api_key)
-    out.qdrant_api_key = ""
-    return out
+    return service.load_settings(db)
 
 
-@router.put("/settings", response_model=ArtistDiscoverySettingsOut)
+@router.put("/settings", response_model=ArtistDiscoverySettings)
 def put_settings(body: ArtistDiscoverySettings, db: Session = Depends(get_db)):
-    row = db.query(AppSetting).filter_by(key="artist_discovery").first()
-    current = service.load_settings(db)
-    data = body.model_dump()
-    if not (body.qdrant_api_key or "").strip():
-        data["qdrant_api_key"] = current.qdrant_api_key
-    else:
-        data["qdrant_api_key"] = encrypt(body.qdrant_api_key) or body.qdrant_api_key
-    if not row:
-        row = AppSetting(key="artist_discovery")
-        db.add(row)
-    row.value = json.dumps(data)
-    db.commit()
-    out = ArtistDiscoverySettingsOut(**ArtistDiscoverySettings(**data).model_dump())
-    out.qdrant_api_key_set = bool(data.get("qdrant_api_key"))
-    out.qdrant_api_key = ""
-    return out
+    service.save_settings(db, body)
+    return body
 
 
 @router.get("/stats")

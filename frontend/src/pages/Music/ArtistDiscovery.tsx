@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Compass, Play, RefreshCw, Check, X, Clock, Settings, Sparkles } from "lucide-react";
+import { Compass, Play, RefreshCw, Check, X, Sparkles, Settings, Music2, ChevronDown, ChevronUp } from "lucide-react";
+import { Link } from "react-router-dom";
 import { req } from "../../lib/api";
 
 interface Candidate {
@@ -16,30 +17,9 @@ interface Candidate {
   seed_artist_name: string | null;
   status: string;
   lidarr_artist_id: number | null;
-}
-
-interface ADSettings {
-  enabled: boolean;
-  qdrant_url: string;
-  qdrant_api_key: string;
-  qdrant_api_key_set: boolean;
-  collection: string;
-  ollama_host: string;
-  embed_model: string;
-  max_candidates_per_run: number;
-  related_artists_limit: number;
-  auto_add_connection_threshold: number;
-  related_artists_refresh_days: number;
-  similarity_threshold: number;
-  scrobble_lookback_days: number;
-  auto_promote: boolean;
-  root_folder_path: string;
-  quality_profile_id: number;
-  metadata_profile_id: number;
-  schedule_enabled: boolean;
-  schedule_interval_hours: number;
-  sync_schedule_enabled: boolean;
-  sync_interval_hours: number;
+  image_url: string | null;
+  bio: string | null;
+  years_active: string | null;
 }
 
 interface Stats {
@@ -51,16 +31,8 @@ interface Stats {
   last_run_message: string | null;
 }
 
-interface LidarrProfiles {
-  root_folders: { path: string }[];
-  quality_profiles: { id: number; name: string }[];
-  metadata_profiles: { id: number; name: string }[];
-}
-
 const api = {
-  settings: () => req<ADSettings>("/artist-discovery/settings"),
-  saveSettings: (s: Partial<ADSettings>) =>
-    req<ADSettings>("/artist-discovery/settings", { method: "PUT", body: JSON.stringify(s) }),
+  settings: () => req<{ enabled: boolean }>("/artist-discovery/settings"),
   stats: () => req<Stats>("/artist-discovery/stats"),
   candidates: (status = "pending") =>
     req<Candidate[]>(`/artist-discovery/candidates?status=${status}`),
@@ -70,7 +42,6 @@ const api = {
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/accept`, { method: "POST" }),
   reject: (id: number) =>
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/reject`, { method: "POST" }),
-  profiles: () => req<LidarrProfiles>("/artist-discovery/lidarr/profiles"),
 };
 
 function formatDate(isoDate: string | null | undefined): string {
@@ -85,21 +56,95 @@ function formatDate(isoDate: string | null | undefined): string {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
+function ArtistAvatar({ url, name }: { url: string | null; name: string }) {
+  const [failed, setFailed] = useState(false);
+  if (url && !failed) {
+    return (
+      <img
+        src={url}
+        alt={name}
+        onError={() => setFailed(true)}
+        className="w-16 h-16 rounded-lg object-cover shrink-0 bg-surface border border-purple-900/30"
+      />
+    );
+  }
+  return (
+    <div className="w-16 h-16 rounded-lg shrink-0 bg-surface border border-purple-900/30 flex items-center justify-center">
+      <Music2 size={22} className="text-slate-600" />
+    </div>
+  );
+}
+
+function CandidateCard({ c, onAccept, onReject, pending }: {
+  c: Candidate;
+  onAccept: () => void;
+  onReject: () => void;
+  pending: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const bio = c.bio || "";
+  const isLong = bio.length > 180;
+
+  return (
+    <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-4 flex gap-3">
+      <ArtistAvatar url={c.image_url} name={c.artist_name} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-white text-sm font-medium truncate">{c.artist_name}</p>
+            <p className="text-xs text-slate-500">
+              {c.source === "centroid"
+                ? `Taste match — ${c.similarity_score != null ? Math.round(c.similarity_score * 100) : "?"}% similarity`
+                : `Related to ${c.seed_artist_name || "a monitored artist"} — ${c.associated_seed_mbids.length} connection(s)`}
+              {c.years_active && <span> · {c.years_active}</span>}
+            </p>
+          </div>
+          <div className="flex gap-1 shrink-0">
+            <button onClick={onAccept} disabled={pending} title="Add to Lidarr"
+              className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300 disabled:opacity-40">
+              <Check size={15} />
+            </button>
+            <button onClick={onReject} disabled={pending} title="Reject"
+              className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 disabled:opacity-40">
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+
+        {(c.genres.length > 0 || c.era) && (
+          <div className="flex flex-wrap gap-1 mt-2">
+            {c.genres.slice(0, 5).map(g => (
+              <span key={g} className="text-xs bg-purple-900/40 text-purple-200 px-2 py-0.5 rounded">{g}</span>
+            ))}
+            {c.era && <span className="text-xs bg-surface text-slate-400 px-2 py-0.5 rounded border border-purple-900/40">{c.era}</span>}
+          </div>
+        )}
+
+        {bio && (
+          <div className="mt-2">
+            <p className={`text-xs text-slate-400 leading-relaxed ${!expanded && isLong ? "line-clamp-2" : ""}`}>
+              {bio}
+            </p>
+            {isLong && (
+              <button onClick={() => setExpanded(e => !e)}
+                className="flex items-center gap-1 text-xs text-brand-light hover:underline mt-1">
+                {expanded ? <>Show less <ChevronUp size={12} /></> : <>Show more <ChevronDown size={12} /></>}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ArtistDiscovery() {
   const qc = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["ad-settings"], queryFn: api.settings });
   const { data: stats } = useQuery({ queryKey: ["ad-stats"], queryFn: api.stats });
   const { data: candidates = [] } = useQuery({ queryKey: ["ad-candidates"], queryFn: () => api.candidates("pending") });
-  const { data: profiles } = useQuery({ queryKey: ["ad-profiles"], queryFn: api.profiles });
-  const [draft, setDraft] = useState<Partial<ADSettings> | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-  const form = draft ?? settings ?? null;
 
-  const saveMut = useMutation({
-    mutationFn: () => api.saveSettings(form || {}),
-    onSuccess: () => { setDraft(null); setMsg("Settings saved"); qc.invalidateQueries({ queryKey: ["ad-settings"] }); },
-    onError: (e: Error) => setMsg(e.message),
-  });
   const runMut = useMutation({
     mutationFn: api.run,
     onSuccess: (r) => {
@@ -125,20 +170,30 @@ export default function ArtistDiscovery() {
     onError: (e: Error) => setMsg(e.message),
   });
 
-  const set = <K extends keyof ADSettings>(k: K, v: ADSettings[K]) =>
-    setDraft(prev => ({ ...(prev ?? settings ?? {}), [k]: v }));
+  const enabled = !!settings?.enabled;
 
   return (
-    <div className="p-4 sm:p-8 max-w-6xl">
-      <div className="flex items-center gap-3 mb-6">
-        <Compass className="text-brand-light" size={22} />
-        <div>
-          <h1 className="text-2xl font-bold text-white">Artist Discovery</h1>
-          <p className="text-slate-400 text-sm">Last.fm taste mapping → Qdrant similarity + related-artist graph → Lidarr</p>
+    <div className="p-4 sm:p-8 max-w-4xl">
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <Compass className="text-brand-light" size={22} />
+          <div>
+            <h1 className="text-2xl font-bold text-white">Artist Discovery</h1>
+            <p className="text-slate-400 text-sm">Last.fm taste mapping → Qdrant similarity + related-artist graph → Lidarr</p>
+          </div>
         </div>
+        <Link to="/settings/music" title="Configure"
+          className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-surface-raised transition-colors">
+          <Settings size={18} />
+        </Link>
       </div>
 
-      {msg && <p className="mb-4 text-sm text-slate-300">{msg}</p>}
+      {!enabled && (
+        <div className="mb-6 bg-amber-900/20 border border-amber-800/40 rounded-lg px-4 py-3 text-sm text-amber-200 flex items-center justify-between">
+          <span>Artist Discovery is disabled.</span>
+          <Link to="/settings/music" className="underline hover:text-white">Configure it →</Link>
+        </div>
+      )}
 
       {stats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
@@ -161,170 +216,17 @@ export default function ArtistDiscovery() {
         </div>
       )}
 
-      {form && (
-        <section className="bg-surface-raised border border-purple-900/30 rounded-xl p-5 mb-6 space-y-4">
-          <h2 className="text-white font-semibold text-sm uppercase tracking-wider flex items-center gap-2">
-            <Settings size={16} /> Configuration
-          </h2>
-
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <input type="checkbox" checked={!!form.enabled} onChange={e => set("enabled", e.target.checked)} />
-            Enabled
-          </label>
-
-          <div className="grid sm:grid-cols-2 gap-3">
-            <label className="text-xs text-slate-400 block">
-              Qdrant URL
-              <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.qdrant_url || ""} onChange={e => set("qdrant_url", e.target.value)} />
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Collection
-              <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.collection || ""} onChange={e => set("collection", e.target.value)} />
-            </label>
-            <label className="text-xs text-slate-400 block sm:col-span-2">
-              Qdrant API key {settings?.qdrant_api_key_set ? "(saved — leave blank to keep)" : ""}
-              <input type="password" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.qdrant_api_key || ""} onChange={e => set("qdrant_api_key", e.target.value)}
-                placeholder={settings?.qdrant_api_key_set ? "••••••••" : ""} />
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Ollama host <span className="text-slate-600">(blank = reuse LLM Assist host)</span>
-              <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.ollama_host || ""} onChange={e => set("ollama_host", e.target.value)} />
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Embedding model
-              <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.embed_model || ""} onChange={e => set("embed_model", e.target.value)} />
-            </label>
-          </div>
-
-          <div className="border-t border-purple-900/30 pt-4 grid sm:grid-cols-3 gap-3">
-            <label className="text-xs text-slate-400 block">
-              Similarity threshold
-              <input type="number" step="0.01" min="0" max="1" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.similarity_threshold ?? 0.75} onChange={e => set("similarity_threshold", parseFloat(e.target.value))} />
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Max candidates per run
-              <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.max_candidates_per_run ?? 5} onChange={e => set("max_candidates_per_run", parseInt(e.target.value))} />
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Related artists per seed
-              <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.related_artists_limit ?? 3} onChange={e => set("related_artists_limit", parseInt(e.target.value))} />
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Connection threshold (graph)
-              <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.auto_add_connection_threshold ?? 3} onChange={e => set("auto_add_connection_threshold", parseInt(e.target.value))} />
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Seed re-scan interval (days)
-              <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.related_artists_refresh_days ?? 30} onChange={e => set("related_artists_refresh_days", parseInt(e.target.value))} />
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Scrobble lookback (days)
-              <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.scrobble_lookback_days ?? 30} onChange={e => set("scrobble_lookback_days", parseInt(e.target.value))} />
-            </label>
-          </div>
-
-          <div className="border-t border-purple-900/30 pt-4 grid sm:grid-cols-3 gap-3">
-            <label className="text-xs text-slate-400 block">
-              Root folder
-              <select className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.root_folder_path || ""} onChange={e => set("root_folder_path", e.target.value)}>
-                <option value="">First available</option>
-                {profiles?.root_folders.map(f => <option key={f.path} value={f.path}>{f.path}</option>)}
-              </select>
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Quality profile
-              <select className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.quality_profile_id || 0} onChange={e => set("quality_profile_id", parseInt(e.target.value))}>
-                <option value={0}>First available</option>
-                {profiles?.quality_profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Metadata profile
-              <select className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                value={form.metadata_profile_id || 0} onChange={e => set("metadata_profile_id", parseInt(e.target.value))}>
-                <option value={0}>First available</option>
-                {profiles?.metadata_profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </label>
-          </div>
-
-          <div className="border-t border-purple-900/30 pt-4 space-y-3">
-            <label className="flex items-start gap-2 text-sm text-slate-300">
-              <input type="checkbox" className="mt-0.5" checked={!!form.auto_promote} onChange={e => set("auto_promote", e.target.checked)} />
-              <span>
-                Auto-promote graph candidates to Lidarr
-                <span className="block text-xs text-slate-500">
-                  Off by default. When on, related-artist candidates that cross the connection
-                  threshold skip the review queue and are added to Lidarr automatically. Centroid
-                  candidates always land in the review queue regardless of this setting.
-                </span>
-              </span>
-            </label>
-          </div>
-
-          <div className="border-t border-purple-900/30 pt-4 space-y-3">
-            <h3 className="text-slate-300 font-semibold text-xs uppercase tracking-wider flex items-center gap-2">
-              <Clock size={14} /> Scheduling
-            </h3>
-            <div className="grid sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 text-sm text-slate-300">
-                  <input type="checkbox" checked={!!form.schedule_enabled} onChange={e => set("schedule_enabled", e.target.checked)} />
-                  Discovery cycle (ingest + centroid + graph)
-                </label>
-                {form.schedule_enabled && (
-                  <label className="text-xs text-slate-400 block">
-                    Interval (hours)
-                    <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                      value={form.schedule_interval_hours ?? 24} onChange={e => set("schedule_interval_hours", parseInt(e.target.value))} />
-                  </label>
-                )}
-              </div>
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 text-sm text-slate-300">
-                  <input type="checkbox" checked={!!form.sync_schedule_enabled} onChange={e => set("sync_schedule_enabled", e.target.checked)} />
-                  Differential sync (Lidarr/Last.fm → Qdrant)
-                </label>
-                {form.sync_schedule_enabled && (
-                  <label className="text-xs text-slate-400 block">
-                    Interval (hours)
-                    <input type="number" className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-sm text-white"
-                      value={form.sync_interval_hours ?? 1} onChange={e => set("sync_interval_hours", parseInt(e.target.value))} />
-                  </label>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2 pt-2">
-            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}
-              className="px-3 py-2 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
-              Save Settings
-            </button>
-            <button onClick={() => runMut.mutate()} disabled={runMut.isPending || !form.enabled}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface border border-purple-900/40 text-slate-300 text-sm hover:text-white disabled:opacity-50">
-              <Play size={14} /> {runMut.isPending ? "Running…" : "Run Discovery Now"}
-            </button>
-            <button onClick={() => syncMut.mutate()} disabled={syncMut.isPending || !form.enabled}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface border border-purple-900/40 text-slate-300 text-sm hover:text-white disabled:opacity-50">
-              <RefreshCw size={14} /> {syncMut.isPending ? "Syncing…" : "Sync Now"}
-            </button>
-          </div>
-        </section>
-      )}
+      <div className="flex flex-wrap items-center gap-2 mb-6">
+        <button onClick={() => runMut.mutate()} disabled={runMut.isPending || !enabled}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
+          <Play size={14} /> {runMut.isPending ? "Running…" : "Run Discovery Now"}
+        </button>
+        <button onClick={() => syncMut.mutate()} disabled={syncMut.isPending || !enabled}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 text-sm hover:text-white disabled:opacity-50">
+          <RefreshCw size={14} /> {syncMut.isPending ? "Syncing…" : "Sync Now"}
+        </button>
+        {msg && <span className="text-sm text-slate-400">{msg}</span>}
+      </div>
 
       <section>
         <div className="flex items-center justify-between mb-3">
@@ -335,38 +237,19 @@ export default function ArtistDiscovery() {
             className="p-1.5 text-slate-400 hover:text-white" title="Refresh"><RefreshCw size={14} /></button>
         </div>
         {candidates.length === 0 ? (
-          <p className="text-slate-500 text-sm">No pending candidates — configure Last.fm/Qdrant/Lidarr and Run Discovery.</p>
+          <p className="text-slate-500 text-sm">
+            No pending candidates — configure Last.fm/Qdrant/Lidarr and Run Discovery.
+          </p>
         ) : (
           <div className="grid gap-2">
             {candidates.map(c => (
-              <div key={c.id} className="bg-surface-raised border border-purple-900/30 rounded-lg p-4">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-white text-sm font-medium">{c.artist_name}</p>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {c.genres.slice(0, 5).map(g => (
-                        <span key={g} className="text-xs bg-purple-900/40 text-purple-200 px-2 py-0.5 rounded">{g}</span>
-                      ))}
-                      {c.era && <span className="text-xs bg-surface text-slate-400 px-2 py-0.5 rounded border border-purple-900/40">{c.era}</span>}
-                    </div>
-                    <p className="text-xs text-slate-500 mt-1.5">
-                      {c.source === "centroid"
-                        ? `Taste match — ${c.similarity_score != null ? Math.round(c.similarity_score * 100) : "?"}% similarity`
-                        : `Related to ${c.seed_artist_name || "monitored artist"} — ${c.associated_seed_mbids.length} connection(s)`}
-                    </p>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button onClick={() => actMut.mutate({ id: c.id, action: "accept" })} title="Add to Lidarr"
-                      className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300">
-                      <Check size={15} />
-                    </button>
-                    <button onClick={() => actMut.mutate({ id: c.id, action: "reject" })} title="Reject"
-                      className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300">
-                      <X size={15} />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <CandidateCard
+                key={c.id}
+                c={c}
+                pending={actMut.isPending}
+                onAccept={() => actMut.mutate({ id: c.id, action: "accept" })}
+                onReject={() => actMut.mutate({ id: c.id, action: "reject" })}
+              />
             ))}
           </div>
         )}

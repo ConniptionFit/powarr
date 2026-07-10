@@ -168,12 +168,20 @@ class BackupSettings(BaseModel):
     retention_count: int = 7  # keep the most recent N backup files; 0 = unlimited
 
 
-class SmartPlaylistSettings(BaseModel):
-    """MOD-01 Smart Playlists (v0.34.0) — read-only Qdrant → Plex genre playlists."""
-    enabled: bool = False
-    qdrant_url: str = ""
-    qdrant_api_key: str = ""  # optional; masked in UI via separate handling if needed
+class QdrantSettings(BaseModel):
+    """Shared Qdrant connection (v0.40.0) — single source of truth for every module
+    that talks to the `music_affinity_space` collection (Smart Playlists, Artist
+    Discovery). Configured once on Settings -> Integrations; consumers load this
+    instead of keeping their own copy of the connection details."""
+    url: str = ""
+    api_key: str = ""
     collection: str = "music_affinity_space"
+
+
+class SmartPlaylistSettings(BaseModel):
+    """MOD-01 Smart Playlists (v0.34.0) — read-only Qdrant → Plex genre playlists.
+    Qdrant connection lives in [[QdrantSettings]] (Settings -> Integrations), not here."""
+    enabled: bool = False
     auto_create_playlists: bool = False
     auto_add_tracks_default: bool = False
     min_artists_per_genre: int = 3
@@ -187,12 +195,13 @@ class ArtistDiscoverySettings(BaseModel):
     """Artist Discovery — native port of the n8n Music Curator (Last.fm scrobbles →
     Ollama embeddings → Qdrant taste-centroid similarity + related-artist graph →
     Lidarr). Writes to the same `music_affinity_space` collection Smart Playlists
-    reads (soft-delete semantics — never deletes points, only flips flags)."""
+    reads (soft-delete semantics — never deletes points, only flips flags). Qdrant
+    connection lives in [[QdrantSettings]] (Settings -> Integrations), not here."""
     enabled: bool = False
-    qdrant_url: str = ""
-    qdrant_api_key: str = ""
-    collection: str = "music_affinity_space"
-    ollama_host: str = ""  # blank = reuse the main Ollama connection's host
+    # Standalone Ollama connection for embeddings — deliberately independent of the
+    # Local LLM Assist Ollama settings (no fallback/reuse), even if both happen to
+    # point at the same host in practice.
+    ollama_host: str = ""
     embed_model: str = "all-minilm"
     max_candidates_per_run: int = 5
     related_artists_limit: int = 3  # top-N similar artists kept per seed (graph sync)

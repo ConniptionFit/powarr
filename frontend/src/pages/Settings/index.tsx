@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup, Activity, RotateCcw, Plug, SlidersHorizontal } from "lucide-react";
+import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup, Activity, RotateCcw, Plug, SlidersHorizontal, Music } from "lucide-react";
 import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ScoringProfiles,
          type ImportMatchingSettings, type CleanupSettings, type SyncSettings, type NotificationSettings,
          type OllamaSettings, type LlmScheduleSettings, type BackupSettings, type BackupFile } from "../../lib/api";
 import IntegrationsPage from "../Integrations";
+import MusicSettings from "./MusicSettings";
 
 function WeightRow({ label, field, value, onChange, description }: {
   label: string;
@@ -1778,6 +1779,7 @@ const CATEGORIES: { key: string; label: string; icon: typeof Save; description: 
   { key: "llm-assist", label: "LLM Assist", icon: Bot, description: "Local LLM behavior, prompts, verbosity, scheduled backlog scanning" },
   { key: "notifications", label: "Notifications", icon: Bell, description: "ntfy alerts, actionable notifications, weekly digest" },
   { key: "security", label: "Security", icon: Lock, description: "Auth, TOTP, LAN bypass, SSO / forward-auth" },
+  { key: "music", label: "Music", icon: Music, description: "Artist Discovery and Playlists configuration" },
 ];
 
 export default function SettingsPage() {
@@ -1841,6 +1843,7 @@ export default function SettingsPage() {
       )}
       {category === "notifications" && <NotificationsSection />}
       {category === "security" && <SecuritySection />}
+      {category === "music" && <MusicSettings />}
     </div>
   );
 }
