@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListMusic, Play, Check, X, RefreshCw, Music, Pencil, Settings, Sparkles, Upload, Trash2 } from "lucide-react";
+import {
+  ListMusic, Play, RefreshCw, Music, Pencil, Settings, Sparkles, Upload, Trash2,
+  Ban, Library,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import { req, fmtRelative } from "../../lib/api";
 
@@ -11,6 +14,7 @@ interface Playlist {
   plex_playlist_id: string | null;
   enabled: boolean;
   track_count: number;
+  artist_count: number;
   pending_count: number;
   last_generated_at: string | null;
   last_run_message: string | null;
@@ -23,25 +27,21 @@ interface PlaylistDetail extends Playlist {
   max_tracks_override?: number | null;
 }
 
-interface Candidate {
-  id: number;
-  playlist_id: number;
-  artist_name: string;
-  musicbrainz_id: string | null;
-  status: string;
+interface SPSettings {
+  enabled: boolean;
+  blacklisted_artists: string[];
+  auto_create_playlists: boolean;
+  auto_update_playlists: boolean;
+  llm_playlist_names: boolean;
 }
 
 const api = {
-  settings: () => req<{ enabled: boolean }>("/smart-playlists/settings"),
+  settings: () => req<SPSettings>("/smart-playlists/settings"),
   list: () => req<Playlist[]>("/smart-playlists"),
   detail: (id: number) => req<PlaylistDetail>(`/smart-playlists/${id}`),
-  candidates: (status = "pending") =>
-    req<Candidate[]>(`/smart-playlists/candidates?status=${status}`),
-  run: () => req<{ ok: boolean; message: string; candidates?: number }>("/smart-playlists/run", { method: "POST", body: "{}" }),
-  accept: (id: number) =>
-    req<{ ok: boolean; message: string }>(`/smart-playlists/candidates/${id}/accept`, { method: "POST" }),
-  reject: (id: number) =>
-    req<{ ok: boolean; message: string }>(`/smart-playlists/candidates/${id}/reject`, { method: "POST" }),
+  run: () => req<{
+    ok: boolean; message: string; playlists_created?: number; tracks_added?: number;
+  }>("/smart-playlists/run", { method: "POST", body: "{}" }),
   updatePlaylist: (id: number, body: Partial<PlaylistDetail>) =>
     req<PlaylistDetail>(`/smart-playlists/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deletePlaylist: (id: number) =>
@@ -51,9 +51,13 @@ const api = {
   suggestName: (id: number) =>
     req<{ ok: boolean; suggested_title: string | null; fallback: string }>(
       `/smart-playlists/${id}/suggest-name`, { method: "POST" }),
+  saveBlacklist: (artists: string[]) =>
+    req<{ ok: boolean; blacklisted_artists: string[] }>("/smart-playlists/blacklist", {
+      method: "PUT", body: JSON.stringify({ blacklisted_artists: artists }),
+    }),
 };
 
-function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void }) {
+function PlaylistCard({ pl, onMsg, suggested }: { pl: Playlist; onMsg: (m: string) => void; suggested?: boolean }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -80,9 +84,7 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
     }),
     onSuccess: () => {
       setEditing(false);
-      onMsg(pl.plex_playlist_id && titleDraft.trim() !== pl.title
-        ? "Saved — Plex title updated"
-        : "Saved");
+      onMsg(pl.plex_playlist_id && titleDraft.trim() !== pl.title ? "Saved — Plex title updated" : "Saved");
       qc.invalidateQueries({ queryKey: ["sp-list"] });
       qc.invalidateQueries({ queryKey: ["sp-detail", pl.id] });
     },
@@ -95,7 +97,6 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
       onMsg(r.message);
       setConfirmDelete(false);
       qc.invalidateQueries({ queryKey: ["sp-list"] });
-      qc.invalidateQueries({ queryKey: ["sp-candidates"] });
     },
     onError: (e: Error) => onMsg(e.message),
   });
@@ -105,7 +106,6 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
     onSuccess: (r) => {
       onMsg(r.message);
       qc.invalidateQueries({ queryKey: ["sp-list"] });
-      qc.invalidateQueries({ queryKey: ["sp-candidates"] });
     },
     onError: (e: Error) => onMsg(e.message),
   });
@@ -126,25 +126,23 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
 
   return (
     <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-4">
-      <div className="flex items-start justify-between mb-2">
-        <div>
-          <p className="text-white text-sm font-medium">{pl.title}</p>
+      <div className="flex items-start justify-between mb-2 gap-2">
+        <div className="min-w-0">
+          <p className="text-white text-sm font-medium truncate">{pl.title}</p>
           <p className="text-slate-500 text-xs">Genre: {pl.genre_tag}</p>
         </div>
-        <div className="flex items-center gap-1">
-          {pl.plex_playlist_id ? (
-            <span className="text-xs bg-purple-900/40 text-purple-200 px-2 py-1 rounded">
-              Plex #{pl.plex_playlist_id}
-            </span>
-          ) : (
-            <span className="text-xs bg-amber-900/30 text-amber-200 px-2 py-1 rounded">Draft</span>
-          )}
-          {!pl.plex_playlist_id && (
+        <div className="flex items-center gap-1 shrink-0">
+          {suggested ? (
             <button onClick={() => approveMut.mutate()} disabled={approveMut.isPending}
-              className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-brand/30 text-brand-light text-xs hover:bg-brand/40 disabled:opacity-50"
               title="Approve & push to Plex">
-              <Upload size={13} />
+              <Upload size={12} />
+              {approveMut.isPending ? "…" : "Approve"}
             </button>
+          ) : (
+            <span className="text-xs bg-purple-900/40 text-purple-200 px-2 py-1 rounded">
+              Plex
+            </span>
           )}
           <button onClick={() => suggestMut.mutate()} disabled={suggestMut.isPending}
             className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-brand-light"
@@ -164,11 +162,11 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
       </div>
       <div className="grid grid-cols-3 gap-2 text-xs text-slate-400 mb-2">
         <span>Tracks: {pl.track_count}</span>
-        <span>Pending: {pl.pending_count}</span>
-        <span>Last gen: {fmtRelative(pl.last_generated_at)}</span>
+        <span>Artists: {pl.artist_count || "—"}</span>
+        <span>Last: {fmtRelative(pl.last_generated_at)}</span>
       </div>
       {pl.last_run_message && (
-        <p className="text-xs text-slate-500 mb-2">Status: {pl.last_run_message}</p>
+        <p className="text-xs text-slate-500 mb-2">{pl.last_run_message}</p>
       )}
 
       {confirmDelete && (
@@ -177,7 +175,7 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
             Delete <span className="font-medium text-white">{pl.title}</span>?
             {pl.plex_playlist_id
               ? " This also removes the playlist from Plex."
-              : " Draft only — nothing on Plex."}
+              : " Suggested only — nothing on Plex."}
           </p>
           <div className="flex gap-2">
             <button onClick={() => deleteMut.mutate()} disabled={deleteMut.isPending}
@@ -199,16 +197,18 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
             <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white"
               value={titleDraft} onChange={e => setTitleDraft(e.target.value)} />
           </label>
-          <label className="text-xs text-slate-400 block">
-            Auto-update override
-            <select className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white"
-              value={autoAdd} onChange={e => setAutoAdd(e.target.value as "" | "on" | "off")}>
-              <option value="">Use global default</option>
-              <option value="on">On</option>
-              <option value="off">Off</option>
-            </select>
-          </label>
-          <label className="text-xs text-slate-400 block">
+          {!suggested && (
+            <label className="text-xs text-slate-400 block">
+              Auto-update override
+              <select className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white"
+                value={autoAdd} onChange={e => setAutoAdd(e.target.value as "" | "on" | "off")}>
+                <option value="">Use global default</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+          )}
+          <label className={`text-xs text-slate-400 block ${suggested ? "sm:col-span-2" : ""}`}>
             Max tracks override
             <input type="number" placeholder="Use global default"
               className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white placeholder:text-slate-600"
@@ -226,28 +226,106 @@ function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void 
   );
 }
 
+function BlacklistSection({ onMsg }: { onMsg: (m: string) => void }) {
+  const qc = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ["sp-settings"], queryFn: api.settings });
+  const [draft, setDraft] = useState<string | null>(null);
+  const [newArtist, setNewArtist] = useState("");
+
+  const artists = draft != null
+    ? draft.split("\n").map(s => s.trim()).filter(Boolean)
+    : (settings?.blacklisted_artists || []);
+
+  const textValue = draft ?? (settings?.blacklisted_artists || []).join("\n");
+
+  const saveMut = useMutation({
+    mutationFn: () => api.saveBlacklist(artists),
+    onSuccess: (r) => {
+      setDraft(null);
+      onMsg(`Blacklist saved (${r.blacklisted_artists.length})`);
+      qc.invalidateQueries({ queryKey: ["sp-settings"] });
+    },
+    onError: (e: Error) => onMsg(e.message),
+  });
+
+  const addArtist = () => {
+    const name = newArtist.trim();
+    if (!name) return;
+    const next = [...artists];
+    if (!next.some(a => a.toLowerCase() === name.toLowerCase())) next.push(name);
+    setDraft(next.join("\n"));
+    setNewArtist("");
+  };
+
+  const removeArtist = (name: string) => {
+    setDraft(artists.filter(a => a !== name).join("\n"));
+  };
+
+  return (
+    <section className="mb-6">
+      <h2 className="text-white font-semibold text-sm uppercase tracking-wider mb-1 flex items-center gap-2">
+        <Ban size={16} /> Artist blacklist
+      </h2>
+      <p className="text-xs text-slate-500 mb-3">
+        All monitored artists are included in playlists unless listed here.
+      </p>
+      <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-4 space-y-3">
+        <div className="flex gap-2">
+          <input
+            className="flex-1 bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
+            placeholder="Add artist name…"
+            value={newArtist}
+            onChange={e => setNewArtist(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addArtist(); } }}
+          />
+          <button onClick={addArtist}
+            className="px-3 py-1.5 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40">
+            Add
+          </button>
+        </div>
+        {artists.length === 0 ? (
+          <p className="text-slate-500 text-sm">No blacklisted artists.</p>
+        ) : (
+          <ul className="flex flex-wrap gap-2">
+            {artists.map(a => (
+              <li key={a} className="flex items-center gap-1.5 text-sm bg-surface border border-purple-900/40 rounded-lg px-2.5 py-1 text-slate-200">
+                {a}
+                <button onClick={() => removeArtist(a)} className="text-slate-500 hover:text-red-300" title="Remove">×</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <textarea
+          className="w-full bg-surface border border-purple-900/40 rounded px-3 py-2 text-xs text-slate-400 font-mono min-h-[72px]"
+          value={textValue}
+          onChange={e => setDraft(e.target.value)}
+          placeholder="One artist per line (optional bulk edit)"
+        />
+        <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || draft == null}
+          className="px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-dark text-white text-sm disabled:opacity-50">
+          {saveMut.isPending ? "Saving…" : "Save blacklist"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export default function SmartPlaylists() {
   const qc = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["sp-settings"], queryFn: api.settings });
   const { data: playlists = [] } = useQuery({ queryKey: ["sp-list"], queryFn: api.list });
-  const { data: candidates = [] } = useQuery({ queryKey: ["sp-candidates"], queryFn: () => api.candidates("pending") });
   const [msg, setMsg] = useState<string | null>(null);
+
+  const suggested = playlists.filter(p => !p.plex_playlist_id);
+  const managed = playlists.filter(p => !!p.plex_playlist_id);
 
   const runMut = useMutation({
     mutationFn: api.run,
     onSuccess: (r) => {
-      setMsg(r.ok ? `Generated — ${r.candidates ?? 0} new candidate(s)` : r.message);
-      qc.invalidateQueries({ queryKey: ["sp-list"] });
-      qc.invalidateQueries({ queryKey: ["sp-candidates"] });
-    },
-    onError: (e: Error) => setMsg(e.message),
-  });
-  const actMut = useMutation({
-    mutationFn: ({ id, action }: { id: number; action: "accept" | "reject" }) =>
-      action === "accept" ? api.accept(id) : api.reject(id),
-    onSuccess: (r) => {
-      setMsg(r.message);
-      qc.invalidateQueries({ queryKey: ["sp-candidates"] });
+      const parts = [];
+      if (r.playlists_created) parts.push(`${r.playlists_created} suggested`);
+      if (r.tracks_added) parts.push(`+${r.tracks_added} tracks`);
+      setMsg(r.ok ? (parts.length ? `Generated — ${parts.join(", ")}` : "Generated") : r.message);
       qc.invalidateQueries({ queryKey: ["sp-list"] });
     },
     onError: (e: Error) => setMsg(e.message),
@@ -262,7 +340,9 @@ export default function SmartPlaylists() {
           <ListMusic className="text-brand-light" size={22} />
           <div>
             <h1 className="text-2xl font-bold text-white">Playlists</h1>
-            <p className="text-slate-400 text-sm">Genre playlists from Qdrant → Plex — approve drafts, auto-update approved</p>
+            <p className="text-slate-400 text-sm">
+              Auto-includes artists unless blacklisted — approve Suggested playlists to push to Plex
+            </p>
           </div>
         </div>
         <Link to="/settings/music" title="Configure"
@@ -283,50 +363,46 @@ export default function SmartPlaylists() {
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
           <Play size={14} /> {runMut.isPending ? "Running…" : "Generate Now"}
         </button>
+        <button onClick={() => qc.invalidateQueries({ queryKey: ["sp-list"] })}
+          className="p-2 text-slate-400 hover:text-white" title="Refresh">
+          <RefreshCw size={14} />
+        </button>
         {msg && <span className="text-sm text-slate-400">{msg}</span>}
       </div>
 
       <section className="mb-6">
-        <h2 className="text-white font-semibold text-sm uppercase tracking-wider mb-3 flex items-center gap-2">
-          <Music size={16} /> Playlists ({playlists.length})
+        <h2 className="text-white font-semibold text-sm uppercase tracking-wider mb-1 flex items-center gap-2">
+          <Music size={16} /> Suggested playlists ({suggested.length})
         </h2>
-        {playlists.length === 0 ? (
-          <p className="text-slate-500 text-sm">No genre playlists yet — configure Qdrant and Generate.</p>
+        <p className="text-xs text-slate-500 mb-3">
+          Newly generated genre playlists not yet on Plex — Approve to create and fill them.
+        </p>
+        {suggested.length === 0 ? (
+          <p className="text-slate-500 text-sm">No suggested playlists — run Generate to discover genres.</p>
         ) : (
           <div className="grid gap-2">
-            {playlists.map(pl => <PlaylistCard key={pl.id} pl={pl} onMsg={setMsg} />)}
+            {suggested.map(pl => <PlaylistCard key={pl.id} pl={pl} onMsg={setMsg} suggested />)}
           </div>
         )}
       </section>
 
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-white font-semibold text-sm uppercase tracking-wider">Pending artist candidates</h2>
-          <button onClick={() => qc.invalidateQueries({ queryKey: ["sp-candidates"] })}
-            className="p-1.5 text-slate-400 hover:text-white" title="Refresh"><RefreshCw size={14} /></button>
-        </div>
-        {candidates.length === 0 ? (
-          <p className="text-slate-500 text-sm">No pending candidates.</p>
+      <section className="mb-6">
+        <h2 className="text-white font-semibold text-sm uppercase tracking-wider mb-1 flex items-center gap-2">
+          <Library size={16} /> Managed by Powarr ({managed.length})
+        </h2>
+        <p className="text-xs text-slate-500 mb-3">
+          Playlists Powarr owns on Plex — auto-updated with eligible artists on Generate.
+        </p>
+        {managed.length === 0 ? (
+          <p className="text-slate-500 text-sm">No managed playlists yet — approve a Suggested playlist.</p>
         ) : (
-          <ul className="space-y-2">
-            {candidates.map(c => (
-              <li key={c.id} className="flex items-center justify-between bg-surface-raised border border-purple-900/30 rounded-lg px-4 py-2.5">
-                <span className="text-slate-200 text-sm">{c.artist_name}</span>
-                <div className="flex gap-1">
-                  <button onClick={() => actMut.mutate({ id: c.id, action: "accept" })} title="Accept"
-                    className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300">
-                    <Check size={15} />
-                  </button>
-                  <button onClick={() => actMut.mutate({ id: c.id, action: "reject" })} title="Reject"
-                    className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300">
-                    <X size={15} />
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <div className="grid gap-2">
+            {managed.map(pl => <PlaylistCard key={pl.id} pl={pl} onMsg={setMsg} />)}
+          </div>
         )}
       </section>
+
+      <BlacklistSection onMsg={setMsg} />
     </div>
   );
 }

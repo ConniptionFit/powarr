@@ -24,7 +24,8 @@ class PlaylistOut(BaseModel):
     plex_playlist_id: Optional[str] = None
     enabled: bool
     track_count: int = 0
-    pending_count: int = 0
+    pending_count: int = 0  # legacy; always 0 under SP-01 blacklist model
+    artist_count: int = 0
     last_generated_at: Optional[datetime] = None
     last_run_message: Optional[str] = None
 
@@ -82,13 +83,19 @@ def get_settings(db: Session = Depends(get_db)):
 
 @router.put("/settings", response_model=SmartPlaylistSettings)
 def put_settings(body: SmartPlaylistSettings, db: Session = Depends(get_db)):
-    row = db.query(AppSetting).filter_by(key="smart_playlists").first()
-    if not row:
-        row = AppSetting(key="smart_playlists")
-        db.add(row)
-    row.value = body.model_dump_json()
-    db.commit()
+    playlist_generator.save_settings(db, body)
     return body
+
+
+@router.put("/blacklist")
+def put_blacklist(body: dict = Body(...)):
+    """SP-01 — replace the artist blacklist (Playlists page subsection)."""
+    artists = body.get("blacklisted_artists")
+    if artists is None:
+        raise HTTPException(status_code=400, detail="Body: {blacklisted_artists: string[]}")
+    if not isinstance(artists, list):
+        raise HTTPException(status_code=400, detail="blacklisted_artists must be a list")
+    return playlist_generator.update_blacklist([str(a) for a in artists])
 
 
 @router.get("", response_model=list[PlaylistOut])
@@ -96,12 +103,19 @@ def list_playlists(db: Session = Depends(get_db)):
     rows = db.query(SmartPlaylist).order_by(SmartPlaylist.genre_tag).all()
     out = []
     for pl in rows:
+        included = db.query(SmartPlaylistCandidate).filter_by(
+            playlist_id=pl.id, status="accepted").count()
         pending = db.query(SmartPlaylistCandidate).filter_by(
             playlist_id=pl.id, status="pending").count()
         out.append(PlaylistOut(
             id=pl.id, genre_tag=pl.genre_tag, title=pl.title,
             plex_playlist_id=pl.plex_playlist_id, enabled=pl.enabled,
-            pending_count=pending))
+            track_count=pl.track_count or 0,
+            pending_count=pending,
+            artist_count=included,
+            last_generated_at=pl.last_generated_at,
+            last_run_message=pl.last_run_message,
+        ))
     return out
 
 

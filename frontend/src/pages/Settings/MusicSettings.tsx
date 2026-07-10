@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { Compass, ListMusic, Info } from "lucide-react";
 import { req } from "../../lib/api";
 
@@ -268,12 +269,12 @@ function PlaylistsSettingsCard() {
           <input className={inputCls} value={(form.excluded_genres || []).join(", ")}
             onChange={e => set("excluded_genres", e.target.value.split(",").map(g => g.trim()).filter(Boolean))} />
         </label>
-        <label className={`${labelCls} sm:col-span-2`}>
-          Blacklisted artists <span className="text-slate-600">(comma-separated — never added to playlists)</span>
-          <input className={inputCls} value={(form.blacklisted_artists || []).join(", ")}
-            onChange={e => set("blacklisted_artists", e.target.value.split(",").map(g => g.trim()).filter(Boolean))} />
-        </label>
       </div>
+
+      <p className="text-xs text-slate-500 border-t border-purple-900/20 pt-4">
+        Artist blacklist is managed on the <Link to="/music/playlists" className="text-brand-light underline">Playlists</Link> page
+        (blacklist-only model — all artists are included unless listed there).
+      </p>
 
       <label className="flex items-start gap-2 text-sm text-slate-300 border-t border-purple-900/20 pt-4">
         <input type="checkbox" className="mt-0.5" checked={!!form.auto_create_playlists}
