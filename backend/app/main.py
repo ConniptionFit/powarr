@@ -67,6 +67,7 @@ async def startup():
     _seed_integrations()
     _migrate_qdrant_settings()
     _seed_settings()
+    _migrate_auto_resolve_default()
     _apply_llm_breaker_config()
     from app.services.import_matcher import poller_loop
     from app.services.scheduler import maintenance_loop
@@ -146,6 +147,34 @@ def _migrate_qdrant_settings():
         db.add(AppSetting(key="qdrant", value=json.dumps(qdrant_cfg)))
         db.commit()
         logger.info("Migrated Qdrant connection from smart_playlists settings to the shared 'qdrant' AppSetting")
+    finally:
+        db.close()
+
+
+def _migrate_auto_resolve_default():
+    """v0.43.0: auto_resolve_enabled changed from False to True by default.
+    For existing DBs, preserve the current setting (don't force-upgrade).
+    Fresh installs get the new default. This runs after _seed_settings()."""
+    from app.database import SessionLocal
+    from app.models.app_setting import AppSetting
+    import json
+
+    db = SessionLocal()
+    try:
+        row = db.query(AppSetting).filter_by(key="import_matching").first()
+        if not row or not row.value:
+            return  # _seed_settings() will handle it with new defaults
+        try:
+            cfg = json.loads(row.value)
+            # If field is missing (pre-v0.43.0 JSON), add it with the new default
+            if "auto_resolve_enabled" not in cfg:
+                cfg["auto_resolve_enabled"] = True
+                row.value = json.dumps(cfg)
+                db.commit()
+                logger.info("Migrated import_matching.auto_resolve_enabled to True (new default)")
+            # If field exists (even as False from pre-v0.43.0), leave it alone
+        except (ValueError, KeyError):
+            pass  # Corrupted; leave as-is
     finally:
         db.close()
 

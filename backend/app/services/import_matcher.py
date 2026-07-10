@@ -1923,8 +1923,10 @@ async def rescore_music(ids: list[int] | None = None, limit: int = 500) -> dict:
             rescored += 1
         db.commit()
         auto_queued = await _queue_auto_imports(collect_auto_eligible(rows, cfg))
-        publish({"type": "rescore", "rescored": rescored, "skipped": skipped,
-                 "auto_queued": auto_queued})
+        # Only publish event if rows were actually processed (v0.43.0: silence idle runs)
+        if rescored + skipped > 0:
+            publish({"type": "rescore", "rescored": rescored, "skipped": skipped,
+                     "auto_queued": auto_queued})
         return {"rescored": rescored, "skipped": skipped, "auto_queued": auto_queued}
     finally:
         db.close()
@@ -2061,8 +2063,10 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
         db.close()
     logger.info(f"LLM rescore: {scored} scored, {skipped} skipped")
     auto_queued = await _queue_auto_imports(auto_ids)
-    publish({"type": "llm_run", "scored": scored, "skipped": skipped,
-             "auto_queued": auto_queued})
+    # Only publish event if items were actually processed (v0.43.0: silence idle runs)
+    if scored + skipped > 0:
+        publish({"type": "llm_run", "scored": scored, "skipped": skipped,
+                 "auto_queued": auto_queued})
     return {"scored": scored, "skipped": skipped, "auto_queued": auto_queued,
             "message": f"{scored} scored, {skipped} skipped"}
 

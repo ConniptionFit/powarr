@@ -40,8 +40,7 @@ export const AREAS: AreaDef[] = [
     icon: DownloadCloud,
     base: "/imports",
     screens: [
-      { path: "/imports/queue", label: "Import Queue" },
-      { path: "/imports/match-review", label: "Match Review" },
+      { path: "/imports", label: "Imports" },
     ],
   },
   {

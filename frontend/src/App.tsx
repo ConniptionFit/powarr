@@ -4,7 +4,6 @@ import { Menu, X } from "lucide-react";
 import Overview from "./pages/Overview";
 import DeletionSuggestions from "./pages/Library/DeletionSuggestions";
 import DeletionHistory from "./pages/Library/DeletionHistory";
-import ImportQueue from "./pages/Imports/ImportQueue";
 import MatchReview from "./pages/Imports/MatchReview";
 import ArtistDiscovery from "./pages/Music/ArtistDiscovery";
 import Playlists from "./pages/Music/Playlists";
@@ -122,9 +121,9 @@ export default function App() {
               <Route path="/library/deletion-suggestions" element={<div className="p-4 sm:p-8"><DeletionSuggestions /></div>} />
               <Route path="/library/deletion-history" element={<div className="p-4 sm:p-8"><DeletionHistory /></div>} />
 
-              <Route path="/imports" element={<Navigate to="/imports/queue" replace />} />
-              <Route path="/imports/queue" element={<div className="p-4 sm:p-8"><ImportQueue /></div>} />
-              <Route path="/imports/match-review" element={<div className="p-4 sm:p-8"><MatchReview /></div>} />
+              <Route path="/imports" element={<div className="p-4 sm:p-8"><MatchReview /></div>} />
+              {/* Redirect old /imports/queue URL for backwards compatibility */}
+              <Route path="/imports/queue" element={<Navigate to="/imports" replace />} />
 
               <Route path="/music" element={<Navigate to="/music/discovery" replace />} />
               <Route path="/music/discovery" element={<ArtistDiscovery />} />

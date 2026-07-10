@@ -31,7 +31,7 @@ class ImportMatchingSettings(BaseModel):
     poll_interval_seconds: int = 300
     high_confidence_threshold: float = 0.90  # >= this → eligible for auto-resolve
     low_confidence_floor: float = 0.50  # < this → log only, no triage row
-    auto_resolve_enabled: bool = False  # writes back to *arr apps — off until explicitly enabled
+    auto_resolve_enabled: bool = True  # writes back to *arr apps — on by default (user can disable)
     grace_period_minutes: int = 10  # skip queue items younger than this — *arr often self-retries
     include_stalled: bool = False  # also flag stalled downloads, not just import failures
     verify_timeout_minutes: int = 30  # resolved rows unverified after this → resolve_failed
