@@ -189,6 +189,10 @@ class SmartPlaylistSettings(BaseModel):
     max_tracks_per_playlist: int = 200
     schedule_enabled: bool = False
     schedule_interval_hours: int = 24
+    # SP-04 — let the local LLM name new playlists instead of "Powarr · {genre}".
+    # Fails soft to the template when the LLM is disabled/unreachable, per the
+    # Local LLM Assist optional/fail-soft rule. Only applies at playlist creation.
+    llm_playlist_names: bool = False
 
 
 class ArtistDiscoverySettings(BaseModel):

@@ -137,6 +137,79 @@ class MusicBrainzWikipediaTests(unittest.TestCase):
         self.assertIsNone(musicbrainz.wikipedia_title({}))
 
 
+class MusicBrainzWikidataTests(unittest.TestCase):
+    """v0.41.0 — most MB artists only carry a wikidata rel (direct wikipedia rels
+    are deprecated), so the enrichment chain resolves the Q-id instead (AD-04)."""
+
+    def test_finds_wikidata_qid(self):
+        data = {"relations": [
+            {"url": {"resource": "https://www.discogs.com/artist/123"}},
+            {"url": {"resource": "https://www.wikidata.org/wiki/Q6693441"}},
+        ]}
+        self.assertEqual(musicbrainz.wikidata_qid(data), "Q6693441")
+
+    def test_no_wikidata_relation_returns_none(self):
+        self.assertIsNone(musicbrainz.wikidata_qid(
+            {"relations": [{"url": {"resource": "https://en.wikipedia.org/wiki/X"}}]}))
+        self.assertIsNone(musicbrainz.wikidata_qid({}))
+
+
+class MusicBrainzDeezerTests(unittest.TestCase):
+    def test_extracts_deezer_artist_id(self):
+        data = {"relations": [
+            {"url": {"resource": "https://www.deezer.com/artist/74877"}},
+        ]}
+        self.assertEqual(musicbrainz.deezer_artist_id(data), "74877")
+
+    def test_handles_language_prefixed_deezer_url(self):
+        data = {"relations": [{"url": {"resource": "https://www.deezer.com/en/artist/74877"}}]}
+        self.assertEqual(musicbrainz.deezer_artist_id(data), "74877")
+
+    def test_no_deezer_relation_returns_none(self):
+        self.assertIsNone(musicbrainz.deezer_artist_id({}))
+
+
+class WikidataSitelinkTests(unittest.TestCase):
+    def test_prefers_enwiki(self):
+        from app.services.wikipedia import _sitelink_title
+        links = {"dewiki": {"title": "Band DE"}, "enwiki": {"title": "Band EN"}}
+        self.assertEqual(_sitelink_title(links), ("en", "Band EN"))
+
+    def test_falls_back_to_any_language_wiki(self):
+        from app.services.wikipedia import _sitelink_title
+        self.assertEqual(_sitelink_title({"dewiki": {"title": "Band DE"}}), ("de", "Band DE"))
+
+    def test_ignores_commonswiki_and_empty(self):
+        from app.services.wikipedia import _sitelink_title
+        self.assertIsNone(_sitelink_title({"commonswiki": {"title": "Category:Band"}}))
+        self.assertIsNone(_sitelink_title({}))
+
+
+class CleanTagsTests(unittest.TestCase):
+    """AD-06 — placeholder 'Unknown' chips are filtered at creation and at the
+    API serializer (covers legacy rows)."""
+
+    def test_drops_placeholder_values_case_insensitive(self):
+        from app.services.artist_discovery import clean_tags
+        self.assertEqual(clean_tags(["rock", "Unknown", "N/A", "none", "", "metal"]),
+                         ["rock", "metal"])
+
+    def test_dedupes_and_strips(self):
+        from app.services.artist_discovery import clean_tags
+        self.assertEqual(clean_tags([" rock ", "rock"]), ["rock"])
+
+    def test_none_input_is_safe(self):
+        from app.services.artist_discovery import clean_tags
+        self.assertEqual(clean_tags(None), [])
+
+    def test_clean_era(self):
+        from app.services.artist_discovery import clean_era
+        self.assertIsNone(clean_era("Unknown"))
+        self.assertIsNone(clean_era(None))
+        self.assertIsNone(clean_era("  "))
+        self.assertEqual(clean_era("2000s"), "2000s")
+
+
 class LidarrImageSelectionTests(unittest.TestCase):
     def test_prefers_poster_over_fanart_and_banner(self):
         images = [

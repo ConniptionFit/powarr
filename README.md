@@ -59,6 +59,7 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 - **Circuit breaker + call stats (v0.27.0)**: Settings → LLM Assist shows a live readout of every LLM call since startup (count, ok/failed, average latency, last error), and after N consecutive failures (default 5) the assist **auto-pauses** for a cooldown (default 10 min) instead of re-hitting a downed or overloaded host on every scan cycle — calls fail soft instantly while paused, and a Reset button closes the breaker early. In-memory only; counters reset with the container
 - **Per-task toggles + models (v0.27.0)**: import matching (match review + pack files) and deletion rationales can be enabled and assigned a model **independently** in Settings → LLM Assist — e.g. a fast small model for match verdicts and a larger one for rationales. Blank model fields keep using the shared model from the Integrations page, so existing configs behave unchanged
 - **Explain Visible batch button (v0.27.0)**: the Deletion Suggestions page can generate rationales for everything currently listed in one background run (already-cached items are skipped; progress shows in the Active Processes tray). The blend weight is now a **slider**
+- **Match-review call logging (v0.41.0)**: every real match-review LLM reply (scan-time and on-demand rescore) is logged to an `llm_match_log` table — prompt hash + scaffold version, model, the prompt's variable inputs, App-check flags, raw reply, parsed verdict/adjustment, parse status, and latency. Once the failed-import row closes, its terminal status (accepted/rejected/auto-resolved/orphaned) is backfilled onto the log rows as a ground-truth label. Export everything for offline prompt A/B replay at `GET /api/v1/imports/llm-log/export.csv`; retention is 90 days / 5,000 rows, pruned automatically
 - Fails soft everywhere — no LLM, no problem
 
 ### Platform
@@ -118,7 +119,7 @@ Notifications, Security, Music — replaces the separate top-level Integrations 
 below a divider as a utility item. Match Review defaults to a card-per-item layout with a
 table-view toggle for the old dense table.
 
-### Music — Artist Discovery (v0.39.0; refined v0.40.0)
+### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.41.0)
 Native port of an external n8n taste-mapping pipeline: **Last.fm** scrobble history is embedded
 via a standalone **Ollama** connection (`all-minilm`, independent of the separate LLM Assist
 Ollama connection), mapped into the shared Qdrant `music_affinity_space` collection (configured
@@ -126,14 +127,22 @@ once under Settings → Integrations, also used by Smart Playlists), and used tw
 **taste-centroid similarity search** surfaces new artists close to what you already listen to,
 and a **related-artist graph** expands outward from your monitored Lidarr artists via Last.fm's
 similar-artist API. Both land in a pending review queue, each candidate showing a **thumbnail,
-bio, genres, and active years** pulled from Lidarr (primary) and MusicBrainz/Wikipedia
-(fallback). Accepting adds the artist to Lidarr (root folder / quality / metadata profile
-configurable, else Lidarr's first available). An opt-in **auto-promote** setting (off by default)
-lets graph candidates that cross a configurable connection-count threshold skip the queue. A
-**differential sync** keeps `is_monitored_lidarr` / fulfillment / play-count flags on every Qdrant
-point current without ever deleting a point (soft-delete semantics). Both the discovery cycle and
-the sync run on independent optional schedules, or on demand. Both this page and Playlists are
-queue-only — all configuration lives at **Settings → Music**.
+bio, genres, and active years** pulled from Lidarr (primary), MusicBrainz/Wikipedia (following
+the far more common Wikidata relation when no direct Wikipedia link exists), and **Deezer**
+artist pictures as the final image fallback (v0.41.0 — covers niche artists the other sources
+miss; candidates created before the fix are backfilled automatically each cycle, or on demand
+via `POST /artist-discovery/candidates/re-enrich`). Each card explains **why it was suggested**
+in plain language — graph candidates list *every* contributing related artist, not just the
+first seed (v0.41.0) — and placeholder "Unknown" genre chips are filtered out. Accepting adds
+the artist to Lidarr (root folder / quality / metadata profile configurable, else Lidarr's first
+available). An opt-in **auto-promote** setting (off by default) lets graph candidates that cross
+a configurable connection-count threshold skip the queue. A **differential sync** keeps
+`is_monitored_lidarr` / fulfillment / play-count flags on every Qdrant point current without
+ever deleting a point (soft-delete semantics). Both the discovery cycle and the sync run on
+independent optional schedules, or on demand, and a collapsible **Recent runs** history sits
+under the queue (v0.41.0). Both this page and Playlists are queue-only — all configuration lives
+at **Settings → Music**. Playlists can optionally get **LLM-generated names** instead of the
+"Powarr · genre" template (v0.41.0, fails soft to the template).
 
 ## Configuration Notes
 

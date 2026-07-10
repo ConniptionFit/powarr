@@ -159,6 +159,42 @@ def export_imports_csv(
     )
 
 
+@router.get("/llm-log/export.csv")
+def export_llm_match_log_csv(
+    db: Session = Depends(get_db),
+    limit: int = Query(10000),
+):
+    """CSV of match-review LLM call logs for offline prompt-engineering replay
+    (LLM-LOG-01) — inputs, raw reply, parsed verdict, App-check flags, and the
+    ground-truth resolution backfilled from the closed failed-import row."""
+    from app.services.csv_export import streaming_csv, _dt
+    from app.models.llm_match_log import LlmMatchLog
+    items = (db.query(LlmMatchLog).order_by(LlmMatchLog.created_at.desc())
+             .limit(min(limit, 20000)).all())
+    rows = [[
+        i.id, _dt(i.created_at), i.failed_import_id or "", i.site or "",
+        i.source_app or "", i.model or "", i.scaffold_version or "",
+        i.prompt_hash or "", i.release_title or "", i.candidate_title or "",
+        i.context or "", i.det_summary or "",
+        "" if i.evidence_artist_ok is None else i.evidence_artist_ok,
+        "" if i.evidence_album_ok is None else i.evidence_album_ok,
+        i.raw_reply or "", "" if i.parse_ok is None else i.parse_ok,
+        "" if i.agrees is None else i.agrees,
+        "" if i.confidence_adjustment is None else i.confidence_adjustment,
+        "" if i.enforced is None else i.enforced,
+        i.latency_ms or "", i.resolution or "", _dt(i.resolved_at),
+    ] for i in items]
+    return streaming_csv(
+        "powarr-llm-match-log.csv",
+        ["id", "created_at", "failed_import_id", "site", "source_app", "model",
+         "scaffold_version", "prompt_hash", "release_title", "candidate_title",
+         "context", "det_summary", "evidence_artist_ok", "evidence_album_ok",
+         "raw_reply", "parse_ok", "agrees", "confidence_adjustment", "enforced",
+         "latency_ms", "resolution", "resolved_at"],
+        rows,
+    )
+
+
 @router.get("/trends")
 def import_trends(db: Session = Depends(get_db), days: int = Query(30, ge=7, le=90)):
     """Daily new/resolved failed-import counts for the dashboard sparkline (#18)."""

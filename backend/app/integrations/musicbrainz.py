@@ -6,13 +6,14 @@ building the display fields for a newly-created review-queue candidate."""
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any
 
 import httpx
 
 _API = "https://musicbrainz.org/ws/2"
-_USER_AGENT = "Powarr/0.40.0 (https://github.com/ConniptionFit/powarr)"
+_USER_AGENT = "Powarr/0.41.0 (https://github.com/ConniptionFit/powarr)"
 
 _lock = asyncio.Lock()
 _last_call = 0.0
@@ -66,7 +67,9 @@ def genres(data: dict[str, Any]) -> list[str]:
 
 
 def wikipedia_title(data: dict[str, Any]) -> tuple[str, str] | None:
-    """Find a wikipedia relation among url-rels; returns (lang, title) or None."""
+    """Find a direct wikipedia relation among url-rels; returns (lang, title) or None.
+    Rare in practice — MusicBrainz deprecated direct wikipedia rels in favor of
+    wikidata rels years ago, so most artists only carry wikidata_qid()."""
     for rel in data.get("relations") or []:
         url = ((rel.get("url") or {}).get("resource")) or ""
         if "wikipedia.org/wiki/" not in url:
@@ -77,4 +80,26 @@ def wikipedia_title(data: dict[str, Any]) -> tuple[str, str] | None:
             return lang, title
         except (IndexError, KeyError):
             continue
+    return None
+
+
+def wikidata_qid(data: dict[str, Any]) -> str | None:
+    """Find a wikidata relation among url-rels; returns the Q-id or None."""
+    for rel in data.get("relations") or []:
+        url = ((rel.get("url") or {}).get("resource")) or ""
+        if "wikidata.org/wiki/" not in url:
+            continue
+        qid = url.rsplit("/wiki/", 1)[1].strip()
+        if qid.startswith("Q"):
+            return qid
+    return None
+
+
+def deezer_artist_id(data: dict[str, Any]) -> str | None:
+    """Find a Deezer artist relation among url-rels; returns the numeric id or None."""
+    for rel in data.get("relations") or []:
+        url = ((rel.get("url") or {}).get("resource")) or ""
+        m = re.search(r"deezer\.com/(?:[a-z]{2}/)?artist/(\d+)", url)
+        if m:
+            return m.group(1)
     return None

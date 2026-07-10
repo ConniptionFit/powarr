@@ -38,6 +38,31 @@ def load_settings(db) -> SmartPlaylistSettings:
     return SmartPlaylistSettings(**json.loads(row.value))
 
 
+async def _playlist_title(db, cfg: SmartPlaylistSettings, genre: str,
+                          artist_names: list[str]) -> str:
+    """SP-04 — optionally LLM-generated display name for a *new* playlist;
+    fails soft to the 'Powarr · {genre}' template in every failure mode."""
+    fallback = f"Powarr · {genre}"
+    if not cfg.llm_playlist_names:
+        return fallback
+    try:
+        from app.schemas.settings import OllamaSettings
+        row = db.query(AppSetting).filter_by(key="ollama").first()
+        ollama = OllamaSettings(**json.loads(row.value)) if row and row.value else OllamaSettings()
+        if not ollama.enabled or not ollama.host or not ollama.model:
+            return fallback
+        from app.services import llm_assist
+        name = await llm_assist.suggest_playlist_name(
+            ollama.host, ollama.model, genre, artist_names,
+            api_style=ollama.api_style, model_size=ollama.model_size,
+            keep_alive_minutes=ollama.keep_alive_minutes,
+            forbid_thinking=getattr(ollama, "forbid_thinking", True))
+        return name or fallback
+    except Exception as e:
+        logger.info(f"Smart playlist LLM naming failed for '{genre}': {e}")
+        return fallback
+
+
 async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
     """Scroll Qdrant monitored artists, group by genre, upsert pending candidates."""
     db = SessionLocal()
@@ -95,7 +120,8 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                 continue
             pl = db.query(SmartPlaylist).filter_by(genre_tag=g).first()
             if not pl:
-                pl = SmartPlaylist(genre_tag=g, title=f"Powarr · {g}", enabled=True)
+                title = await _playlist_title(db, cfg, g, [a["artist_name"] for a in uniq])
+                pl = SmartPlaylist(genre_tag=g, title=title, enabled=True)
                 db.add(pl)
                 db.flush()
                 created_playlists += 1

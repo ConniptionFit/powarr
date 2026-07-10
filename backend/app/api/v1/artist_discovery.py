@@ -28,6 +28,7 @@ class CandidateOut(BaseModel):
     similarity_score: Optional[float] = None
     associated_seed_mbids: list[str] = []
     seed_artist_name: Optional[str] = None
+    seed_artist_names: list[str] = []
     status: str
     lidarr_artist_id: Optional[int] = None
     created_at: Optional[datetime] = None
@@ -37,13 +38,17 @@ class CandidateOut(BaseModel):
 
 
 def _candidate_out(row: DiscoveredArtist) -> CandidateOut:
+    # clean_tags/clean_era also run at candidate creation — re-applying here
+    # covers rows stored before the placeholder filtering existed (AD-06).
     return CandidateOut(
         id=row.id, musicbrainz_id=row.musicbrainz_id, artist_name=row.artist_name,
-        genres=json.loads(row.genres) if row.genres else [],
-        mood_tags=json.loads(row.mood_tags) if row.mood_tags else [],
-        era=row.era, source=row.source, similarity_score=row.similarity_score,
+        genres=service.clean_tags(json.loads(row.genres) if row.genres else []),
+        mood_tags=service.clean_tags(json.loads(row.mood_tags) if row.mood_tags else []),
+        era=service.clean_era(row.era), source=row.source, similarity_score=row.similarity_score,
         associated_seed_mbids=json.loads(row.associated_seed_mbids) if row.associated_seed_mbids else [],
-        seed_artist_name=row.seed_artist_name, status=row.status,
+        seed_artist_name=row.seed_artist_name,
+        seed_artist_names=json.loads(row.seed_artist_names) if row.seed_artist_names else [],
+        status=row.status,
         lidarr_artist_id=row.lidarr_artist_id, created_at=row.created_at,
         image_url=row.image_url, bio=row.bio, years_active=row.years_active,
     )
@@ -123,6 +128,33 @@ async def batch(body: dict = Body(...), db: Session = Depends(get_db)):
         else:
             results.append(service.reject_candidate(db, cid))
     return {"results": results}
+
+
+@router.post("/candidates/re-enrich")
+async def re_enrich(db: Session = Depends(get_db)):
+    """Backfill image/bio/years/seed-names on pending candidates missing them."""
+    return await service.re_enrich_missing(db)
+
+
+class RunOut(BaseModel):
+    id: int
+    run_type: str
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    candidates_found: int = 0
+    candidates_added: int = 0
+    message: Optional[str] = None
+
+
+@router.get("/runs", response_model=list[RunOut])
+def list_runs(limit: int = Query(20, le=100), db: Session = Depends(get_db)):
+    from app.models.artist_discovery import ArtistDiscoveryRun
+    rows = (db.query(ArtistDiscoveryRun)
+            .order_by(ArtistDiscoveryRun.started_at.desc()).limit(limit).all())
+    return [RunOut(id=r.id, run_type=r.run_type, started_at=r.started_at,
+                   finished_at=r.finished_at, candidates_found=r.candidates_found or 0,
+                   candidates_added=r.candidates_added or 0, message=r.message)
+            for r in rows]
 
 
 @router.get("/lidarr/profiles")

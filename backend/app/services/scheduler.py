@@ -232,6 +232,10 @@ async def maintenance_loop():
                 await _scheduled_playlist_generation(db)
                 await _scheduled_artist_discovery(db)
                 await _scheduled_artist_discovery_sync(db)
+                # LLM-LOG-01: backfill ground-truth resolutions onto match-review
+                # log rows + retention prune (90 days / 5k rows). Sync + cheap.
+                from app.services import llm_match_log
+                llm_match_log.maintain(db)
             finally:
                 db.close()
         except asyncio.CancelledError:

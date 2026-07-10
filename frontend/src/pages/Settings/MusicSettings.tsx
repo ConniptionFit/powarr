@@ -32,6 +32,7 @@ interface SPSettings {
   max_tracks_per_playlist: number;
   schedule_enabled: boolean;
   schedule_interval_hours: number;
+  llm_playlist_names: boolean;
 }
 
 interface LidarrProfiles {
@@ -247,6 +248,18 @@ function PlaylistsSettingsCard() {
       <label className="flex items-center gap-2 text-sm text-slate-300 border-t border-purple-900/20 pt-4">
         <input type="checkbox" checked={!!form.auto_create_playlists} onChange={e => set("auto_create_playlists", e.target.checked)} />
         Auto-create Plex playlists on scheduled runs (not just manual Accept)
+      </label>
+
+      <label className="flex items-start gap-2 text-sm text-slate-300">
+        <input type="checkbox" className="mt-0.5" checked={!!form.llm_playlist_names} onChange={e => set("llm_playlist_names", e.target.checked)} />
+        <span>
+          LLM-generated playlist names
+          <span className="block text-xs text-slate-500">
+            Uses the Local LLM Assist connection to name new playlists instead of
+            "Powarr · genre". Falls back to the template when the LLM is unavailable.
+            Only applies to playlists created after enabling.
+          </span>
+        </span>
       </label>
 
       <div className="border-t border-purple-900/20 pt-4 space-y-3">

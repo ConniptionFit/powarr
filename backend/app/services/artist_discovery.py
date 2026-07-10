@@ -33,6 +33,51 @@ def _norm_artist(name: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+# Placeholder values Lidarr/MusicBrainz/Last.fm metadata gaps produce — a literal
+# "Unknown" genre chip adds no signal on a candidate card (AD-06).
+_PLACEHOLDER_TAGS = {"unknown", "none", "n/a", "na", ""}
+
+
+def clean_tags(tags: list[str] | None) -> list[str]:
+    out: list[str] = []
+    for t in tags or []:
+        s = (t or "").strip()
+        if s.lower() in _PLACEHOLDER_TAGS or s in out:
+            continue
+        out.append(s)
+    return out
+
+
+def clean_era(era: str | None) -> str | None:
+    s = (era or "").strip()
+    return None if s.lower() in _PLACEHOLDER_TAGS else s
+
+
+async def _resolve_seed_names(qdrant, seed_keys: list[str] | None) -> list[str]:
+    """associated_seed_mbids holds a mix of MBIDs and bare names (for mbid-less
+    seeds). Resolve the MBIDs back to artist names via their Qdrant points so the
+    review queue can show every contributing seed artist (AD-05)."""
+    by_mbid: dict[str, str] = {}
+    mbids = [k for k in seed_keys or [] if k and _UUID_RE.match(k)]
+    if mbids and qdrant:
+        try:
+            points = await qdrant.retrieve_points([qdrant.point_id(m, "") for m in mbids])
+            for p in points:
+                payload = p.get("payload") or {}
+                if payload.get("musicbrainz_id") and payload.get("artist_name"):
+                    by_mbid[payload["musicbrainz_id"]] = payload["artist_name"]
+        except Exception as e:
+            logger.debug(f"Artist Discovery: seed name resolution failed: {e}")
+    names: list[str] = []
+    for k in seed_keys or []:
+        name = by_mbid.get(k, "") if (k and _UUID_RE.match(k)) else (k or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def load_settings(db) -> ArtistDiscoverySettings:
     row = db.query(AppSetting).filter_by(key="artist_discovery").first()
     if not row or not row.value:
@@ -107,13 +152,18 @@ async def _embed_artist(cfg: ArtistDiscoverySettings, name: str, tags: list[str]
     return await embeddings.embed(cfg.ollama_host, cfg.embed_model, text)
 
 
+def _find_candidate(db, mbid: str | None, name: str) -> DiscoveredArtist | None:
+    if mbid:
+        row = db.query(DiscoveredArtist).filter_by(musicbrainz_id=mbid).first()
+        if row:
+            return row
+    return db.query(DiscoveredArtist).filter_by(artist_name=name).first()
+
+
 def _candidate_exists(db, mbid: str | None, name: str) -> bool:
     """Any prior row (any status) permanently blocks re-surfacing — a rejected
     candidate never comes back, same precedent as Smart Playlists' artist dedupe."""
-    if mbid:
-        if db.query(DiscoveredArtist).filter_by(musicbrainz_id=mbid).first():
-            return True
-    return db.query(DiscoveredArtist).filter_by(artist_name=name).first() is not None
+    return _find_candidate(db, mbid, name) is not None
 
 
 # --- Ingestion -----------------------------------------------------------------
@@ -234,12 +284,12 @@ async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, 
         if _candidate_exists(db, mbid, name):
             continue
         enrichment = await _enrich_candidate(db, mbid, name)
-        genres_list = payload.get("genres") or enrichment["genres"]
+        genres_list = clean_tags(payload.get("genres")) or clean_tags(enrichment["genres"])
         db.add(DiscoveredArtist(
             musicbrainz_id=mbid, artist_name=name,
             genres=json.dumps(genres_list),
-            mood_tags=json.dumps(payload.get("mood_tags") or []),
-            era=payload.get("era"), source="centroid",
+            mood_tags=json.dumps(clean_tags(payload.get("mood_tags"))),
+            era=clean_era(payload.get("era")), source="centroid",
             similarity_score=h.get("score"), status="pending",
             image_url=enrichment["image_url"], bio=enrichment["bio"],
             years_active=enrichment["years_active"],
@@ -323,20 +373,31 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                     logger.warning(f"Artist Discovery graph sync: Qdrant upsert failed for {rname}: {e}")
                     continue
 
-            conn_count = len(epayload.get("associated_seed_mbids") or [])
-            if epayload.get("is_monitored_lidarr") or conn_count < cfg.auto_add_connection_threshold:
-                continue
-            if _candidate_exists(db, rmbid, rname):
+            seeds_list = list(epayload.get("associated_seed_mbids") or [])
+            row = _find_candidate(db, rmbid, rname)
+            if row is not None:
+                # New connections keep accumulating after the row was created —
+                # keep a pending row's seed list (and its resolved names) current
+                # so the card can show every contributing artist (AD-05).
+                if row.status == "pending":
+                    stored = set(json.loads(row.associated_seed_mbids)) if row.associated_seed_mbids else set()
+                    if set(seeds_list) != stored:
+                        row.associated_seed_mbids = json.dumps(seeds_list)
+                        row.seed_artist_names = json.dumps(await _resolve_seed_names(qdrant, seeds_list))
+                continue  # any prior row (any status) blocks re-creation
+            if epayload.get("is_monitored_lidarr") or len(seeds_list) < cfg.auto_add_connection_threshold:
                 continue
             enrichment = await _enrich_candidate(db, rmbid, rname)
-            genres_list = epayload.get("genres") or enrichment["genres"]
+            genres_list = clean_tags(epayload.get("genres")) or clean_tags(enrichment["genres"])
             cand = DiscoveredArtist(
                 musicbrainz_id=rmbid, artist_name=rname,
                 genres=json.dumps(genres_list),
-                mood_tags=json.dumps(epayload.get("mood_tags") or []),
-                era=epayload.get("era"), source="graph",
-                associated_seed_mbids=json.dumps(epayload.get("associated_seed_mbids") or []),
-                seed_artist_name=seed_name, status="pending",
+                mood_tags=json.dumps(clean_tags(epayload.get("mood_tags"))),
+                era=clean_era(epayload.get("era")), source="graph",
+                associated_seed_mbids=json.dumps(seeds_list),
+                seed_artist_name=seed_name,
+                seed_artist_names=json.dumps(await _resolve_seed_names(qdrant, seeds_list)),
+                status="pending",
                 image_url=enrichment["image_url"], bio=enrichment["bio"],
                 years_active=enrichment["years_active"],
             )
@@ -359,6 +420,50 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             "candidates": created, "promoted": promoted}
 
 
+# --- Re-enrichment backfill --------------------------------------------------------
+
+async def re_enrich_missing(db, limit: int = 25) -> dict[str, Any]:
+    """Backfill display fields on pending candidates still missing an image, bio,
+    years-active, or (graph rows) resolved seed names — rows created before the
+    wikidata/Deezer fallbacks existed, or when an upstream source was down at
+    creation time (AD-04/AD-05). Bounded per pass; MusicBrainz stays rate-limited."""
+    rows = (db.query(DiscoveredArtist).filter_by(status="pending")
+            .filter((DiscoveredArtist.image_url.is_(None))
+                    | (DiscoveredArtist.bio.is_(None))
+                    | (DiscoveredArtist.years_active.is_(None))
+                    | ((DiscoveredArtist.associated_seed_mbids.isnot(None))
+                       & (DiscoveredArtist.seed_artist_names.is_(None))))
+            .order_by(DiscoveredArtist.created_at.desc()).limit(limit).all())
+    qdrant = _qdrant(db)
+    updated = 0
+    for row in rows:
+        changed = False
+        if not row.image_url or not row.bio or not row.years_active:
+            enrichment = await _enrich_candidate(db, row.musicbrainz_id, row.artist_name)
+            if not row.image_url and enrichment["image_url"]:
+                row.image_url = enrichment["image_url"]
+                changed = True
+            if not row.bio and enrichment["bio"]:
+                row.bio = enrichment["bio"]
+                changed = True
+            if not row.years_active and enrichment["years_active"]:
+                row.years_active = enrichment["years_active"]
+                changed = True
+            if (not row.genres or row.genres == "[]") and clean_tags(enrichment["genres"]):
+                row.genres = json.dumps(clean_tags(enrichment["genres"]))
+                changed = True
+        if row.associated_seed_mbids and not row.seed_artist_names:
+            names = await _resolve_seed_names(qdrant, json.loads(row.associated_seed_mbids))
+            if names:
+                row.seed_artist_names = json.dumps(names)
+                changed = True
+        if changed:
+            updated += 1
+    db.commit()
+    return {"ok": True, "message": f"Re-enriched {updated} of {len(rows)} candidate(s)",
+            "updated": updated, "checked": len(rows)}
+
+
 # --- Orchestration -----------------------------------------------------------------
 
 async def run_full_discovery_cycle(db=None) -> dict[str, Any]:
@@ -378,6 +483,7 @@ async def run_full_discovery_cycle(db=None) -> dict[str, Any]:
         ingest = await ingest_scrobbles(db, cfg)
         centroid = await run_centroid_discovery(db, cfg)
         graph = await run_graph_sync(db, cfg)
+        await re_enrich_missing(db)
         found = centroid.get("candidates", 0) + graph.get("candidates", 0)
         added = graph.get("promoted", 0)
         run.candidates_found = found

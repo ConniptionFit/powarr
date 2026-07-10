@@ -7,6 +7,7 @@ Supports two API styles: "ollama" (native /api/tags + /api/generate) and "openai
 Prompts are templated: users may override the defaults in Settings → LLM Assist.
 Placeholders — match: {release} {candidate} {context}; explain: {item}. The JSON
 reply instruction is always appended for match prompts so custom templates still parse."""
+import hashlib
 import json
 import logging
 import re
@@ -17,6 +18,11 @@ from typing import Any, Optional
 import httpx
 
 logger = logging.getLogger("powarr")
+
+# Bumped whenever the match-review prompt scaffold changes meaningfully — stored
+# on every llm_match_log row so offline replay/A-B analysis can group calls by
+# the scaffold that produced them (LLM-LOG-01).
+SCAFFOLD_VERSION = "2026-07-10.v0.41"
 
 
 # --- Call stats + circuit breaker (v0.27.0, Approved Queue #7) -----------------
@@ -929,12 +935,18 @@ async def review_match(host: str, model: str, release_title: str,
                        forbid_thinking: bool = True,
                        source_app: str | None = None,
                        temperature: float = 0.0, max_tokens: int = 0,
-                       timeout_seconds: int = 0) -> Optional[dict[str, Any]]:
+                       timeout_seconds: int = 0,
+                       capture: Optional[dict] = None) -> Optional[dict[str, Any]]:
     """Single structured LLM review of a deterministic match decision (one call —
     no separate match/explain prompts). Returns
     {"agrees": bool, "confidence_adjustment": float ±0.3, "rationale": str}
     or None (= no assist available). Supplements the deterministic rationale,
-    never replaces it."""
+    never replaces it.
+
+    capture (LLM-LOG-01): pass a dict to receive per-call telemetry for the
+    llm_match_log table — filled only when the model actually replied
+    ("replied": True, plus prompt_hash/scaffold_version/latency_ms/raw/parse_ok).
+    llm_assist deliberately has no DB access, so the caller writes the log row."""
     verbose = verbosity == "verbose"
     # v0.30.0: Settings no longer exposes reply_format — force rich-text JSON
     # unless an explicit "simple" override is passed for tiny models.
@@ -942,11 +954,20 @@ async def review_match(host: str, model: str, release_title: str,
     prompt = build_review_prompt(template, release_title, candidate_title, context,
                                  det_summary, verbosity, eff_format, confidence_style,
                                  forbid_thinking=forbid_thinking, source_app=source_app)
+    started = time.monotonic()
     raw = await _generate(host, model, prompt, api_style,
                           json_format=eff_format != "simple", verbose=verbose,
                           model_size=model_size, keep_alive_minutes=keep_alive_minutes,
                           temperature=temperature, max_tokens=max_tokens,
                           timeout_seconds=timeout_seconds)
+    if capture is not None and raw is not None:
+        capture.update({
+            "replied": True,
+            "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
+            "scaffold_version": SCAFFOLD_VERSION,
+            "latency_ms": round((time.monotonic() - started) * 1000),
+            "raw": raw[:4000],
+        })
     if raw is None:
         return None
     # Whichever format was asked for, accept the other as a fallback — a "json"
@@ -965,6 +986,8 @@ async def review_match(host: str, model: str, release_title: str,
         words = re.findall(r"\b(disagree|agree)", (raw or "").lower())
         if words:
             parsed = {"agrees": words[-1] == "agree"}
+    if capture is not None:
+        capture["parse_ok"] = bool(parsed and "agrees" in parsed)
     if not parsed or "agrees" not in parsed:
         return None
     agrees = bool(parsed["agrees"])
@@ -1109,6 +1132,37 @@ async def explain_deletion(host: str, model: str, item_summary: str,
     if not text:
         return None
     return (text if verbose else text.split("\n")[0])[:1500 if verbose else 300]
+
+
+async def suggest_playlist_name(host: str, model: str, genre: str,
+                                artists: list[str] | None = None,
+                                api_style: str = "ollama", model_size: str = "medium",
+                                keep_alive_minutes: int = 10,
+                                forbid_thinking: bool = True) -> Optional[str]:
+    """SP-04 — short display name for a new smart playlist. Returns the name or
+    None (caller falls back to the 'Powarr · {genre}' template). Fails soft like
+    every other assist call; single tiny prompt, never bulk data."""
+    sample = ", ".join((artists or [])[:8])
+    prompt = (
+        "Suggest one short, evocative playlist name (2-5 words) for a music "
+        f"playlist of {genre} artists."
+        + (f" It features artists like: {sample}." if sample else "")
+        + " Do not include the word 'playlist'. "
+        "Reply with ONLY the name — no quotes, no punctuation around it, no explanation."
+        + (" Do not think out loud." if forbid_thinking else "")
+    )
+    raw = await _generate(host, model, prompt, api_style, json_format=False,
+                          model_size=model_size, keep_alive_minutes=keep_alive_minutes,
+                          temperature=0.7)
+    if not raw:
+        return None
+    text = _strip_think(raw).strip().strip('"“”\'').strip()
+    name = text.split("\n")[0].strip().strip('"“”\'').rstrip(".").strip()
+    # A usable name is short and prose-free — anything else means the model
+    # ignored the format instruction; fall back rather than store a paragraph.
+    if not name or len(name) > 60 or len(name.split()) > 8:
+        return None
+    return name
 
 
 async def refine_prompt(host: str, model: str, draft: str, task: str,

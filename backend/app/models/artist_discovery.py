@@ -23,6 +23,9 @@ class DiscoveredArtist(Base):
     similarity_score = Column(Float, nullable=True)  # centroid cosine score
     associated_seed_mbids = Column(Text, nullable=True)  # JSON list, graph source
     seed_artist_name = Column(String, nullable=True)  # display convenience, graph source
+    # v0.41.0 — all contributing seed names (associated_seed_mbids resolved back to
+    # artist names via their Qdrant points), refreshed when new connections land.
+    seed_artist_names = Column(Text, nullable=True)  # JSON list, graph source
     status = Column(String, default="pending", index=True)  # pending|accepted|rejected
     lidarr_artist_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

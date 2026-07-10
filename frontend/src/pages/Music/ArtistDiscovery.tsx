@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Compass, Play, RefreshCw, Check, X, Sparkles, Settings, Music2, ChevronDown, ChevronUp } from "lucide-react";
+import { Compass, Play, RefreshCw, Check, X, Sparkles, Settings, Music2, ChevronDown, ChevronUp, History } from "lucide-react";
 import { Link } from "react-router-dom";
 import { req } from "../../lib/api";
 
@@ -15,11 +15,22 @@ interface Candidate {
   similarity_score: number | null;
   associated_seed_mbids: string[];
   seed_artist_name: string | null;
+  seed_artist_names: string[];
   status: string;
   lidarr_artist_id: number | null;
   image_url: string | null;
   bio: string | null;
   years_active: string | null;
+}
+
+interface DiscoveryRun {
+  id: number;
+  run_type: string;
+  started_at: string | null;
+  finished_at: string | null;
+  candidates_found: number;
+  candidates_added: number;
+  message: string | null;
 }
 
 interface Stats {
@@ -38,6 +49,7 @@ const api = {
     req<Candidate[]>(`/artist-discovery/candidates?status=${status}`),
   run: () => req<{ ok: boolean; message: string }>("/artist-discovery/run", { method: "POST" }),
   sync: () => req<{ ok: boolean; message: string }>("/artist-discovery/sync", { method: "POST" }),
+  runs: () => req<DiscoveryRun[]>("/artist-discovery/runs?limit=10"),
   accept: (id: number) =>
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/accept`, { method: "POST" }),
   reject: (id: number) =>
@@ -75,6 +87,22 @@ function ArtistAvatar({ url, name }: { url: string | null; name: string }) {
   );
 }
 
+function whySuggested(c: Candidate): string {
+  if (c.source === "centroid") {
+    const pct = c.similarity_score != null ? `${Math.round(c.similarity_score * 100)}% match to` : "Close match to";
+    return `${pct} your overall taste profile, built from your most-played artists`;
+  }
+  const names = c.seed_artist_names.length > 0
+    ? c.seed_artist_names
+    : c.seed_artist_name ? [c.seed_artist_name] : [];
+  const conn = Math.max(c.associated_seed_mbids.length, names.length, 1);
+  if (names.length === 0) {
+    return `Similar to ${conn} artist${conn === 1 ? "" : "s"} already in your library`;
+  }
+  const listed = names.slice(0, 4).join(", ") + (names.length > 4 ? ` +${names.length - 4} more` : "");
+  return `Similar to ${listed} — ${conn} connection${conn === 1 ? "" : "s"} to artists in your library`;
+}
+
 function CandidateCard({ c, onAccept, onReject, pending }: {
   c: Candidate;
   onAccept: () => void;
@@ -91,13 +119,11 @@ function CandidateCard({ c, onAccept, onReject, pending }: {
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-white text-sm font-medium truncate">{c.artist_name}</p>
-            <p className="text-xs text-slate-500">
-              {c.source === "centroid"
-                ? `Taste match — ${c.similarity_score != null ? Math.round(c.similarity_score * 100) : "?"}% similarity`
-                : `Related to ${c.seed_artist_name || "a monitored artist"} — ${c.associated_seed_mbids.length} connection(s)`}
-              {c.years_active && <span> · {c.years_active}</span>}
+            <p className="text-white text-sm font-medium truncate">
+              {c.artist_name}
+              {c.years_active && <span className="text-slate-500 font-normal"> · {c.years_active}</span>}
             </p>
+            <p className="text-xs text-slate-500">{whySuggested(c)}</p>
           </div>
           <div className="flex gap-1 shrink-0">
             <button onClick={onAccept} disabled={pending} title="Add to Lidarr"
@@ -138,6 +164,59 @@ function CandidateCard({ c, onAccept, onReject, pending }: {
   );
 }
 
+function runDuration(r: DiscoveryRun): string {
+  if (!r.started_at || !r.finished_at) return "—";
+  const secs = Math.max(0, Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000));
+  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
+function RecentRuns() {
+  const [open, setOpen] = useState(false);
+  const { data: runs = [] } = useQuery({ queryKey: ["ad-runs"], queryFn: api.runs, enabled: open });
+
+  return (
+    <section className="mt-8">
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 text-white font-semibold text-sm uppercase tracking-wider mb-3">
+        <History size={16} /> Recent runs
+        {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {open && (
+        runs.length === 0 ? (
+          <p className="text-slate-500 text-sm">No runs recorded yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-500 border-b border-purple-900/30">
+                  <th className="py-2 pr-4 font-medium">Type</th>
+                  <th className="py-2 pr-4 font-medium">Started</th>
+                  <th className="py-2 pr-4 font-medium">Duration</th>
+                  <th className="py-2 pr-4 font-medium">Found</th>
+                  <th className="py-2 pr-4 font-medium">Added</th>
+                  <th className="py-2 font-medium">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map(r => (
+                  <tr key={r.id} className="border-b border-purple-900/20 text-slate-300">
+                    <td className="py-2 pr-4 capitalize">{r.run_type}</td>
+                    <td className="py-2 pr-4 whitespace-nowrap">{formatDate(r.started_at)}</td>
+                    <td className="py-2 pr-4">{runDuration(r)}</td>
+                    <td className="py-2 pr-4">{r.candidates_found}</td>
+                    <td className="py-2 pr-4">{r.candidates_added}</td>
+                    <td className="py-2 text-slate-400">{r.message || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </section>
+  );
+}
+
 export default function ArtistDiscovery() {
   const qc = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["ad-settings"], queryFn: api.settings });
@@ -151,6 +230,7 @@ export default function ArtistDiscovery() {
       setMsg(r.message);
       qc.invalidateQueries({ queryKey: ["ad-candidates"] });
       qc.invalidateQueries({ queryKey: ["ad-stats"] });
+      qc.invalidateQueries({ queryKey: ["ad-runs"] });
     },
     onError: (e: Error) => setMsg(e.message),
   });
@@ -254,6 +334,8 @@ export default function ArtistDiscovery() {
           </div>
         )}
       </section>
+
+      <RecentRuns />
     </div>
   );
 }

@@ -927,6 +927,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     llm_confidence = None
     llm_rationale = None
     llm_agrees = None
+    llm_log = None
     # Year hard-fail skips the LLM — the deterministic scorer already settled it.
     if matched_title and not year_mismatch and ollama.task_enabled("match"):
         # Build comprehensive context: triggered series, queue state, pack info
@@ -968,6 +969,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
                 match_rationale, heuristic_confidence, pack_label=pack_label)
         else:
             det_summary = f"{match_rationale} (heuristic confidence {heuristic_confidence})"
+        capture: dict = {}
         llm = await llm_assist.review_match(
             ollama.host, ollama.model_for("match"), raw_title, matched_title,
             det_summary=det_summary,
@@ -977,11 +979,27 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             keep_alive_minutes=ollama.keep_alive_minutes,
             reply_format="markdown", confidence_style=ollama.confidence_style,
             source_app=app_name,
+            capture=capture,
             **llm_assist.prompt_kwargs(ollama),
             **llm_assist.inference_kwargs(ollama))
+        checks = llm_assist.music_match_checks(raw_title, matched_title) \
+            if app_name == "lidarr" else None
+        pre_agrees = llm["agrees"] if llm else None
         if llm and app_name == "lidarr":
-            llm = llm_assist.enforce_music_evidence(
-                llm, llm_assist.music_match_checks(raw_title, matched_title))
+            llm = llm_assist.enforce_music_evidence(llm, checks)
+        if capture.get("replied"):
+            # Handed back to the scan loop, which writes the llm_match_log row
+            # once the FailedImport row exists (LLM-LOG-01).
+            llm_log = {
+                "site": "scan", "source_app": app_name,
+                "model": ollama.model_for("match"),
+                "release_title": raw_title, "candidate_title": matched_title,
+                "context": llm_context, "det_summary": det_summary,
+                "capture": capture, "checks": checks,
+                "agrees": llm["agrees"] if llm else None,
+                "confidence_adjustment": llm["confidence_adjustment"] if llm else None,
+                "enforced": bool(llm and pre_agrees is not None and llm["agrees"] != pre_agrees),
+            }
         if llm:
             llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
             llm_rationale = llm["rationale"]
@@ -998,6 +1016,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
         "llm_confidence": llm_confidence,
         "llm_rationale": llm_rationale,
         "llm_agrees": llm_agrees,
+        "llm_log": llm_log,
     }
 
 
@@ -1584,6 +1603,10 @@ async def _scan_once_inner(task_id: str) -> dict:
                     summary["new_suggestions"] += 1
                 db.add(item)
                 db.commit()
+                if match.get("llm_log"):
+                    from app.services import llm_match_log
+                    llm_match_log.record(db, failed_import_id=item.id, **match["llm_log"])
+                    db.commit()
                 if item.status == "suggested":
                     summary["new_suggestion_ids"].append(item.id)
         await _check_orphans(db, cfg, summary)
@@ -1980,21 +2003,38 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 ctx_parts.append(f"Library alternate titles: {alts}")
             if row.pack:
                 ctx_parts.append(f"Download type: season pack ({row.pack}).")
+            capture: dict = {}
+            rescore_context = " | ".join(ctx_parts)
             llm = await llm_assist.review_match(
                 ollama.host, ollama.model_for("match"), row.raw_title, row.matched_title,
                 det_summary=det_summary,
-                context=" | ".join(ctx_parts),
+                context=rescore_context,
                 api_style=ollama.api_style, template=ollama.match_prompt,
                 # On-demand runs always ask for verdict + bullets (verbose tier).
                 verbosity="verbose", model_size=ollama.model_size,
                 keep_alive_minutes=ollama.keep_alive_minutes,
                 reply_format="markdown", confidence_style=ollama.confidence_style,
                 source_app=row.source_app,
+                capture=capture,
                 **llm_assist.prompt_kwargs(ollama),
                 **llm_assist.inference_kwargs(ollama))
+            checks = llm_assist.music_match_checks(row.raw_title, row.matched_title) \
+                if row.source_app == "lidarr" else None
+            pre_agrees = llm["agrees"] if llm else None
             if llm and row.source_app == "lidarr":
-                llm = llm_assist.enforce_music_evidence(
-                    llm, llm_assist.music_match_checks(row.raw_title, row.matched_title))
+                llm = llm_assist.enforce_music_evidence(llm, checks)
+            if capture.get("replied"):
+                from app.services import llm_match_log
+                llm_match_log.record(
+                    db, failed_import_id=row.id, site="rescore",
+                    source_app=row.source_app, model=ollama.model_for("match"),
+                    release_title=row.raw_title, candidate_title=row.matched_title,
+                    context=rescore_context, det_summary=det_summary,
+                    capture=capture, checks=checks,
+                    agrees=llm["agrees"] if llm else None,
+                    confidence_adjustment=llm["confidence_adjustment"] if llm else None,
+                    enforced=bool(llm and pre_agrees is not None and llm["agrees"] != pre_agrees))
+                db.commit()
             if not llm:
                 skipped += 1
                 _llm_tray_skipped += 1
