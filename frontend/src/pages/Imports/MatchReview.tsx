@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd, Download, Rows3, Split } from "lucide-react";
+import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd, Download, Rows3, Split, LayoutGrid, Table2 } from "lucide-react";
 import { importsApi, settingsApi, fmtDate, fmtBytes, type FailedImport } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
+import ConfidenceBadge from "../../components/ConfidenceBadge";
 import { PlatformBadge, PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 import { SkeletonTable } from "../../components/Skeleton";
 
@@ -30,15 +32,6 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   orphan_pending: { label: "Confirm orphan", cls: "bg-orange-900/60 text-orange-300" },
   orphaned: { label: "Orphaned", cls: "bg-surface-overlay text-slate-300" },
 };
-
-function ConfidenceBadge({ value }: { value: number }) {
-  const pct = Math.round(value * 100);
-  const color =
-    value >= 0.9 ? "bg-green-900/60 text-green-300" :
-    value >= 0.7 ? "bg-yellow-900/60 text-yellow-300" :
-    "bg-red-900/60 text-red-300";
-  return <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${color}`}>{pct}%</span>;
-}
 
 // --- Column system: visibility + widths persisted per-browser (localStorage) ---
 
@@ -385,11 +378,13 @@ function FileDetails({ importId, sourceApp, matchedId, packFileMatches }: {
 
 const FILTERS = ["suggested", "resolve_failed", "orphan_pending", "auto_resolved", "accepted", "rejected", "orphaned", ""] as const;
 
-export default function FailedImports() {
+export default function MatchReview() {
   const qc = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   // Filter/sort choices persist per-browser (v0.27.0, Approved Queue #11) —
   // column layout below already did since v0.4.0.
   const [statusFilter, setStatusFilter] = usePersistedState<string>("powarr.failedImports.statusFilter", "suggested");
+  const [viewMode, setViewMode] = usePersistedState<"cards" | "table">("powarr.matchreview.view", "cards");
   const [scanning, setScanning] = useState(false);
   const [confirmAccept, setConfirmAccept] = useState<number | null>(null);
   const [acceptingIds, setAcceptingIds] = useState<Set<number>>(new Set()); // per-item Pushing… (v0.33.0)
@@ -447,6 +442,24 @@ export default function FailedImports() {
     queryKey: ["imports", statusFilter],
     queryFn: () => importsApi.list(statusFilter || undefined),
   });
+
+  // Deep-link from Import Queue's "Send to Match Review →" (?focus=<id>) —
+  // switch to the All filter if needed, expand the row, and scroll to it.
+  useEffect(() => {
+    const focusId = searchParams.get("focus");
+    if (!focusId || isLoading) return;
+    const id = Number(focusId);
+    if (!items.some(i => i.id === id)) {
+      if (statusFilter !== "") setStatusFilter("");
+      return;
+    }
+    setExpanded(id);
+    setSearchParams(prev => { const next = new URLSearchParams(prev); next.delete("focus"); return next; }, { replace: true });
+    requestAnimationFrame(() => {
+      document.getElementById(`import-item-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, items, isLoading]);
 
   const { data: stats } = useQuery({
     queryKey: ["import-stats"],
@@ -706,6 +719,102 @@ export default function FailedImports() {
   const colW = (c: ColDef) => widths[c.key] ?? c.width;
   const totalWidth = 40 + cols.reduce((s, c) => s + colW(c), 0) + 130; // checkbox + cols + actions
 
+  // Shared between table and card views — orphan-pending confirm/keep, or the
+  // full actionable accept/reject/LLM/pack-review row.
+  const renderActions = (item: FailedImport) => {
+    const actionable = item.status === "suggested" || item.status === "resolve_failed";
+    const orphanPending = item.status === "orphan_pending";
+    return (
+      <>
+        {orphanPending && (
+          <div className="flex items-center gap-1.5 justify-end">
+            <button
+              onClick={() => confirmOrphanMut.mutate(item.id)}
+              disabled={confirmOrphanMut.isPending}
+              title="Confirm — the download is gone from every client and disk; mark orphaned"
+              className="px-2 py-1 bg-orange-700 hover:bg-orange-600 text-white rounded text-xs disabled:opacity-50"
+            >
+              Confirm Orphan
+            </button>
+            <button
+              onClick={() => keepMut.mutate(item.id)}
+              disabled={keepMut.isPending}
+              title="Not an orphan — put it back in triage (the next scan re-checks it)"
+              className="px-2 py-1 bg-surface-overlay hover:bg-white/10 text-slate-300 rounded text-xs disabled:opacity-50"
+            >
+              Keep
+            </button>
+          </div>
+        )}
+        {actionable && (
+          <div className="flex items-center gap-1.5 justify-end">
+            {acceptingIds.has(item.id) ? (
+              <span className="px-2 py-1 text-green-400 text-xs tabular-nums">Pushing…</span>
+            ) : confirmAccept === item.id ? (
+              <div className="flex gap-1">
+                <button
+                  onClick={() => acceptMut.mutate(item.id)}
+                  className="px-2 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-xs"
+                >
+                  {item.partial_import
+                    ? "Import Missing/Upgrades"
+                    : "Confirm Import"}
+                </button>
+                <button onClick={() => setConfirmAccept(null)} className="px-2 py-1 bg-surface-overlay hover:bg-white/10 text-slate-300 rounded text-xs">Cancel</button>
+              </div>
+            ) : (
+              <>
+                <button
+                  onClick={() => setConfirmAccept(item.id)}
+                  disabled={!item.matched_id}
+                  title={item.matched_id
+                    ? (item.partial_import
+                      ? "Accept — import only missing/upgrade files; already-covered files are skipped"
+                      : "Accept — push import to the *arr app")
+                    : "No match to import"}
+                  className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300 transition-colors disabled:opacity-30"
+                >
+                  <Check size={15} />
+                </button>
+                <button
+                  onClick={() => rejectMut.mutate({ id: item.id, remove: false })}
+                  title="Reject — stop suggesting this download"
+                  className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors"
+                >
+                  <X size={15} />
+                </button>
+                <button
+                  onClick={() => rejectMut.mutate({ id: item.id, remove: true })}
+                  title="Reject & remove the download from the torrent client (requires qBittorrent/Transmission integration)"
+                  className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors"
+                >
+                  <Trash2 size={15} />
+                </button>
+                <button
+                  onClick={() => llmRunMut.mutate([item.id])}
+                  disabled={llmRunMut.isPending}
+                  title="Score this item with the local LLM (most in-depth reasoning available, regardless of the configured verbosity)"
+                  className="p-1.5 rounded hover:bg-indigo-900/40 text-slate-400 hover:text-indigo-300 transition-colors disabled:opacity-30"
+                >
+                  {llmRunMut.isPending ? <BotState variant="thinking" size={15} /> : <Bot size={15} />}
+                </button>
+                {item.pack && item.matched_id && (
+                  <PackReviewButton
+                    itemId={item.id}
+                    isLoading={packReviewLoading.has(item.id)}
+                    hasResults={!!packReviewResults[item.id.toString()]}
+                    results={packReviewResults[item.id.toString()]}
+                    onClick={() => handlePackReviewClick(item.id)}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </>
+    );
+  };
+
   const renderCell = (item: FailedImport, key: ColKey, isExpanded: boolean) => {
     switch (key) {
       case "source":
@@ -795,17 +904,31 @@ export default function FailedImports() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center gap-2 mb-1">
+        <BotState variant="available" size={22} />
+        <h2 className="text-white font-semibold text-sm">Match Review</h2>
+      </div>
+      <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
         <p className="text-slate-400 text-sm">Stuck *arr downloads matched against your library — accept to push the import</p>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setDensity(density === "comfortable" ? "compact" : "comfortable")}
-            title={density === "comfortable" ? "Switch to compact rows" : "Switch to comfortable rows"}
+            onClick={() => setViewMode(m => m === "cards" ? "table" : "cards")}
+            title={viewMode === "cards" ? "Switch to table view" : "Switch to card view"}
             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
           >
-            <Rows3 size={15} />
-            {density === "comfortable" ? "Compact" : "Comfortable"}
+            {viewMode === "cards" ? <Table2 size={15} /> : <LayoutGrid size={15} />}
+            {viewMode === "cards" ? "Table view" : "Card view"}
           </button>
+          {viewMode === "table" && (
+            <button
+              onClick={() => setDensity(density === "comfortable" ? "compact" : "comfortable")}
+              title={density === "comfortable" ? "Switch to compact rows" : "Switch to comfortable rows"}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+            >
+              <Rows3 size={15} />
+              {density === "comfortable" ? "Compact" : "Comfortable"}
+            </button>
+          )}
           <button
             onClick={() => importsApi.exportCsv(statusFilter === "all" ? undefined : statusFilter)}
             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
@@ -813,41 +936,43 @@ export default function FailedImports() {
             <Download size={15} />
             CSV
           </button>
-          <div className="relative">
-            <button
-              onClick={() => setShowColMenu(s => !s)}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
-            >
-              <Columns3 size={15} />
-              Columns
-            </button>
-            {showColMenu && (
-              <div className="absolute right-0 mt-1 z-20 bg-surface-raised border border-purple-900/40 rounded-lg shadow-xl p-3 w-48">
-                {COLUMNS.map(c => (
-                  <label key={c.key} className="flex items-center gap-2 py-1 text-sm text-slate-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={visibleCols.has(c.key)}
-                      onChange={() => setVisibleCols(prev => {
-                        const next = new Set(prev);
-                        if (next.has(c.key)) { if (next.size > 1) next.delete(c.key); }
-                        else next.add(c.key);
-                        return next;
-                      })}
-                      className="accent-purple-500"
-                    />
-                    {c.label}
-                  </label>
-                ))}
-                <button
-                  onClick={() => { setWidths({}); persistWidths({}); }}
-                  className="mt-2 w-full px-2 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-400 text-xs transition-colors"
-                >
-                  Reset column widths
-                </button>
-              </div>
-            )}
-          </div>
+          {viewMode === "table" && (
+            <div className="relative">
+              <button
+                onClick={() => setShowColMenu(s => !s)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+              >
+                <Columns3 size={15} />
+                Columns
+              </button>
+              {showColMenu && (
+                <div className="absolute right-0 mt-1 z-20 bg-surface-raised border border-purple-900/40 rounded-lg shadow-xl p-3 w-48">
+                  {COLUMNS.map(c => (
+                    <label key={c.key} className="flex items-center gap-2 py-1 text-sm text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={visibleCols.has(c.key)}
+                        onChange={() => setVisibleCols(prev => {
+                          const next = new Set(prev);
+                          if (next.has(c.key)) { if (next.size > 1) next.delete(c.key); }
+                          else next.add(c.key);
+                          return next;
+                        })}
+                        className="accent-purple-500"
+                      />
+                      {c.label}
+                    </label>
+                  ))}
+                  <button
+                    onClick={() => { setWidths({}); persistWidths({}); }}
+                    className="mt-2 w-full px-2 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-400 text-xs transition-colors"
+                  >
+                    Reset column widths
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <button
             onClick={handleScan}
             disabled={scanning}
@@ -1034,7 +1159,7 @@ export default function FailedImports() {
               : "Nothing here yet."}
           </p>
         </div>
-      ) : (
+      ) : viewMode === "table" ? (
         <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
           <table
             className={`text-sm ${density === "compact" ? "[&_td]:!py-1.5 [&_th]:!py-1.5 [&_td]:text-xs" : ""}`}
@@ -1082,6 +1207,7 @@ export default function FailedImports() {
                   <>
                     <tr
                       key={item.id}
+                      id={`import-item-${item.id}`}
                       className={`hover:bg-white/5 transition-colors ${selectable ? "cursor-pointer" : ""} ${selected.has(item.id) ? "bg-brand/5" : ""}`}
                       onClick={e => {
                         if (!selectable || isInteractiveTarget(e.target)) return;
@@ -1100,91 +1226,7 @@ export default function FailedImports() {
                         </td>
                       ))}
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                        {orphanPending && (
-                          <div className="flex items-center gap-1.5 justify-end">
-                            <button
-                              onClick={() => confirmOrphanMut.mutate(item.id)}
-                              disabled={confirmOrphanMut.isPending}
-                              title="Confirm — the download is gone from every client and disk; mark orphaned"
-                              className="px-2 py-1 bg-orange-700 hover:bg-orange-600 text-white rounded text-xs disabled:opacity-50"
-                            >
-                              Confirm Orphan
-                            </button>
-                            <button
-                              onClick={() => keepMut.mutate(item.id)}
-                              disabled={keepMut.isPending}
-                              title="Not an orphan — put it back in triage (the next scan re-checks it)"
-                              className="px-2 py-1 bg-surface-overlay hover:bg-white/10 text-slate-300 rounded text-xs disabled:opacity-50"
-                            >
-                              Keep
-                            </button>
-                          </div>
-                        )}
-                        {actionable && (
-                          <div className="flex items-center gap-1.5 justify-end">
-                            {acceptingIds.has(item.id) ? (
-                              <span className="px-2 py-1 text-green-400 text-xs tabular-nums">Pushing…</span>
-                            ) : confirmAccept === item.id ? (
-                              <div className="flex gap-1">
-                                <button
-                                  onClick={() => acceptMut.mutate(item.id)}
-                                  className="px-2 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-xs"
-                                >
-                                  {item.partial_import
-                                    ? "Import Missing/Upgrades"
-                                    : "Confirm Import"}
-                                </button>
-                                <button onClick={() => setConfirmAccept(null)} className="px-2 py-1 bg-surface-overlay hover:bg-white/10 text-slate-300 rounded text-xs">Cancel</button>
-                              </div>
-                            ) : (
-                              <>
-                                <button
-                                  onClick={() => setConfirmAccept(item.id)}
-                                  disabled={!item.matched_id}
-                                  title={item.matched_id
-                                    ? (item.partial_import
-                                      ? "Accept — import only missing/upgrade files; already-covered files are skipped"
-                                      : "Accept — push import to the *arr app")
-                                    : "No match to import"}
-                                  className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300 transition-colors disabled:opacity-30"
-                                >
-                                  <Check size={15} />
-                                </button>
-                                <button
-                                  onClick={() => rejectMut.mutate({ id: item.id, remove: false })}
-                                  title="Reject — stop suggesting this download"
-                                  className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors"
-                                >
-                                  <X size={15} />
-                                </button>
-                                <button
-                                  onClick={() => rejectMut.mutate({ id: item.id, remove: true })}
-                                  title="Reject & remove the download from the torrent client (requires qBittorrent/Transmission integration)"
-                                  className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors"
-                                >
-                                  <Trash2 size={15} />
-                                </button>
-                                <button
-                                  onClick={() => llmRunMut.mutate([item.id])}
-                                  disabled={llmRunMut.isPending}
-                                  title="Score this item with the local LLM (most in-depth reasoning available, regardless of the configured verbosity)"
-                                  className="p-1.5 rounded hover:bg-indigo-900/40 text-slate-400 hover:text-indigo-300 transition-colors disabled:opacity-30"
-                                >
-                                  {llmRunMut.isPending ? <BotState variant="thinking" size={15} /> : <Bot size={15} />}
-                                </button>
-                                {item.pack && item.matched_id && (
-                                  <PackReviewButton
-                                    itemId={item.id}
-                                    isLoading={packReviewLoading.has(item.id)}
-                                    hasResults={!!packReviewResults[item.id.toString()]}
-                                    results={packReviewResults[item.id.toString()]}
-                                    onClick={() => handlePackReviewClick(item.id)}
-                                  />
-                                )}
-                              </>
-                            )}
-                          </div>
-                        )}
+                        {renderActions(item)}
                       </td>
                     </tr>
                     {isExpanded && (
@@ -1200,6 +1242,80 @@ export default function FailedImports() {
               })}
             </tbody>
           </table>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {sortedItems.map((item: FailedImport) => {
+            const actionable = item.status === "suggested" || item.status === "resolve_failed";
+            const orphanPending = item.status === "orphan_pending";
+            const selectable = actionable || orphanPending;
+            const isExpanded = expanded === item.id;
+            const status = STATUS_META[item.status] ?? { label: item.status, cls: "bg-surface-overlay text-slate-300" };
+            return (
+              <div
+                key={item.id}
+                id={`import-item-${item.id}`}
+                className={`bg-surface-raised rounded-xl border p-4 transition-colors ${
+                  selected.has(item.id) ? "border-brand/50 bg-brand/5" : "border-purple-900/30"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="flex items-start gap-2 min-w-0 flex-1">
+                    {selectable && (
+                      <input
+                        type="checkbox"
+                        className="accent-purple-500 mt-1 flex-shrink-0"
+                        checked={selected.has(item.id)}
+                        onChange={() => toggleSelect(item.id)}
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      {renderCell(item, "release", isExpanded)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <PlatformBadge app={item.source_app} />
+                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${status.cls}`}>{status.label}</span>
+                  </div>
+                </div>
+
+                <div className="text-sm text-slate-300 mb-3">
+                  <span className="text-slate-500 text-xs uppercase tracking-wider mr-2">Matched</span>
+                  {renderCell(item, "matched", isExpanded)}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-slate-500 text-xs uppercase tracking-wider">Match</span>
+                      {renderCell(item, "match_pct", isExpanded)}
+                    </div>
+                    {renderCell(item, "match_notes", isExpanded)}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <Bot size={12} className="text-brand-light" />
+                      <span className="text-slate-500 text-xs uppercase tracking-wider">LLM</span>
+                      {renderCell(item, "llm_pct", isExpanded)}
+                    </div>
+                    {renderCell(item, "llm_notes", isExpanded)}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 text-xs">{renderCell(item, "detected", isExpanded)}</span>
+                  {renderActions(item)}
+                </div>
+
+                {isExpanded && (
+                  <div className="mt-3 -mx-4 -mb-4 bg-surface/50 rounded-b-xl border-t border-purple-900/10">
+                    <FileDetails importId={item.id} sourceApp={item.source_app} matchedId={item.matched_id} packFileMatches={item.pack_file_matches} />
+                    {actionable && <MatchOverride item={item} onDone={invalidate} />}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

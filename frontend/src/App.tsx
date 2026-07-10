@@ -1,62 +1,71 @@
 import { useState } from "react";
-import { BrowserRouter, Routes, Route, NavLink, useLocation } from "react-router-dom";
-import { Zap, LayoutDashboard, Trash2, Settings, Plug, ScrollText, Menu, X, ListMusic } from "lucide-react";
-import Dashboard from "./pages/Dashboard";
-import Cleanup from "./pages/Cleanup";
+import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from "react-router-dom";
+import { Menu, X } from "lucide-react";
+import Overview from "./pages/Overview";
+import DeletionSuggestions from "./pages/Library/DeletionSuggestions";
+import DeletionHistory from "./pages/Library/DeletionHistory";
+import ImportQueue from "./pages/Imports/ImportQueue";
+import MatchReview from "./pages/Imports/MatchReview";
+import ArtistDiscovery from "./pages/Music/ArtistDiscovery";
+import Playlists from "./pages/Music/Playlists";
 import SettingsPage from "./pages/Settings";
-import IntegrationsPage from "./pages/Integrations";
 import LogsPage from "./pages/Logs";
-import SmartPlaylists from "./pages/SmartPlaylists";
 import AuthGate from "./components/AuthGate";
 import ActiveProcessesTray from "./components/ActiveProcessesTray";
+import IconRail from "./components/IconRail";
+import AreaTabs from "./components/AreaTabs";
+import Breadcrumb from "./components/Breadcrumb";
+import { AREAS, LOGS_AREA } from "./lib/navConfig";
 import { TaskProvider } from "./context/TaskContext";
 
-const nav = [
-  { to: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/cleanup", icon: Trash2, label: "Cleanup" },
-  { to: "/playlists", icon: ListMusic, label: "Playlists" },
-  { to: "/integrations", icon: Plug, label: "Integrations" },
-  { to: "/settings", icon: Settings, label: "Settings" },
-  { to: "/logs", icon: ScrollText, label: "Logs" },
-];
-
-function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+function MobileNav({ onNavigate }: { onNavigate: () => void }) {
+  const { pathname } = useLocation();
   return (
-    <>
-      <div className="flex items-center gap-2 px-5 py-5 border-b border-purple-900/40">
-        <Zap className="text-brand-light" size={22} />
-        <span className="text-xl font-bold text-white tracking-wide">Powarr</span>
-      </div>
-      <nav className="flex-1 py-4 space-y-1 px-2">
-        {nav.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === "/"}
-            onClick={onNavigate}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isActive
-                  ? "bg-brand/20 text-brand-light"
-                  : "text-slate-400 hover:text-white hover:bg-white/5"
-              }`
-            }
-          >
-            <Icon size={17} />
-            {label}
-          </NavLink>
-        ))}
-      </nav>
-      <div className="px-5 py-3 text-xs text-slate-600 border-t border-purple-900/40">
-        v0.37.3
-      </div>
-    </>
+    <nav className="flex-1 py-4 px-2 overflow-y-auto space-y-3">
+      {[...AREAS, LOGS_AREA].map(area => {
+        const Icon = area.icon;
+        const areaActive = area.base === "/" ? pathname === "/" : pathname.startsWith(area.base);
+        return (
+          <div key={area.key}>
+            <NavLink
+              to={area.screens[0].path}
+              onClick={onNavigate}
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                areaActive ? "bg-brand/20 text-brand-light" : "text-slate-400 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              <Icon size={17} />
+              {area.label}
+            </NavLink>
+            {area.screens.length > 1 && (
+              <div className="ml-8 mt-1 space-y-0.5">
+                {area.screens.map(screen => (
+                  <NavLink
+                    key={screen.path}
+                    to={screen.path}
+                    onClick={onNavigate}
+                    className={({ isActive }) =>
+                      `block px-3 py-1.5 rounded-lg text-xs transition-colors ${
+                        isActive ? "text-brand-light" : "text-slate-500 hover:text-white"
+                      }`
+                    }
+                  >
+                    {screen.label}
+                  </NavLink>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </nav>
   );
 }
 
 function MobileTopBar({ onOpen }: { onOpen: () => void }) {
   const { pathname } = useLocation();
-  const current = nav.find(n => (n.to === "/" ? pathname === "/" : pathname.startsWith(n.to)));
+  const all = [...AREAS, LOGS_AREA];
+  const current = all.find(a => (a.base === "/" ? pathname === "/" : pathname.startsWith(a.base)));
   return (
     <div className="md:hidden flex items-center gap-3 px-4 py-3 bg-surface-raised border-b border-purple-900/40 flex-shrink-0">
       <button onClick={onOpen} aria-label="Open menu" className="p-2 -ml-2 rounded-lg text-slate-300 hover:bg-white/5">
@@ -75,12 +84,12 @@ export default function App() {
       <AuthGate>
       <TaskProvider>
       <div className="flex h-screen overflow-hidden">
-        {/* Desktop sidebar */}
-        <aside className="hidden md:flex w-56 flex-shrink-0 bg-surface-raised border-r border-purple-900/40 flex-col">
-          <Sidebar />
+        {/* Desktop icon rail */}
+        <aside className="hidden md:flex w-[92px] flex-shrink-0 bg-surface-raised border-r border-purple-900/40 flex-col">
+          <IconRail />
         </aside>
 
-        {/* Mobile slide-in sidebar */}
+        {/* Mobile slide-in nav */}
         {mobileNavOpen && (
           <div className="md:hidden fixed inset-0 z-40 flex">
             <div className="absolute inset-0 bg-black/60" onClick={() => setMobileNavOpen(false)} />
@@ -92,7 +101,10 @@ export default function App() {
               >
                 <X size={18} />
               </button>
-              <Sidebar onNavigate={() => setMobileNavOpen(false)} />
+              <div className="flex items-center gap-2 px-5 py-5 border-b border-purple-900/40">
+                <span className="text-xl font-bold text-white tracking-wide">Powarr</span>
+              </div>
+              <MobileNav onNavigate={() => setMobileNavOpen(false)} />
             </aside>
           </div>
         )}
@@ -100,14 +112,31 @@ export default function App() {
         {/* Main content */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <MobileTopBar onOpen={() => setMobileNavOpen(true)} />
+          <Breadcrumb />
+          <AreaTabs />
           <main className="flex-1 overflow-y-auto">
             <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/cleanup" element={<Cleanup />} />
-              <Route path="/playlists" element={<SmartPlaylists />} />
-              <Route path="/integrations" element={<IntegrationsPage />} />
+              <Route path="/" element={<Overview />} />
+
+              <Route path="/library" element={<Navigate to="/library/deletion-suggestions" replace />} />
+              <Route path="/library/deletion-suggestions" element={<div className="p-4 sm:p-8"><DeletionSuggestions /></div>} />
+              <Route path="/library/deletion-history" element={<div className="p-4 sm:p-8"><DeletionHistory /></div>} />
+
+              <Route path="/imports" element={<Navigate to="/imports/queue" replace />} />
+              <Route path="/imports/queue" element={<div className="p-4 sm:p-8"><ImportQueue /></div>} />
+              <Route path="/imports/match-review" element={<div className="p-4 sm:p-8"><MatchReview /></div>} />
+
+              <Route path="/music" element={<Navigate to="/music/discovery" replace />} />
+              <Route path="/music/discovery" element={<div className="p-4 sm:p-8"><ArtistDiscovery /></div>} />
+              <Route path="/music/playlists" element={<Playlists />} />
+
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/settings/:category" element={<SettingsPage />} />
+
               <Route path="/logs" element={<LogsPage />} />
+
+              {/* Back-compat redirect for the old top-level Integrations page */}
+              <Route path="/integrations" element={<Navigate to="/settings/integrations" replace />} />
             </Routes>
           </main>
         </div>

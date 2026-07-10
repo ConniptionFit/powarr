@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListMusic, Play, Check, X, RefreshCw, Clock, Settings, Music } from "lucide-react";
-import { req } from "../lib/api";
+import { req } from "../../lib/api";
 
 interface Playlist {
   id: number;

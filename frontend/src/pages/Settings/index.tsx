@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup, Activity, RotateCcw } from "lucide-react";
+import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup, Activity, RotateCcw, Plug, SlidersHorizontal } from "lucide-react";
 import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ScoringProfiles,
          type ImportMatchingSettings, type CleanupSettings, type SyncSettings, type NotificationSettings,
          type OllamaSettings, type LlmScheduleSettings, type BackupSettings, type BackupFile } from "../../lib/api";
+import IntegrationsPage from "../Integrations";
 
 function WeightRow({ label, field, value, onChange, description }: {
   label: string;
@@ -1707,7 +1709,7 @@ function ScoringProfilesSection() {
   );
 }
 
-export default function SettingsPage() {
+function ScoringWeightsSection() {
   const { data, isLoading } = useQuery({ queryKey: ["scoring"], queryFn: settingsApi.getScoring });
   const [weights, setWeights] = useState<ScoringWeights | null>(null);
   const [saved, setSaved] = useState(false);
@@ -1723,15 +1725,11 @@ export default function SettingsPage() {
     setWeights(w => w ? { ...w, [field]: val } : w);
   };
 
-  if (isLoading || !weights) return <div className="p-8 text-slate-400">Loading…</div>;
+  if (isLoading || !weights) return <div className="text-slate-400">Loading…</div>;
 
   return (
-    <div className="p-8 max-w-2xl">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Settings</h1>
-          <p className="text-slate-400 text-sm mt-1">Tune how media is scored for deletion</p>
-        </div>
+    <>
+      <div className="flex items-center justify-end mb-2">
         <button
           onClick={() => mut.mutate(weights)}
           disabled={mut.isPending}
@@ -1769,16 +1767,80 @@ export default function SettingsPage() {
           </div>
         ))}
       </div>
+    </>
+  );
+}
 
-      <ScoringProfilesSection />
-      <ImportMatchingSection />
-      <LLMAssistSection />
-      <LlmScheduleSection />
-      <CleanupSection />
-      <SyncSection />
-      <BackupSection />
-      <NotificationsSection />
-      <SecuritySection />
+const CATEGORIES: { key: string; label: string; icon: typeof Save; description: string }[] = [
+  { key: "integrations", label: "Integrations", icon: Plug, description: "Plex, Tautulli, *arr apps, Seerr, download clients, Qdrant, Ollama connection" },
+  { key: "matching-scoring", label: "Matching & Scoring", icon: SlidersHorizontal, description: "Failed import matching thresholds, scoring weights, per-library profiles" },
+  { key: "automation", label: "Automation", icon: Clock, description: "Cleanup behavior, scheduled Plex sync, automated backups" },
+  { key: "llm-assist", label: "LLM Assist", icon: Bot, description: "Local LLM behavior, prompts, verbosity, scheduled backlog scanning" },
+  { key: "notifications", label: "Notifications", icon: Bell, description: "ntfy alerts, actionable notifications, weekly digest" },
+  { key: "security", label: "Security", icon: Lock, description: "Auth, TOTP, LAN bypass, SSO / forward-auth" },
+];
+
+export default function SettingsPage() {
+  const { category } = useParams<{ category?: string }>();
+  const navigate = useNavigate();
+  const cat = CATEGORIES.find(c => c.key === category);
+
+  if (!category) {
+    return (
+      <div className="p-4 sm:p-8">
+        <h1 className="text-2xl font-bold text-white mb-1">Settings</h1>
+        <p className="text-slate-400 text-sm mb-6">Choose a category to configure</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-3xl">
+          {CATEGORIES.map(c => {
+            const Icon = c.icon;
+            return (
+              <button
+                key={c.key}
+                onClick={() => navigate(`/settings/${c.key}`)}
+                className="text-left bg-surface-raised rounded-xl border border-purple-900/30 hover:border-purple-500/60 p-5 transition-colors"
+              >
+                <Icon size={20} className="text-brand-light mb-2" />
+                <p className="text-white font-semibold">{c.label}</p>
+                <p className="text-slate-400 text-sm mt-1">{c.description}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 sm:p-8 max-w-2xl">
+      <button onClick={() => navigate("/settings")} className="text-slate-400 hover:text-white text-sm mb-4">
+        ‹ All Settings
+      </button>
+      <h1 className="text-2xl font-bold text-white mb-1">{cat?.label ?? "Settings"}</h1>
+      <p className="text-slate-400 text-sm mb-6">{cat?.description}</p>
+
+      {category === "integrations" && <IntegrationsPage embedded />}
+      {category === "matching-scoring" && (
+        <>
+          <ScoringWeightsSection />
+          <ScoringProfilesSection />
+          <ImportMatchingSection />
+        </>
+      )}
+      {category === "automation" && (
+        <>
+          <CleanupSection />
+          <SyncSection />
+          <BackupSection />
+        </>
+      )}
+      {category === "llm-assist" && (
+        <>
+          <LLMAssistSection />
+          <LlmScheduleSection />
+        </>
+      )}
+      {category === "notifications" && <NotificationsSection />}
+      {category === "security" && <SecuritySection />}
     </div>
   );
 }

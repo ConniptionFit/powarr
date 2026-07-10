@@ -104,10 +104,19 @@ docker compose up --build -d
 
 Then open `http://<host>:7979`:
 
-1. **Integrations** → configure Plex (required) and any of Tautulli, Sonarr, Radarr, Lidarr, Readarr, Seerr, qBittorrent, Transmission, Ollama
-2. Run **Sync Library**
-3. **Cleanup** → review deletion suggestions and failed imports
-4. **Settings** → tune scoring weights, matching thresholds, notifications, security
+1. **Settings → Integrations** → configure Plex (required) and any of Tautulli, Sonarr, Radarr, Lidarr, Readarr, Seerr, qBittorrent, Transmission, Ollama
+2. Run **Sync Library** (Overview page)
+3. **Library** → review deletion suggestions and history; **Imports** → Import Queue (detection) and Match Review (confidence scoring/triage)
+4. **Settings** → categorized Matching & Scoring, Automation, LLM Assist, Notifications, Security
+
+### Navigation (v0.38.0)
+A left icon rail replaces the old always-expanded sidebar. Rail areas: **Overview**, **Library**
+(Deletion Suggestions / Deletion History), **Imports** (Import Queue / Match Review — split from
+the old combined Failed Imports table), **Music** (Artist Discovery placeholder / Playlists), and
+**Settings** (category grid: Integrations, Matching & Scoring, Automation, LLM Assist,
+Notifications, Security — replaces the separate top-level Integrations page). Logs sits below a
+divider as a utility item. Match Review defaults to a card-per-item layout with a table-view
+toggle for the old dense table.
 
 ## Configuration Notes
 

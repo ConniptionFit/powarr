@@ -1,8 +1,67 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity, AlertTriangle } from "lucide-react";
+import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity, AlertTriangle, Shuffle, ChevronRight } from "lucide-react";
 import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes, type DepHealth } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
+
+function PipelineChip({ icon: Icon, label, count, color, onClick }: {
+  icon: React.ElementType;
+  label: string;
+  count: number | null;
+  color: string;
+  onClick?: () => void;
+}) {
+  const content = (
+    <span className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium ${color}`}>
+      <Icon size={15} />
+      {count === null ? "—" : count} {label}
+    </span>
+  );
+  if (!onClick) return content;
+  return (
+    <button onClick={onClick} className="transition-transform hover:scale-[1.03] cursor-pointer">
+      {content}
+    </button>
+  );
+}
+
+function PipelineFlowCard({ queueCount, reviewCount, autoResolvedCount }: {
+  queueCount: number | null;
+  reviewCount: number | null;
+  autoResolvedCount: number | null;
+}) {
+  const navigate = useNavigate();
+  return (
+    <div className="mt-4 bg-surface-raised rounded-xl border border-purple-900/30 p-5">
+      <p className="text-slate-400 text-xs uppercase tracking-wider mb-3">Pipeline flow</p>
+      <div className="flex items-center flex-wrap gap-2">
+        <PipelineChip
+          icon={DownloadCloud}
+          label="in Import Queue"
+          count={queueCount}
+          color="bg-amber-900/40 text-amber-300"
+          onClick={() => navigate("/imports/queue")}
+        />
+        <ChevronRight size={16} className="text-slate-600 flex-shrink-0" />
+        <PipelineChip
+          icon={Shuffle}
+          label="awaiting Match Review"
+          count={reviewCount}
+          color="bg-purple-900/40 text-purple-300"
+          onClick={() => navigate("/imports/match-review")}
+        />
+        <ChevronRight size={16} className="text-slate-600 flex-shrink-0" />
+        <PipelineChip
+          icon={CheckCircle}
+          label="auto-resolved (7d)"
+          count={autoResolvedCount}
+          color="bg-green-900/40 text-green-300"
+        />
+      </div>
+    </div>
+  );
+}
 
 function Sparkline({ values, color = "#a78bfa" }: { values: number[]; color?: string }) {
   const w = 160, h = 36, pad = 2;
@@ -160,7 +219,7 @@ export default function Dashboard() {
     <div className="p-4 sm:p-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+          <h1 className="text-2xl font-bold text-white">Overview</h1>
           <p className="text-slate-400 text-sm mt-1">
             Media library overview
             {stats?.last_synced && (
@@ -325,6 +384,14 @@ export default function Dashboard() {
             </div>
           ) : null}
         </div>
+      )}
+
+      {!isLoading && (
+        <PipelineFlowCard
+          queueCount={importErr ? null : (importStats?.suggested ?? 0) + (importStats?.resolve_failed ?? 0) + (importStats?.orphan_pending ?? 0)}
+          reviewCount={importErr ? null : (importStats?.suggested ?? 0) + (importStats?.resolve_failed ?? 0) + (importStats?.orphan_pending ?? 0)}
+          autoResolvedCount={importErr ? null : importStats?.auto_resolved_7d ?? 0}
+        />
       )}
     </div>
   );

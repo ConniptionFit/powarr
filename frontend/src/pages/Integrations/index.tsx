@@ -582,7 +582,7 @@ function QdrantCard() {
   );
 }
 
-export default function IntegrationsPage() {
+export default function IntegrationsPage({ embedded = false }: { embedded?: boolean }) {
   const { data: integrations = [], isLoading } = useQuery({
     queryKey: ["integrations"],
     queryFn: integrationsApi.list,
@@ -593,20 +593,23 @@ export default function IntegrationsPage() {
     (a, b) => order.indexOf(a.name) - order.indexOf(b.name)
   );
 
+  const body = isLoading ? (
+    <p className="text-slate-400">Loading…</p>
+  ) : (
+    <div className="space-y-4">
+      {sorted.map(cfg => <IntegrationCard key={cfg.name} cfg={cfg} />)}
+      <QdrantCard />
+      <OllamaCard />
+    </div>
+  );
+
+  if (embedded) return <div className="max-w-2xl">{body}</div>;
+
   return (
     <div className="p-4 sm:p-8 max-w-2xl">
       <h1 className="text-2xl font-bold text-white mb-1">Integrations</h1>
       <p className="text-slate-400 text-sm mb-8">Connect Powarr to your media stack</p>
-
-      {isLoading ? (
-        <p className="text-slate-400">Loading…</p>
-      ) : (
-        <div className="space-y-4">
-          {sorted.map(cfg => <IntegrationCard key={cfg.name} cfg={cfg} />)}
-          <QdrantCard />
-          <OllamaCard />
-        </div>
-      )}
+      {body}
     </div>
   );
 }

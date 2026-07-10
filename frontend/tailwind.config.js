@@ -10,9 +10,9 @@ export default {
           light: "#a78bfa",
         },
         surface: {
-          DEFAULT: "#1a1a2e",
-          raised: "#16213e",
-          overlay: "#0f3460",
+          DEFAULT: "#15152c",
+          raised: "#111226",
+          overlay: "#161a2e",
         },
       },
     },
