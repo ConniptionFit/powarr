@@ -65,6 +65,7 @@ async def startup():
     logger.info("Powarr starting up...")
     init_db()
     _seed_integrations()
+    _migrate_qdrant_settings()
     _seed_settings()
     _apply_llm_breaker_config()
     from app.services.import_matcher import poller_loop
@@ -110,6 +111,41 @@ def _apply_llm_breaker_config():
         row = db.query(AppSetting).filter_by(key="ollama").first()
         cfg = OllamaSettings(**json.loads(row.value)) if row and row.value else OllamaSettings()
         llm_assist.set_breaker_config(cfg.breaker_threshold, cfg.breaker_cooldown_minutes)
+    finally:
+        db.close()
+
+
+def _migrate_qdrant_settings():
+    """v0.40.0: Qdrant connection moved from per-module (smart_playlists.qdrant_*)
+    to a single shared AppSetting key "qdrant". One-time carry-over for anyone who
+    already configured Qdrant under Smart Playlists before this version — runs
+    only when "qdrant" doesn't exist yet, and only if there's something to carry."""
+    from app.database import SessionLocal
+    from app.models.app_setting import AppSetting
+    import json
+
+    db = SessionLocal()
+    try:
+        if db.query(AppSetting).filter_by(key="qdrant").first():
+            return  # already migrated or already configured directly
+        old = db.query(AppSetting).filter_by(key="smart_playlists").first()
+        if not old or not old.value:
+            return
+        try:
+            data = json.loads(old.value)
+        except ValueError:
+            return
+        url = data.get("qdrant_url") or ""
+        if not url:
+            return
+        qdrant_cfg = {
+            "url": url,
+            "api_key": data.get("qdrant_api_key") or "",
+            "collection": data.get("collection") or "music_affinity_space",
+        }
+        db.add(AppSetting(key="qdrant", value=json.dumps(qdrant_cfg)))
+        db.commit()
+        logger.info("Migrated Qdrant connection from smart_playlists settings to the shared 'qdrant' AppSetting")
     finally:
         db.close()
 
