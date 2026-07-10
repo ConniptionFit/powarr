@@ -230,6 +230,39 @@ class TestMusicMatchEvidence(unittest.TestCase):
         self.assertEqual(music_match_evidence("Whatever-2020-GRP", "BareArtistName"), "")
         self.assertEqual(music_match_evidence("", "A - B"), "")
 
+    def test_diacritics_and_ampersand_fold(self):
+        ev = music_match_evidence(
+            "Beyonce_And_Jay_Z-Everything_Is_Love-WEB-FLAC-2018-GRP",
+            "Beyoncé & JAY-Z - Everything Is Love")
+        self.assertIn("artist in release name: YES", ev)
+        self.assertIn("album in release name: YES", ev)
+
+    def test_uploader_tag_cannot_satisfy_album_check(self):
+        # 'PERFECT' is the trailing release group — stripped before checking, so
+        # the junk candidate's album no longer false-positives on it.
+        ev = music_match_evidence(
+            "The_Weeknd-Starboy-Deluxe_Edition-CD-FLAC-2016-PERFECT",
+            "The Smashing Pumpkins - Perfect")
+        self.assertIn("artist in release name: NO", ev)
+        self.assertIn("album in release name: NO", ev)
+
+    def test_collapsed_spelling_grades_loose_not_no(self):
+        from app.services.llm_assist import music_title_checks
+        grades = music_title_checks(
+            "ACDC-Back_In_Black-REMASTERED-FLAC-2003-GRP", "AC/DC - Back in Black")
+        self.assertEqual(grades["artist"], "loose")
+        self.assertEqual(grades["album"], "strict")
+
+    def test_grades_strict_and_no(self):
+        from app.services.llm_assist import music_title_checks
+        grades = music_title_checks(
+            "Prof-Good_Time_Boy-SINGLE-WEB-2026-FATHEAD", "Prof - Good Time Boy")
+        self.assertEqual(grades, {"artist": "strict", "album": "strict"})
+        grades = music_title_checks(
+            "Enter_Shikari-Take_To_The_Skies-WEB-FLAC-2007-RUIDOS", "Cybotron - Enter")
+        self.assertEqual(grades["artist"], "no")
+        self.assertEqual(grades["album"], "strict")  # 'Enter' is a real word in the name
+
 
 class TestEnforceMusicEvidence(unittest.TestCase):
     def test_agree_against_failed_check_is_overridden(self):

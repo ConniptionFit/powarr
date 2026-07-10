@@ -400,6 +400,10 @@ export const importsApi = {
     req<{ started: number; total_eligible: number; queued: boolean; queue_position?: number; message: string }>("/imports/llm-run", {
       method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
     }),
+  rescore: (ids?: number[]) =>
+    req<{ started: number; message: string }>("/imports/rescore", {
+      method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
+    }),
   llmReviewPack: (id: number) =>
     req<{ matches: Array<{ file: string; season: number; episode: number; match_type: string; confidence: string; reason: string }>; file_count?: number; message?: string }>(
       `/imports/${id}/llm-review-pack`, { method: "POST" }),

@@ -515,6 +515,7 @@ export default function FailedImports() {
         const data = JSON.parse(ev.data);
         if (data.type === "llm_run") setActionMsg(`LLM run finished: ${data.scored} scored, ${data.skipped} skipped`);
         if (data.type === "llm_run_started") setLlmQueued(null);
+        if (data.type === "rescore") setActionMsg(`Rescore finished: ${data.rescored} rescored, ${data.skipped} skipped`);
         if (data.type === "import_batch") {
           const parts = [`${data.ok ?? 0} imported`];
           if (data.orphaned) parts.push(`${data.orphaned} gone (orphaned)`);
@@ -618,6 +619,12 @@ export default function FailedImports() {
     mutationFn: (id: number) => importsApi.keep(id),
     onSuccess: () => { setActionMsg("Kept in triage — the next scan re-checks it"); invalidate(); },
     onError: (e: Error) => setActionMsg(`Keep failed: ${e.message}`),
+  });
+
+  const rescoreMut = useMutation({
+    mutationFn: (ids?: number[]) => importsApi.rescore(ids),
+    onSuccess: r => setActionMsg(r.message),
+    onError: (e: Error) => setActionMsg(`Rescore failed: ${e.message}`),
   });
 
   const llmRunMut = useMutation({
@@ -845,6 +852,15 @@ export default function FailedImports() {
             <RefreshCw size={15} className={scanning ? "animate-spin" : ""} />
             {scanning ? "Scanning…" : "Scan Now"}
           </button>
+          <button
+            onClick={() => rescoreMut.mutate(undefined)}
+            disabled={rescoreMut.isPending}
+            title="Re-run the deterministic matcher on all open Lidarr/Readarr rows — instant, no LLM"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={rescoreMut.isPending ? "animate-spin" : ""} />
+            Rescore Music
+          </button>
         </div>
       </div>
 
@@ -987,6 +1003,14 @@ export default function FailedImports() {
                 className="flex items-center gap-1.5 px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-xs disabled:opacity-50"
               >
                 {llmRunMut.isPending ? <BotState variant="thinking" size={12} /> : <Bot size={12} />} Run LLM on Selected
+              </button>
+              <button
+                onClick={() => rescoreMut.mutate([...selected])}
+                disabled={rescoreMut.isPending}
+                title="Re-run the deterministic matcher on the selected music/book items — instant, no LLM"
+                className="flex items-center gap-1.5 px-3 py-1 bg-sky-700 hover:bg-sky-600 text-white rounded text-xs disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={rescoreMut.isPending ? "animate-spin" : ""} /> Rescore Selected
               </button>
             </>
           )}

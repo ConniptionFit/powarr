@@ -276,6 +276,28 @@ async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db
             "message": f"LLM run started on {min(count, 50)} item(s) — results stream in live"}
 
 
+@router.post("/rescore")
+async def rescore(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """Deterministic (no-LLM) rescore of Lidarr/Readarr matches (v0.37.0): re-runs
+    the containment-check-aware album/book matcher against a fresh library/history
+    fetch. {"ids": [...]} for checked rows; omit to rescore all open music/book
+    rows. Runs in the background; an SSE "rescore" event fires when it finishes."""
+    from app.services import tasks
+    from app.services.import_matcher import rescore_music
+    ids = payload.get("ids") or None
+    q = db.query(FailedImport).filter(
+        FailedImport.source_app.in_(("lidarr", "readarr")))
+    if ids:
+        q = q.filter(FailedImport.id.in_(ids))
+    else:
+        q = q.filter(FailedImport.status.in_(("suggested", "resolve_failed")))
+    count = q.count()
+    tasks.spawn_background(rescore_music(ids))
+    return {"started": count,
+            "message": f"Rescore started on {count} music/book item(s) — no LLM, "
+                       "results stream in live"}
+
+
 @router.post("/{item_id}/llm-review-pack")
 async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
     """Per-file LLM review for season packs: matches each file to its episode.

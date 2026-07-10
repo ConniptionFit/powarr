@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from typing import Any, Optional
 
 import httpx
@@ -262,32 +263,74 @@ _EVIDENCE_NORM_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _evidence_norm(text: str) -> str:
-    return _EVIDENCE_NORM_RE.sub(" ", (text or "").lower()).strip()
+    """Case/punctuation/separator/diacritic-blind word form: 'Beyoncé & JAY-Z' →
+    'beyonce and jay z'. Diacritics are folded (not dropped) so accented names
+    still line up with their ASCII scene-name spellings."""
+    text = (text or "").replace("&", " and ")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return _EVIDENCE_NORM_RE.sub(" ", text.lower()).strip()
 
 
-def music_match_checks(release: str, candidate: str) -> Optional[tuple[bool, bool]]:
-    """Deterministic artist/album containment check for music matches (v0.36.0).
+def _strip_release_group(release: str) -> str:
+    """Scene names are 'Artist-Album-Tags-Year-GROUP': with 3+ hyphen-separated
+    segments the last one is the uploader tag — drop it so a group name like
+    PERFECT or OBZEN can never satisfy an album/artist check. Two-segment names
+    ('Artist-Album') are left alone: there the tail IS the album."""
+    segments = (release or "").split("-")
+    if len(segments) >= 3:
+        return "-".join(segments[:-1])
+    return release or ""
 
-    Small local models cannot reliably tokenize scene names like
-    'Prof-Good_Time_Boy-SINGLE-WEB-2026-FATHEAD' and read the trailing uploader tag
-    as the artist. This computes the two checks the lidarr judging guidance asks
-    for. Both names are compared punctuation/case/separator-blind; the first artist
-    occurrence is removed before the album check so self-titled albums resolve
-    correctly in both directions. Returns (artist_found, album_found), or None when
-    the candidate isn't 'Artist - Album'-shaped."""
+
+def music_title_checks(release: str, candidate: str) -> Optional[dict[str, str]]:
+    """Graded artist/album containment for music matches (v0.36.0, graded v0.37.0).
+
+    Returns {"artist": grade, "album": grade} with grade in "strict" (whole-word
+    match), "loose" (only separator-collapsed match — 'AC DC' in 'ACDC'), or "no";
+    None when the candidate isn't 'Artist - Album'-shaped. Comparison is
+    case/punctuation/diacritic-blind; the trailing release-group segment is
+    stripped first; the first artist occurrence is removed before the album check
+    so self-titled albums need a second occurrence. Strict grades are safe to
+    build confidence ON; only a full "no" is safe to build doubt on — "loose"
+    exists so near-miss spellings never count as contradictions."""
     candidate = candidate or ""
     if " - " not in candidate:
         return None
     artist, album = candidate.split(" - ", 1)
-    rel = _evidence_norm(release)
+    rel = _evidence_norm(_strip_release_group(release))
     art = _evidence_norm(artist)
     alb = _evidence_norm(album)
     if not rel or not art or not alb:
         return None
-    artist_found = art in rel
-    remainder = rel.replace(art, " ", 1) if artist_found else rel
-    album_found = alb in remainder
-    return artist_found, album_found
+
+    def grade(needle: str, hay: str) -> str:
+        if f" {needle} " in f" {hay} ":
+            return "strict"
+        if needle.replace(" ", "") in hay.replace(" ", ""):
+            return "loose"
+        return "no"
+
+    artist_grade = grade(art, rel)
+    # Album is checked in the remainder after the first (whole-word) artist
+    # occurrence, so a self-titled album needs its own second occurrence. A
+    # loose-only artist match can't be cleanly excised — the album then checks
+    # against the full name (rare: self-titled + collapsed spelling).
+    if f" {art} " in f" {rel} ":
+        remainder = f" {rel} ".replace(f" {art} ", " ", 1).strip()
+    else:
+        remainder = rel
+    return {"artist": artist_grade, "album": grade(alb, remainder)}
+
+
+def music_match_checks(release: str, candidate: str) -> Optional[tuple[bool, bool]]:
+    """Boolean view of music_title_checks for the LLM evidence line and the
+    negative-direction enforcement: found = any grade better than "no", so a
+    loose (collapsed-spelling) hit never reads as a contradiction."""
+    grades = music_title_checks(release, candidate)
+    if grades is None:
+        return None
+    return grades["artist"] != "no", grades["album"] != "no"
 
 
 def music_match_evidence(release: str, candidate: str) -> str:

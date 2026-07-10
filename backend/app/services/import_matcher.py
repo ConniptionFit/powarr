@@ -665,12 +665,60 @@ def _book_display_title(item: dict) -> str:
     return book or author
 
 
+# Containment-check confidence shaping (v0.37.0, FI-04 — user-confirmed 2026-07-10).
+# The floor sits just BELOW high_confidence_threshold (0.90) on purpose: the check
+# alone must never push a row over the auto-resolve line — raising it past 0.90 is
+# a deliberate auto-action loosening that needs its own sign-off.
+MUSIC_CHECK_FLOOR = 0.88          # artist AND album whole-word confirmed in release
+MUSIC_CHECK_CAP_WRONG_ALBUM = 0.45  # artist present, album absent → likely wrong album
+MUSIC_CHECK_CAP_NO_ARTIST_LINKED = 0.55  # artist absent but album confirmed on an id-linked match
+MUSIC_CHECK_CAP_JUNK = 0.35       # nothing of the candidate is in the release name
+
+
+def _apply_music_checks(app_name: str, raw_title: str, matched_title: str,
+                        confidence: float, parts: list[str], linked: bool) -> float:
+    """Shape a Lidarr match's confidence with the deterministic containment checks
+    (same evidence the LLM sees, applied without the LLM). `linked` = the match
+    came from a downloadId/artistId link rather than global fuzzy similarity —
+    linked matches with artist-less release names (common scene style for singles)
+    are capped gently instead of treated as junk."""
+    if app_name != "lidarr" or not matched_title:
+        return confidence
+    grades = llm_assist.music_title_checks(raw_title, matched_title)
+    if not grades:
+        return confidence
+    artist, album = grades["artist"], grades["album"]
+    if artist == "strict" and album == "strict":
+        if confidence < MUSIC_CHECK_FLOOR:
+            parts.append(f"release name contains both the candidate artist and album — "
+                         f"confidence raised to {MUSIC_CHECK_FLOOR:.2f}")
+            return MUSIC_CHECK_FLOOR
+        parts.append("release name contains both the candidate artist and album")
+        return confidence
+    if artist == "no" and album == "strict" and linked:
+        parts.append(f"candidate artist absent from release name (album title present, "
+                     f"id-linked) — capped at {MUSIC_CHECK_CAP_NO_ARTIST_LINKED:.2f}")
+        return min(confidence, MUSIC_CHECK_CAP_NO_ARTIST_LINKED)
+    if artist == "no" and (album != "strict" or not linked):
+        parts.append(f"candidate artist not found in release name — capped at "
+                     f"{MUSIC_CHECK_CAP_JUNK:.2f}")
+        return min(confidence, MUSIC_CHECK_CAP_JUNK)
+    if album == "no":
+        parts.append(f"candidate album not found in release name — capped at "
+                     f"{MUSIC_CHECK_CAP_WRONG_ALBUM:.2f}")
+        return min(confidence, MUSIC_CHECK_CAP_WRONG_ALBUM)
+    parts.append("artist/album only loosely locatable in release name — confidence unchanged")
+    return confidence
+
+
 def _lidarr_readarr_match(app_name: str, rec: dict, history: list[dict],
                           library: list[dict]) -> tuple[int | None, str | None, float, list[str]]:
     """Album/book-aware identity match for Lidarr/Readarr (v0.34.0).
 
     Queue often has artistId/authorId but not albumId/bookId; history usually has
     both. Prefer history album/book → artist-scoped fuzzy album → global fuzzy.
+    v0.37.0: Lidarr confidence is shaped by the deterministic containment checks
+    (_apply_music_checks) on every match path.
     """
     raw_title = rec.get("title") or ""
     id_key = "albumId" if app_name == "lidarr" else "bookId"
@@ -692,7 +740,9 @@ def _lidarr_readarr_match(app_name: str, rec: dict, history: list[dict],
         parts.append(f"grab history links this downloadId to the library "
                      f"{'album' if app_name == 'lidarr' else 'book'} "
                      f"(title similarity {round(sim * 100)}%)")
-        return hist[id_key], title, 0.55 + 0.45 * sim, parts
+        confidence = _apply_music_checks(app_name, raw_title, title,
+                                         0.55 + 0.45 * sim, parts, linked=True)
+        return hist[id_key], title, confidence, parts
 
     # 2. Queue/history parent id → fuzzy among that artist's/author's works
     parent_id = rec.get(parent_key) or (hist.get(parent_key) if hist else None)
@@ -726,6 +776,8 @@ def _lidarr_readarr_match(app_name: str, rec: dict, history: list[dict],
             confidence = 0.75 * best_score
             parts.append(f"fuzzy library {'album' if app_name == 'lidarr' else 'book'} "
                          f"match only ({round(best_score * 100)}% similarity)")
+        confidence = _apply_music_checks(app_name, raw_title, title,
+                                         confidence, parts, linked=scoped)
         return best["id"], title, confidence, parts
 
     return None, None, 0.0, parts
@@ -1727,6 +1779,92 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50,
             tasks.spawn_background(llm_rescore(next_ids, continue_tray=True))
 
 
+async def rematch_music_row(db, row: FailedImport, lib_cache: dict[str, list],
+                            hist_cache: dict[str, list]) -> bool:
+    """Re-run the album/book matcher for one Lidarr/Readarr row against a fresh
+    (per-call-cached) library + history fetch. Updates the row's match, heuristic
+    confidence, and stored rationale in place; returns True when a match was
+    written. Shared by llm_rescore (pre-LLM rematch, v0.34.0) and the no-LLM
+    rescore_music (v0.37.0)."""
+    if row.source_app not in ("lidarr", "readarr"):
+        return False
+    arr_row = db.query(Integration).filter_by(
+        name=row.source_app, enabled=True).first()
+    if not arr_row:
+        return False
+    client = _get_client(row.source_app, arr_row)
+    if row.source_app not in lib_cache:
+        _, lib_method, _ = APP_FIELDS[row.source_app]
+        try:
+            lib_cache[row.source_app] = await getattr(client, lib_method)()
+            hist_cache[row.source_app] = await client.get_history()
+        except Exception as e:
+            logger.info(f"Rematch library fetch failed ({row.source_app}): {e}")
+            lib_cache[row.source_app] = []
+            hist_cache[row.source_app] = []
+    rec = {"title": row.raw_title, "downloadId": row.download_id}
+    try:
+        meta = json.loads(row.raw_metadata or "{}")
+    except (ValueError, TypeError):
+        meta = {}
+    # Preserve parent id if we stored it
+    if row.source_app == "lidarr" and meta.get("artistId"):
+        rec["artistId"] = meta["artistId"]
+    if row.source_app == "readarr" and meta.get("authorId"):
+        rec["authorId"] = meta["authorId"]
+    mid, title, conf, parts = _lidarr_readarr_match(
+        row.source_app, rec, hist_cache.get(row.source_app) or [],
+        lib_cache.get(row.source_app) or [])
+    if not (mid and title):
+        return False
+    row.matched_id = mid
+    row.matched_title = title
+    row.heuristic_confidence = round(min(1.0, conf), 3)
+    row.confidence = row.heuristic_confidence
+    meta["match_rationale"] = "; ".join(parts)
+    row.raw_metadata = json.dumps(meta)
+    return True
+
+
+async def rescore_music(ids: list[int] | None = None, limit: int = 500) -> dict:
+    """Deterministic (no-LLM) rescore for Lidarr/Readarr rows (v0.37.0): re-runs
+    the containment-check-aware album/book matcher and rewrites heuristic
+    confidence + rationale immediately — no LLM round-trip. An existing LLM
+    signal on the row is kept and re-blended. Publishes a 'rescore' SSE event."""
+    rescored = skipped = 0
+    db = SessionLocal()
+    try:
+        cfg, _ = load_settings(db)
+        q = db.query(FailedImport).filter(
+            FailedImport.source_app.in_(("lidarr", "readarr")))
+        if ids:
+            q = q.filter(FailedImport.id.in_(ids))
+        else:
+            q = q.filter(FailedImport.status.in_(("suggested", "resolve_failed")))
+        rows = q.order_by(FailedImport.created_at.desc()).limit(limit).all()
+        lib_cache: dict[str, list] = {}
+        hist_cache: dict[str, list] = {}
+        for row in rows:
+            try:
+                updated = await rematch_music_row(db, row, lib_cache, hist_cache)
+            except Exception as e:
+                logger.info(f"Rescore skipped for {row.id}: {e}")
+                skipped += 1
+                continue
+            if not updated:
+                skipped += 1
+                continue
+            if row.llm_confidence is not None:
+                row.confidence = blend_confidence(
+                    row.heuristic_confidence, row.llm_confidence, cfg.llm_blend_weight)
+            rescored += 1
+        db.commit()
+        publish({"type": "rescore", "rescored": rescored, "skipped": skipped})
+        return {"rescored": rescored, "skipped": skipped}
+    finally:
+        db.close()
+
+
 async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) -> dict:
     global _llm_tray_scored, _llm_tray_skipped
     from app.services import tasks
@@ -1758,49 +1896,10 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
         _lib_cache: dict[str, list] = {}
         _hist_cache: dict[str, list] = {}
 
-        async def _rematch_music_row(row: FailedImport) -> None:
-            """Upgrade artist-only Lidarr/Readarr matches to album/book before LLM."""
-            if row.source_app not in ("lidarr", "readarr"):
-                return
-            arr_row = db.query(Integration).filter_by(
-                name=row.source_app, enabled=True).first()
-            if not arr_row:
-                return
-            client = _get_client(row.source_app, arr_row)
-            if row.source_app not in _lib_cache:
-                _, lib_method, _ = APP_FIELDS[row.source_app]
-                try:
-                    _lib_cache[row.source_app] = await getattr(client, lib_method)()
-                    _hist_cache[row.source_app] = await client.get_history()
-                except Exception as e:
-                    logger.info(f"LLM rematch library fetch failed ({row.source_app}): {e}")
-                    _lib_cache[row.source_app] = []
-                    _hist_cache[row.source_app] = []
-            rec = {"title": row.raw_title, "downloadId": row.download_id}
-            try:
-                meta = json.loads(row.raw_metadata or "{}")
-            except (ValueError, TypeError):
-                meta = {}
-            # Preserve parent id if we stored it
-            if row.source_app == "lidarr" and meta.get("artistId"):
-                rec["artistId"] = meta["artistId"]
-            if row.source_app == "readarr" and meta.get("authorId"):
-                rec["authorId"] = meta["authorId"]
-            mid, title, conf, parts = _lidarr_readarr_match(
-                row.source_app, rec, _hist_cache.get(row.source_app) or [],
-                _lib_cache.get(row.source_app) or [])
-            if mid and title:
-                row.matched_id = mid
-                row.matched_title = title
-                row.heuristic_confidence = round(min(1.0, conf), 3)
-                row.confidence = row.heuristic_confidence
-                meta["match_rationale"] = "; ".join(parts)
-                row.raw_metadata = json.dumps(meta)
-
         for i, row in enumerate(rows, 1):
             cur = base_current + i
             try:
-                await _rematch_music_row(row)
+                await rematch_music_row(db, row, _lib_cache, _hist_cache)
             except Exception as e:
                 logger.info(f"LLM rematch skipped for {row.id}: {e}")
             if not row.matched_title:

@@ -1,7 +1,65 @@
-"""Lidarr/Readarr album-level matching (v0.34.0, FI-03)."""
+"""Lidarr/Readarr album-level matching (v0.34.0, FI-03; containment shaping v0.37.0, FI-04)."""
 import unittest
 
-from app.services.import_matcher import _lidarr_readarr_match, _album_display_title
+from app.services.import_matcher import (
+    _lidarr_readarr_match, _album_display_title, _apply_music_checks,
+    MUSIC_CHECK_FLOOR, MUSIC_CHECK_CAP_WRONG_ALBUM,
+    MUSIC_CHECK_CAP_NO_ARTIST_LINKED, MUSIC_CHECK_CAP_JUNK,
+)
+
+
+class TestApplyMusicChecks(unittest.TestCase):
+    """FI-04: containment checks shape Lidarr confidence without the LLM."""
+
+    def test_both_strict_floors_confidence(self):
+        parts = []
+        conf = _apply_music_checks(
+            "lidarr", "Fire_From_The_Gods-Soul_Revolution-CD-FLAC-2022-BOCKSCAR",
+            "Fire From the Gods - Soul Revolution", 0.662, parts, linked=False)
+        self.assertEqual(conf, MUSIC_CHECK_FLOOR)
+        self.assertTrue(any("raised" in p for p in parts))
+
+    def test_both_strict_never_lowers_a_higher_score(self):
+        conf = _apply_music_checks(
+            "lidarr", "Prof-Good_Time_Boy-SINGLE-WEB-2026-FATHEAD",
+            "Prof - Good Time Boy", 0.955, [], linked=True)
+        self.assertEqual(conf, 0.955)
+
+    def test_wrong_album_capped(self):
+        # Self-titled candidate vs a different-album release (the Gorillaz trap)
+        conf = _apply_music_checks(
+            "lidarr", "Gorillaz-Cracker_Island-24-44-WEB-FLAC-2023-OBZEN",
+            "Gorillaz - Gorillaz", 0.637, [], linked=False)
+        self.assertEqual(conf, MUSIC_CHECK_CAP_WRONG_ALBUM)
+
+    def test_uploader_tag_junk_capped_hard(self):
+        # Fuzzy-only match on the trailing group tag ('PERFECT')
+        conf = _apply_music_checks(
+            "lidarr", "The_Weeknd-Starboy-Deluxe_Edition-CD-FLAC-2016-PERFECT",
+            "The Smashing Pumpkins - Perfect", 0.637, [], linked=False)
+        self.assertEqual(conf, MUSIC_CHECK_CAP_JUNK)
+
+    def test_single_word_album_junk_needs_link_to_survive(self):
+        # 'Enter' appears as a word in 'Enter Shikari' — a fuzzy-only candidate
+        # is still junk, but an id-linked artist-less release is capped gently.
+        args = ("lidarr", "Enter_Shikari-Take_To_The_Skies-WEB-FLAC-2007-RUIDOS",
+                "Cybotron - Enter", 0.637)
+        self.assertEqual(_apply_music_checks(*args, [], linked=False), MUSIC_CHECK_CAP_JUNK)
+        self.assertEqual(_apply_music_checks(*args, [], linked=True),
+                         MUSIC_CHECK_CAP_NO_ARTIST_LINKED)
+
+    def test_loose_grades_leave_confidence_unchanged(self):
+        # Collapsed spelling (ACDC vs AC/DC) must never cap a valid match
+        conf = _apply_music_checks(
+            "lidarr", "ACDC-Back_In_Black-REMASTERED-FLAC-2003-GRP",
+            "AC/DC - Back in Black", 0.72, [], linked=True)
+        self.assertEqual(conf, 0.72)
+
+    def test_non_lidarr_untouched(self):
+        conf = _apply_music_checks(
+            "readarr", "Some_Book-Retail-EPUB-GRP", "Author - Different Book",
+            0.7, [], linked=False)
+        self.assertEqual(conf, 0.7)
 
 
 class TestLidarrAlbumMatch(unittest.TestCase):
