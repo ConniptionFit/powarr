@@ -119,7 +119,7 @@ Notifications, Security, Music — replaces the separate top-level Integrations 
 below a divider as a utility item. Match Review defaults to a card-per-item layout with a
 table-view toggle for the old dense table.
 
-### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.41.0)
+### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0)
 Native port of an external n8n taste-mapping pipeline: **Last.fm** scrobble history is embedded
 via a standalone **Ollama** connection (`all-minilm`, independent of the separate LLM Assist
 Ollama connection), mapped into the shared Qdrant `music_affinity_space` collection (configured
@@ -135,14 +135,20 @@ via `POST /artist-discovery/candidates/re-enrich`). Each card explains **why it 
 in plain language — graph candidates list *every* contributing related artist, not just the
 first seed (v0.41.0) — and placeholder "Unknown" genre chips are filtered out. Accepting adds
 the artist to Lidarr (root folder / quality / metadata profile configurable, else Lidarr's first
-available). An opt-in **auto-promote** setting (off by default) lets graph candidates that cross
-a configurable connection-count threshold skip the queue. A **differential sync** keeps
-`is_monitored_lidarr` / fulfillment / play-count flags on every Qdrant point current without
-ever deleting a point (soft-delete semantics). Both the discovery cycle and the sync run on
-independent optional schedules, or on demand, and a collapsible **Recent runs** history sits
-under the queue (v0.41.0). Both this page and Playlists are queue-only — all configuration lives
-at **Settings → Music**. Playlists can optionally get **LLM-generated names** instead of the
-"Powarr · genre" template (v0.41.0, fails soft to the template).
+available). **v0.42.0 (AD-07):** graph suggest/auto-add uses **dual thresholds** on connections
+to *recently listened* artists only (`scrobble_lookback_days`); below suggest → ignored, suggest
+band → review queue, at/above auto-add (0 = off) → Lidarr with no queue row. Centroid candidates
+always queue. **AD-08:** accepted-artist thumbnails are purged after 30 days (configurable). A
+**differential sync** keeps `is_monitored_lidarr` / fulfillment / play-count flags on every
+Qdrant point current without ever deleting a point (soft-delete semantics). Both the discovery
+cycle and the sync run on independent optional schedules, or on demand, and a collapsible
+**Recent runs** history sits under the queue (v0.41.0). Both this page and Playlists are
+queue-only — all configuration lives at **Settings → Music**.
+
+**Smart Playlists (v0.42.0):** new Plex playlists stay as **drafts** until Approve (auto-create
+off by default); **auto-update** of approved playlists is on by default and runs **after** the
+artist DB refresh. All artists are eligible unless **blacklisted**. LLM playlist names are
+Spotify-style and regenerable on demand (sparkle button).
 
 ## Configuration Notes
 

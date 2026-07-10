@@ -32,35 +32,68 @@ def _norm_artist(name: str) -> str:
 
 
 def load_settings(db) -> SmartPlaylistSettings:
+    """Load Smart Playlist settings with SP-05 default migration.
+
+    Pre-v0.42 defaulted auto_add_tracks_default to False and had no
+    auto_update_playlists / blacklisted_artists. Existing rows without the new
+    keys keep their stored auto_add value and gain auto_update_playlists=True
+    only when auto_add_tracks_default was already True (or missing → True for
+    brand-new semantics on fresh installs via Pydantic defaults).
+    """
     row = db.query(AppSetting).filter_by(key="smart_playlists").first()
     if not row or not row.value:
         return SmartPlaylistSettings()
-    return SmartPlaylistSettings(**json.loads(row.value))
+    data = json.loads(row.value)
+    dirty = False
+    if "auto_update_playlists" not in data:
+        # Prefer explicit auto_add if present; otherwise default ON (SP-05).
+        data["auto_update_playlists"] = bool(data.get("auto_add_tracks_default", True))
+        dirty = True
+    if "blacklisted_artists" not in data:
+        data["blacklisted_artists"] = []
+        dirty = True
+    if dirty:
+        row.value = json.dumps(data)
+        db.commit()
+    return SmartPlaylistSettings(**data)
+
+
+def _blacklist_set(cfg: SmartPlaylistSettings) -> set[str]:
+    return {_norm_artist(a) for a in (cfg.blacklisted_artists or []) if a and a.strip()}
+
+
+def _is_blacklisted(artist_name: str, blocked: set[str]) -> bool:
+    return bool(blocked) and _norm_artist(artist_name) in blocked
 
 
 async def _playlist_title(db, cfg: SmartPlaylistSettings, genre: str,
                           artist_names: list[str]) -> str:
-    """SP-04 — optionally LLM-generated display name for a *new* playlist;
+    """SP-04/SP-08 — optionally LLM-generated display name for a *new* playlist;
     fails soft to the 'Powarr · {genre}' template in every failure mode."""
     fallback = f"Powarr · {genre}"
     if not cfg.llm_playlist_names:
         return fallback
+    name = await suggest_playlist_name_for(db, genre, artist_names)
+    return name or fallback
+
+
+async def suggest_playlist_name_for(db, genre: str, artist_names: list[str] | None = None) -> str | None:
+    """SP-08 — on-demand LLM name suggestion (minimal context). Returns None on failure."""
     try:
         from app.schemas.settings import OllamaSettings
         row = db.query(AppSetting).filter_by(key="ollama").first()
         ollama = OllamaSettings(**json.loads(row.value)) if row and row.value else OllamaSettings()
         if not ollama.enabled or not ollama.host or not ollama.model:
-            return fallback
+            return None
         from app.services import llm_assist
-        name = await llm_assist.suggest_playlist_name(
-            ollama.host, ollama.model, genre, artist_names,
+        return await llm_assist.suggest_playlist_name(
+            ollama.host, ollama.model, genre, artist_names or [],
             api_style=ollama.api_style, model_size=ollama.model_size,
             keep_alive_minutes=ollama.keep_alive_minutes,
             forbid_thinking=getattr(ollama, "forbid_thinking", True))
-        return name or fallback
     except Exception as e:
         logger.info(f"Smart playlist LLM naming failed for '{genre}': {e}")
-        return fallback
+        return None
 
 
 async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
@@ -76,6 +109,7 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                     "genres": 0, "candidates": 0}
 
         excluded = {g.lower() for g in (cfg.excluded_genres or [])}
+        blocked = _blacklist_set(cfg)
         by_genre: dict[str, list[dict]] = defaultdict(list)
         offset = None
         pages = 0
@@ -85,7 +119,7 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
             for p in points:
                 payload = p.get("payload") or {}
                 artist = (payload.get("artist_name") or "").strip()
-                if not artist:
+                if not artist or _is_blacklisted(artist, blocked):
                     continue
                 genres = payload.get("genres") or []
                 if isinstance(genres, str):
@@ -151,12 +185,15 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
         db.close()
 
 
-async def accept_candidate(candidate_id: int, max_tracks_override: int | None = None) -> dict[str, Any]:
+async def accept_candidate(candidate_id: int, max_tracks_override: int | None = None,
+                           *, allow_create_plex: bool = True) -> dict[str, Any]:
     """Accept one candidate: ensure Powarr playlist exists, add artist's tracks.
 
     Args:
         candidate_id: SmartPlaylistCandidate.id
         max_tracks_override: Optional per-call override for max tracks (for testing/batch ops)
+        allow_create_plex: When False (scheduled path + auto_create off), skip creating a
+            new Plex playlist — only update playlists that already have plex_playlist_id.
     """
     db = SessionLocal()
     try:
@@ -166,6 +203,11 @@ async def accept_candidate(candidate_id: int, max_tracks_override: int | None = 
             return {"ok": False, "message": "Candidate not found"}
         if cand.status == "accepted":
             return {"ok": True, "message": "Already accepted", "added": 0}
+        if _is_blacklisted(cand.artist_name, _blacklist_set(cfg)):
+            cand.status = "rejected"
+            cand.resolved_at = datetime.utcnow()
+            db.commit()
+            return {"ok": False, "message": f"'{cand.artist_name}' is blacklisted"}
         pl = db.query(SmartPlaylist).filter_by(id=cand.playlist_id).first()
         if not pl:
             return {"ok": False, "message": "Playlist definition missing"}
@@ -177,8 +219,10 @@ async def accept_candidate(candidate_id: int, max_tracks_override: int | None = 
         plex = _get_client(plex_row)
 
         if not pl.plex_playlist_id:
-            # Manual Accept always creates the Powarr-owned playlist when missing;
-            # auto_create_playlists gates scheduled/auto paths only.
+            if not allow_create_plex:
+                return {"ok": False, "message": "Playlist not yet approved for Plex "
+                        "(auto-create off — approve manually first)", "skipped_create": True}
+            # Manual Accept / Approve always creates the Powarr-owned playlist.
             pid = await plex.create_playlist(pl.title, playlist_type="audio")
             if not pid:
                 return {"ok": False, "message": "Plex playlist create failed"}
@@ -260,11 +304,48 @@ def reject_candidate(candidate_id: int) -> dict[str, Any]:
         db.close()
 
 
-async def run_scheduled_generation() -> dict[str, Any]:
-    """Scheduled Smart Playlists generation with auto-add.
+async def approve_playlist(playlist_id: int) -> dict[str, Any]:
+    """SP-05 — push a draft playlist to Plex (create if needed) and auto-accept
+    pending non-blacklisted candidates. Manual approval gate when auto_create is off."""
+    db = SessionLocal()
+    try:
+        pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+        if not pl:
+            return {"ok": False, "message": "Playlist not found"}
+        plex_row = db.query(Integration).filter_by(name="plex", enabled=True).first()
+        if not plex_row:
+            return {"ok": False, "message": "Plex integration not enabled"}
+        from app.api.v1.integrations import _get_client
+        plex = _get_client(plex_row)
+        if not pl.plex_playlist_id:
+            pid = await plex.create_playlist(pl.title, playlist_type="audio")
+            if not pid:
+                return {"ok": False, "message": "Plex playlist create failed"}
+            pl.plex_playlist_id = pid
+            db.commit()
+        cands = db.query(SmartPlaylistCandidate).filter_by(
+            playlist_id=pl.id, status="pending").all()
+        accepted = 0
+        for cand in cands:
+            result = await accept_candidate(cand.id, max_tracks_override=pl.max_tracks_override,
+                                            allow_create_plex=True)
+            if result.get("ok"):
+                accepted += 1
+        return {"ok": True, "message": f"Approved — accepted {accepted}/{len(cands)} candidate(s)",
+                "plex_playlist_id": pl.plex_playlist_id, "accepted": accepted}
+    except Exception as e:
+        logger.warning(f"Approve playlist {playlist_id} failed: {e}")
+        return {"ok": False, "message": str(e)}
+    finally:
+        db.close()
 
-    Runs generation for playlists on interval, auto-accepting if configured.
-    Respects per-playlist overrides and global settings.
+
+async def run_scheduled_generation() -> dict[str, Any]:
+    """Scheduled Smart Playlists generation with auto-update of approved playlists.
+
+    SP-05: auto_create_playlists gates Plex creation for draft playlists;
+    auto_update_playlists (default ON) auto-accepts pending candidates on
+    playlists that already have a plex_playlist_id.
     """
     db = SessionLocal()
     try:
@@ -295,25 +376,41 @@ async def run_scheduled_generation() -> dict[str, Any]:
                 db.commit()
                 continue
 
-            # Check auto_add setting (per-playlist override or global default)
-            auto_add = (pl.auto_add_override
-                       if pl.auto_add_override is not None
-                       else cfg.auto_add_tracks_default)
+            # Refresh playlist row (generate_candidates uses its own session)
+            pl = db.query(SmartPlaylist).filter_by(id=pl.id).first()
+            if not pl:
+                continue
 
-            if auto_add:
-                # Auto-accept all pending candidates for this playlist
+            # Per-playlist override wins; else auto_update for approved, auto_create for drafts
+            if pl.auto_add_override is not None:
+                should_auto = pl.auto_add_override
+            elif pl.plex_playlist_id:
+                should_auto = cfg.auto_update_playlists or cfg.auto_add_tracks_default
+            else:
+                should_auto = cfg.auto_create_playlists
+
+            allow_create = bool(pl.plex_playlist_id) or cfg.auto_create_playlists
+
+            if should_auto:
                 cands = db.query(SmartPlaylistCandidate).filter_by(
                     playlist_id=pl.id, status="pending").all()
                 accepted = 0
+                skipped = 0
                 for cand in cands:
                     result = await accept_candidate(
                         cand.id,
-                        max_tracks_override=pl.max_tracks_override
+                        max_tracks_override=pl.max_tracks_override,
+                        allow_create_plex=allow_create,
                     )
                     if result.get("ok"):
                         accepted += 1
-
-                msg = f"Auto-added {accepted}/{len(cands)} candidates"
+                    elif result.get("skipped_create"):
+                        skipped += 1
+                if skipped and not pl.plex_playlist_id:
+                    msg = (f"Draft — {len(cands)} candidate(s) awaiting Approve "
+                           f"(auto-create off)")
+                else:
+                    msg = f"Auto-updated {accepted}/{len(cands)} candidates"
             else:
                 msg = "Generated candidates (manual review required)"
 

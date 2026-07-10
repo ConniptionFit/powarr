@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListMusic, Play, Check, X, RefreshCw, Music, Pencil, Settings } from "lucide-react";
+import { ListMusic, Play, Check, X, RefreshCw, Music, Pencil, Settings, Sparkles, Upload } from "lucide-react";
 import { Link } from "react-router-dom";
 import { req, fmtRelative } from "../../lib/api";
 
@@ -44,9 +44,14 @@ const api = {
     req<{ ok: boolean; message: string }>(`/smart-playlists/candidates/${id}/reject`, { method: "POST" }),
   updatePlaylist: (id: number, body: Partial<PlaylistDetail>) =>
     req<PlaylistDetail>(`/smart-playlists/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  approve: (id: number) =>
+    req<{ ok: boolean; message: string }>(`/smart-playlists/${id}/approve`, { method: "POST" }),
+  suggestName: (id: number) =>
+    req<{ ok: boolean; suggested_title: string | null; fallback: string }>(
+      `/smart-playlists/${id}/suggest-name`, { method: "POST" }),
 };
 
-function PlaylistCard({ pl }: { pl: Playlist }) {
+function PlaylistCard({ pl, onMsg }: { pl: Playlist; onMsg: (m: string) => void }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const { data: detail } = useQuery({
@@ -54,10 +59,12 @@ function PlaylistCard({ pl }: { pl: Playlist }) {
   });
   const [autoAdd, setAutoAdd] = useState<"" | "on" | "off">("");
   const [maxTracks, setMaxTracks] = useState("");
+  const [titleDraft, setTitleDraft] = useState(pl.title);
 
   const openEdit = () => {
     setAutoAdd(detail?.auto_add_override === true ? "on" : detail?.auto_add_override === false ? "off" : "");
     setMaxTracks(detail?.max_tracks_override != null ? String(detail.max_tracks_override) : "");
+    setTitleDraft(pl.title);
     setEditing(true);
   };
 
@@ -65,12 +72,37 @@ function PlaylistCard({ pl }: { pl: Playlist }) {
     mutationFn: () => api.updatePlaylist(pl.id, {
       auto_add_override: autoAdd === "" ? null : autoAdd === "on",
       max_tracks_override: maxTracks.trim() === "" ? null : parseInt(maxTracks),
+      title: titleDraft.trim() || pl.title,
     }),
     onSuccess: () => {
       setEditing(false);
       qc.invalidateQueries({ queryKey: ["sp-list"] });
       qc.invalidateQueries({ queryKey: ["sp-detail", pl.id] });
     },
+  });
+
+  const approveMut = useMutation({
+    mutationFn: () => api.approve(pl.id),
+    onSuccess: (r) => {
+      onMsg(r.message);
+      qc.invalidateQueries({ queryKey: ["sp-list"] });
+      qc.invalidateQueries({ queryKey: ["sp-candidates"] });
+    },
+    onError: (e: Error) => onMsg(e.message),
+  });
+
+  const suggestMut = useMutation({
+    mutationFn: () => api.suggestName(pl.id),
+    onSuccess: (r) => {
+      if (r.suggested_title) {
+        setTitleDraft(r.suggested_title);
+        setEditing(true);
+        onMsg(`Suggested: ${r.suggested_title}`);
+      } else {
+        onMsg(`LLM unavailable — fallback ${r.fallback}`);
+      }
+    },
+    onError: (e: Error) => onMsg(e.message),
   });
 
   return (
@@ -80,12 +112,26 @@ function PlaylistCard({ pl }: { pl: Playlist }) {
           <p className="text-white text-sm font-medium">{pl.title}</p>
           <p className="text-slate-500 text-xs">Genre: {pl.genre_tag}</p>
         </div>
-        <div className="flex items-center gap-2">
-          {pl.plex_playlist_id && (
+        <div className="flex items-center gap-1">
+          {pl.plex_playlist_id ? (
             <span className="text-xs bg-purple-900/40 text-purple-200 px-2 py-1 rounded">
               Plex #{pl.plex_playlist_id}
             </span>
+          ) : (
+            <span className="text-xs bg-amber-900/30 text-amber-200 px-2 py-1 rounded">Draft</span>
           )}
+          {!pl.plex_playlist_id && (
+            <button onClick={() => approveMut.mutate()} disabled={approveMut.isPending}
+              className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300"
+              title="Approve & push to Plex">
+              <Upload size={13} />
+            </button>
+          )}
+          <button onClick={() => suggestMut.mutate()} disabled={suggestMut.isPending}
+            className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-brand-light"
+            title="Suggest LLM name">
+            <Sparkles size={13} />
+          </button>
           <button onClick={() => (editing ? setEditing(false) : openEdit())}
             className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white" title="Edit overrides">
             <Pencil size={13} />
@@ -103,8 +149,13 @@ function PlaylistCard({ pl }: { pl: Playlist }) {
 
       {editing && (
         <div className="border-t border-purple-900/30 mt-2 pt-3 grid sm:grid-cols-2 gap-3">
+          <label className="text-xs text-slate-400 block sm:col-span-2">
+            Title
+            <input className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white"
+              value={titleDraft} onChange={e => setTitleDraft(e.target.value)} />
+          </label>
           <label className="text-xs text-slate-400 block">
-            Auto-add override
+            Auto-update override
             <select className="mt-1 w-full bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white"
               value={autoAdd} onChange={e => setAutoAdd(e.target.value as "" | "on" | "off")}>
               <option value="">Use global default</option>
@@ -121,7 +172,7 @@ function PlaylistCard({ pl }: { pl: Playlist }) {
           <div className="sm:col-span-2">
             <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}
               className="px-3 py-1.5 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
-              Save Overrides
+              Save
             </button>
           </div>
         </div>
@@ -166,7 +217,7 @@ export default function SmartPlaylists() {
           <ListMusic className="text-brand-light" size={22} />
           <div>
             <h1 className="text-2xl font-bold text-white">Playlists</h1>
-            <p className="text-slate-400 text-sm">Genre playlists from Qdrant → Plex with scheduling & auto-add</p>
+            <p className="text-slate-400 text-sm">Genre playlists from Qdrant → Plex — approve drafts, auto-update approved</p>
           </div>
         </div>
         <Link to="/settings/music" title="Configure"
@@ -198,7 +249,7 @@ export default function SmartPlaylists() {
           <p className="text-slate-500 text-sm">No genre playlists yet — configure Qdrant and Generate.</p>
         ) : (
           <div className="grid gap-2">
-            {playlists.map(pl => <PlaylistCard key={pl.id} pl={pl} />)}
+            {playlists.map(pl => <PlaylistCard key={pl.id} pl={pl} onMsg={setMsg} />)}
           </div>
         )}
       </section>

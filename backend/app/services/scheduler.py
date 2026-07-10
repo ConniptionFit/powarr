@@ -229,9 +229,14 @@ async def maintenance_loop():
                 await _scheduled_llm_run(db)
                 await _scheduled_backup(db)
                 await _scheduled_weekly_digest(db)
-                await _scheduled_playlist_generation(db)
+                # SP-06 — artist DB refresh before playlist auto-updates so
+                # generation sees fresh Qdrant taste/connection state.
                 await _scheduled_artist_discovery(db)
                 await _scheduled_artist_discovery_sync(db)
+                await _scheduled_playlist_generation(db)
+                # AD-08 — drop enrichment art on accepted artists past retention.
+                from app.services.artist_discovery import purge_stale_thumbnails
+                purge_stale_thumbnails(db)
                 # LLM-LOG-01: backfill ground-truth resolutions onto match-review
                 # log rows + retention prune (90 days / 5k rows). Sync + cheap.
                 from app.services import llm_match_log

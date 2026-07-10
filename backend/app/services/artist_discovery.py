@@ -79,10 +79,26 @@ async def _resolve_seed_names(qdrant, seed_keys: list[str] | None) -> list[str]:
 
 
 def load_settings(db) -> ArtistDiscoverySettings:
+    """Load Artist Discovery settings with AD-07 dual-threshold migration.
+
+    Pre-v0.42 used a single `auto_add_connection_threshold` as the suggest/qualify
+    gate plus a boolean `auto_promote`. New installs: suggest=3, auto_add=0 (off).
+    Existing rows without `suggest_connection_threshold` get suggest = old threshold;
+    auto_add stays at the old value only when `auto_promote` was on, else 0.
+    """
     row = db.query(AppSetting).filter_by(key="artist_discovery").first()
     if not row or not row.value:
         return ArtistDiscoverySettings()
-    return ArtistDiscoverySettings(**json.loads(row.value))
+    data = json.loads(row.value)
+    if "suggest_connection_threshold" not in data:
+        old_threshold = int(data.get("auto_add_connection_threshold") or 3)
+        data["suggest_connection_threshold"] = old_threshold
+        if not data.get("auto_promote"):
+            data["auto_add_connection_threshold"] = 0
+        # else keep auto_add_connection_threshold at the old value (auto-add at same bar)
+        row.value = json.dumps(data)
+        db.commit()
+    return ArtistDiscoverySettings(**data)
 
 
 def save_settings(db, cfg: ArtistDiscoverySettings) -> None:
@@ -301,6 +317,61 @@ async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, 
 
 # --- Related-artist graph sync ---------------------------------------------------
 
+async def _recently_listened_keys(lastfm, lookback_days: int) -> set[str]:
+    """AD-07 — set of seed keys (MBID and/or normalized name) heard within the
+    scrobble lookback window. Connection counts for suggest/auto-add use only
+    these keys — not every monitored Lidarr artist."""
+    if lookback_days <= 0 or not lastfm:
+        return set()
+    from_ts = int((datetime.utcnow() - timedelta(days=lookback_days)).timestamp())
+    keys: set[str] = set()
+    try:
+        tracks = await lastfm.get_recent_tracks(from_ts=from_ts, limit=200)
+    except Exception as e:
+        logger.warning(f"Artist Discovery: recent tracks fetch failed: {e}")
+        return keys
+    for t in tracks or []:
+        artist = t.get("artist") or {}
+        if isinstance(artist, dict):
+            name = (artist.get("#text") or artist.get("name") or "").strip()
+            mbid = (artist.get("mbid") or "").strip() or None
+        else:
+            name = str(artist).strip()
+            mbid = None
+        if mbid:
+            keys.add(mbid)
+        if name:
+            keys.add(name)
+            keys.add(_norm_artist(name))
+    return keys
+
+
+def _recent_connection_count(seeds_list: list[str], recent_keys: set[str]) -> int:
+    """Count associated_seed_mbids entries that resolve to a recently-listened seed.
+    Falls back to the full list length when recent_keys is empty (Last.fm unavailable)
+    so graph sync still surfaces candidates rather than going silent."""
+    if not seeds_list:
+        return 0
+    if not recent_keys:
+        return len(seeds_list)
+    n = 0
+    for k in seeds_list:
+        if not k:
+            continue
+        if k in recent_keys or _norm_artist(k) in recent_keys:
+            n += 1
+    return n
+
+
+def _effective_auto_add_threshold(cfg: ArtistDiscoverySettings) -> int:
+    """0 disables auto-add. Legacy auto_promote=True with threshold 0 → use suggest."""
+    if cfg.auto_add_connection_threshold and cfg.auto_add_connection_threshold > 0:
+        return cfg.auto_add_connection_threshold
+    if cfg.auto_promote:
+        return max(cfg.suggest_connection_threshold, 1)
+    return 0
+
+
 async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     lastfm = _lastfm_client(db)
     if not lastfm:
@@ -313,6 +384,10 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
         filter={"must": [{"key": "is_monitored_lidarr", "match": {"value": True}}]}, limit=256)
     stale = [s for s in seeds
              if ((s.get("payload") or {}).get("last_related_scan_timestamp") or 0) < cutoff][:5]
+
+    recent_keys = await _recently_listened_keys(lastfm, cfg.scrobble_lookback_days)
+    suggest_n = max(cfg.suggest_connection_threshold, 1)
+    auto_add_n = _effective_auto_add_threshold(cfg)
 
     created = 0
     promoted = 0
@@ -374,6 +449,7 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                     continue
 
             seeds_list = list(epayload.get("associated_seed_mbids") or [])
+            recent_n = _recent_connection_count(seeds_list, recent_keys)
             row = _find_candidate(db, rmbid, rname)
             if row is not None:
                 # New connections keep accumulating after the row was created —
@@ -384,9 +460,39 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                     if set(seeds_list) != stored:
                         row.associated_seed_mbids = json.dumps(seeds_list)
                         row.seed_artist_names = json.dumps(await _resolve_seed_names(qdrant, seeds_list))
+                    # AD-07 — pending row crossed auto-add band → promote in place
+                    if auto_add_n and recent_n >= auto_add_n:
+                        result = await add_to_lidarr(db, row.id)
+                        if result.get("ok"):
+                            promoted += 1
                 continue  # any prior row (any status) blocks re-creation
-            if epayload.get("is_monitored_lidarr") or len(seeds_list) < cfg.auto_add_connection_threshold:
+            if epayload.get("is_monitored_lidarr") or recent_n < suggest_n:
                 continue
+            # AD-07 auto-add band: add to Lidarr, no suggested-queue row
+            if auto_add_n and recent_n >= auto_add_n:
+                enrichment = await _enrich_candidate(db, rmbid, rname)
+                genres_list = clean_tags(epayload.get("genres")) or clean_tags(enrichment["genres"])
+                cand = DiscoveredArtist(
+                    musicbrainz_id=rmbid, artist_name=rname,
+                    genres=json.dumps(genres_list),
+                    mood_tags=json.dumps(clean_tags(epayload.get("mood_tags"))),
+                    era=clean_era(epayload.get("era")), source="graph",
+                    associated_seed_mbids=json.dumps(seeds_list),
+                    seed_artist_name=seed_name,
+                    seed_artist_names=json.dumps(await _resolve_seed_names(qdrant, seeds_list)),
+                    status="pending",
+                    image_url=enrichment["image_url"], bio=enrichment["bio"],
+                    years_active=enrichment["years_active"],
+                )
+                db.add(cand)
+                db.flush()
+                result = await add_to_lidarr(db, cand.id)
+                if result.get("ok"):
+                    promoted += 1
+                else:
+                    created += 1  # left pending if Lidarr add failed
+                continue
+            # Suggest band: show in review queue
             enrichment = await _enrich_candidate(db, rmbid, rname)
             genres_list = clean_tags(epayload.get("genres")) or clean_tags(enrichment["genres"])
             cand = DiscoveredArtist(
@@ -402,13 +508,7 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                 years_active=enrichment["years_active"],
             )
             db.add(cand)
-            db.flush()
-            if cfg.auto_promote:
-                result = await add_to_lidarr(db, cand.id)
-                if result.get("ok"):
-                    promoted += 1
-            else:
-                created += 1
+            created += 1
 
         try:
             await qdrant.set_payload([seed["id"]], {"last_related_scan_timestamp": int(datetime.utcnow().timestamp())})
@@ -418,6 +518,30 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     db.commit()
     return {"ok": True, "message": f"{created} new candidate(s), {promoted} auto-promoted",
             "candidates": created, "promoted": promoted}
+
+
+# --- AD-08 thumbnail retention ---------------------------------------------------
+
+def purge_stale_thumbnails(db, retention_days: int | None = None) -> int:
+    """Clear image_url on accepted artists older than retention_days so the DB
+    does not retain enrichment art indefinitely (AD-08). Bio/years kept for digests."""
+    cfg = load_settings(db)
+    days = retention_days if retention_days is not None else cfg.thumbnail_retention_days
+    if days <= 0:
+        return 0
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    rows = (db.query(DiscoveredArtist)
+            .filter(DiscoveredArtist.status == "accepted",
+                    DiscoveredArtist.image_url.isnot(None),
+                    DiscoveredArtist.resolved_at.isnot(None),
+                    DiscoveredArtist.resolved_at < cutoff)
+            .all())
+    for row in rows:
+        row.image_url = None
+    if rows:
+        db.commit()
+        logger.info(f"Artist Discovery: purged thumbnails on {len(rows)} accepted artist(s) older than {days}d")
+    return len(rows)
 
 
 # --- Re-enrichment backfill --------------------------------------------------------

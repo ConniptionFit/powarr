@@ -1139,16 +1139,15 @@ async def suggest_playlist_name(host: str, model: str, genre: str,
                                 api_style: str = "ollama", model_size: str = "medium",
                                 keep_alive_minutes: int = 10,
                                 forbid_thinking: bool = True) -> Optional[str]:
-    """SP-04 — short display name for a new smart playlist. Returns the name or
-    None (caller falls back to the 'Powarr · {genre}' template). Fails soft like
-    every other assist call; single tiny prompt, never bulk data."""
-    sample = ", ".join((artists or [])[:8])
+    """SP-04/SP-08 — short Spotify-style display name for a smart playlist.
+    Returns the name or None (caller falls back to 'Powarr · {genre}'). Fails soft;
+    minimal context for lightweight local models — genre + up to 5 artists."""
+    sample = ", ".join((artists or [])[:5])
     prompt = (
-        "Suggest one short, evocative playlist name (2-5 words) for a music "
-        f"playlist of {genre} artists."
-        + (f" It features artists like: {sample}." if sample else "")
-        + " Do not include the word 'playlist'. "
-        "Reply with ONLY the name — no quotes, no punctuation around it, no explanation."
+        f"Invent a fun, descriptive Spotify-style playlist title for {genre} music."
+        + (f" Artists include: {sample}." if sample else "")
+        + " 2-5 words, catchy and specific (like 'Midnight Drive' or 'Kitchen Disco'). "
+        "No word 'playlist', no quotes. Reply with ONLY the title."
         + (" Do not think out loud." if forbid_thinking else "")
     )
     raw = await _generate(host, model, prompt, api_style, json_format=False,

@@ -182,16 +182,25 @@ class SmartPlaylistSettings(BaseModel):
     """MOD-01 Smart Playlists (v0.34.0) — read-only Qdrant → Plex genre playlists.
     Qdrant connection lives in [[QdrantSettings]] (Settings -> Integrations), not here."""
     enabled: bool = False
+    # SP-05 — new Plex playlists require approval (manual Accept / Approve) unless
+    # this is on. Off by default so scheduled runs never push unreviewed playlists.
     auto_create_playlists: bool = False
-    auto_add_tracks_default: bool = False
+    # SP-05 — once a playlist has been pushed to Plex (plex_playlist_id set),
+    # scheduled runs auto-add eligible tracks. On by default.
+    auto_update_playlists: bool = True
+    # Legacy alias for auto_update_playlists / per-playlist override fallback.
+    # Prefer auto_update_playlists for new code; kept for existing UI + overrides.
+    auto_add_tracks_default: bool = True
     min_artists_per_genre: int = 3
     excluded_genres: list[str] = []
+    # SP-07 / SP-03 — blacklist-only eligibility. Normalized names matched case-
+    # insensitively; all other monitored artists remain eligible.
+    blacklisted_artists: list[str] = []
     max_tracks_per_playlist: int = 200
     schedule_enabled: bool = False
     schedule_interval_hours: int = 24
-    # SP-04 — let the local LLM name new playlists instead of "Powarr · {genre}".
-    # Fails soft to the template when the LLM is disabled/unreachable, per the
-    # Local LLM Assist optional/fail-soft rule. Only applies at playlist creation.
+    # SP-04 / SP-08 — LLM names at create time and on-demand rename. Fails soft
+    # to "Powarr · {genre}" when the LLM is disabled/unreachable.
     llm_playlist_names: bool = False
 
 
@@ -209,13 +218,17 @@ class ArtistDiscoverySettings(BaseModel):
     embed_model: str = "all-minilm"
     max_candidates_per_run: int = 5
     related_artists_limit: int = 3  # top-N similar artists kept per seed (graph sync)
-    auto_add_connection_threshold: int = 3  # seed connections before a graph candidate qualifies
+    # AD-07 — dual thresholds on *recently-listened* seed connection count only
+    # (Qdrant associated_seed_mbids filtered by scrobble_lookback_days). Example
+    # band: suggest=3, auto_add=5 — numbers are configurable; auto_add=0 disables.
+    suggest_connection_threshold: int = 3
+    auto_add_connection_threshold: int = 0  # 0 = auto-add disabled (safe default)
     related_artists_refresh_days: int = 30  # re-scan a seed's similar artists after this many days
     similarity_threshold: float = 0.75  # cosine score floor for centroid-search candidates
-    scrobble_lookback_days: int = 30
-    # Off by default (user-confirmed) — graph candidates crossing the connection
-    # threshold otherwise wait in the review queue like every other candidate,
-    # same pattern as Smart Playlists' auto_add_tracks_default.
+    scrobble_lookback_days: int = 30  # AD-07 — window for "recently listened" seed filter
+    # Legacy master switch — when True and auto_add_connection_threshold is 0,
+    # load_settings migrates auto_add to suggest_connection_threshold. Prefer the
+    # numeric auto_add threshold going forward.
     auto_promote: bool = False
     root_folder_path: str = ""  # "" = use Lidarr's first available root folder
     quality_profile_id: int = 0  # 0 = use Lidarr's first available quality profile
@@ -224,6 +237,8 @@ class ArtistDiscoverySettings(BaseModel):
     schedule_interval_hours: int = 24  # full discovery cycle: ingest + centroid + graph
     sync_schedule_enabled: bool = False
     sync_interval_hours: int = 1  # differential sync: Lidarr/Last.fm stats -> Qdrant
+    # AD-08 — purge image_url on accepted rows after this many days (0 = never).
+    thumbnail_retention_days: int = 30
 
 
 class NotificationSettings(BaseModel):

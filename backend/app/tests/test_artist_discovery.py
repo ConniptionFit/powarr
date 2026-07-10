@@ -228,5 +228,44 @@ class LidarrImageSelectionTests(unittest.TestCase):
         self.assertIsNone(_lidarr_image(None))
 
 
+class RecentConnectionCountTests(unittest.TestCase):
+    """AD-07 — dual-threshold connection counting against recently-listened seeds."""
+
+    def test_counts_only_recent_keys(self):
+        from app.services.artist_discovery import _recent_connection_count
+        seeds = ["mbid-a", "mbid-b", "Some Artist"]
+        recent = {"mbid-a", "some artist"}
+        self.assertEqual(_recent_connection_count(seeds, recent), 2)
+
+    def test_empty_recent_falls_back_to_full_list(self):
+        from app.services.artist_discovery import _recent_connection_count
+        seeds = ["a", "b", "c"]
+        self.assertEqual(_recent_connection_count(seeds, set()), 3)
+
+    def test_effective_auto_add_zero_disables(self):
+        from app.schemas.settings import ArtistDiscoverySettings
+        from app.services.artist_discovery import _effective_auto_add_threshold
+        cfg = ArtistDiscoverySettings(auto_add_connection_threshold=0, auto_promote=False)
+        self.assertEqual(_effective_auto_add_threshold(cfg), 0)
+
+    def test_legacy_auto_promote_uses_suggest(self):
+        from app.schemas.settings import ArtistDiscoverySettings
+        from app.services.artist_discovery import _effective_auto_add_threshold
+        cfg = ArtistDiscoverySettings(
+            suggest_connection_threshold=3, auto_add_connection_threshold=0, auto_promote=True)
+        self.assertEqual(_effective_auto_add_threshold(cfg), 3)
+
+
+class BlacklistTests(unittest.TestCase):
+    def test_blacklist_match_is_normalized(self):
+        from app.schemas.settings import SmartPlaylistSettings
+        from app.services.playlist_generator import _blacklist_set, _is_blacklisted
+        cfg = SmartPlaylistSettings(blacklisted_artists=["Guns N' Roses", "  The Band  "])
+        blocked = _blacklist_set(cfg)
+        self.assertTrue(_is_blacklisted("guns n roses", blocked))
+        self.assertTrue(_is_blacklisted("The Band", blocked))
+        self.assertFalse(_is_blacklisted("Someone Else", blocked))
+
+
 if __name__ == "__main__":
     unittest.main()

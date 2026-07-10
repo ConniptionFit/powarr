@@ -9,11 +9,13 @@ interface ADSettings {
   embed_model: string;
   max_candidates_per_run: number;
   related_artists_limit: number;
+  suggest_connection_threshold: number;
   auto_add_connection_threshold: number;
   related_artists_refresh_days: number;
   similarity_threshold: number;
   scrobble_lookback_days: number;
   auto_promote: boolean;
+  thumbnail_retention_days: number;
   root_folder_path: string;
   quality_profile_id: number;
   metadata_profile_id: number;
@@ -26,9 +28,11 @@ interface ADSettings {
 interface SPSettings {
   enabled: boolean;
   auto_create_playlists: boolean;
+  auto_update_playlists: boolean;
   auto_add_tracks_default: boolean;
   min_artists_per_genre: number;
   excluded_genres: string[];
+  blacklisted_artists: string[];
   max_tracks_per_playlist: number;
   schedule_enabled: boolean;
   schedule_interval_hours: number;
@@ -109,9 +113,30 @@ function ArtistDiscoverySettingsCard() {
             value={form.related_artists_limit ?? 3} onChange={e => set("related_artists_limit", parseInt(e.target.value))} />
         </label>
         <label className={labelCls}>
-          Connection threshold (graph)
+          Suggest threshold (graph)
+          <input type="number" min="1" className={inputCls}
+            value={form.suggest_connection_threshold ?? 3}
+            onChange={e => set("suggest_connection_threshold", parseInt(e.target.value))} />
+          <span className="block text-[10px] text-slate-600 mt-0.5">
+            Recent-listen connections to show in Suggested Artists
+          </span>
+        </label>
+        <label className={labelCls}>
+          Auto-add threshold (graph)
+          <input type="number" min="0" className={inputCls}
+            value={form.auto_add_connection_threshold ?? 0}
+            onChange={e => set("auto_add_connection_threshold", parseInt(e.target.value))} />
+          <span className="block text-[10px] text-slate-600 mt-0.5">
+            0 = off. At/above this count → Lidarr, skip suggested queue
+          </span>
+        </label>
+        <label className={labelCls}>
+          Scrobble lookback (days)
           <input type="number" className={inputCls}
-            value={form.auto_add_connection_threshold ?? 3} onChange={e => set("auto_add_connection_threshold", parseInt(e.target.value))} />
+            value={form.scrobble_lookback_days ?? 30} onChange={e => set("scrobble_lookback_days", parseInt(e.target.value))} />
+          <span className="block text-[10px] text-slate-600 mt-0.5">
+            Only count connections to artists heard in this window
+          </span>
         </label>
         <label className={labelCls}>
           Seed re-scan (days)
@@ -119,9 +144,13 @@ function ArtistDiscoverySettingsCard() {
             value={form.related_artists_refresh_days ?? 30} onChange={e => set("related_artists_refresh_days", parseInt(e.target.value))} />
         </label>
         <label className={labelCls}>
-          Scrobble lookback (days)
-          <input type="number" className={inputCls}
-            value={form.scrobble_lookback_days ?? 30} onChange={e => set("scrobble_lookback_days", parseInt(e.target.value))} />
+          Thumbnail retention (days)
+          <input type="number" min="0" className={inputCls}
+            value={form.thumbnail_retention_days ?? 30}
+            onChange={e => set("thumbnail_retention_days", parseInt(e.target.value))} />
+          <span className="block text-[10px] text-slate-600 mt-0.5">
+            Purge art on accepted artists after N days (0 = keep)
+          </span>
         </label>
       </div>
 
@@ -149,16 +178,12 @@ function ArtistDiscoverySettingsCard() {
         </label>
       </div>
 
-      <label className="flex items-start gap-2 text-sm text-slate-300 border-t border-purple-900/20 pt-4">
-        <input type="checkbox" className="mt-0.5" checked={!!form.auto_promote} onChange={e => set("auto_promote", e.target.checked)} />
-        <span>
-          Auto-promote graph candidates to Lidarr
-          <span className="block text-xs text-slate-500">
-            Off by default. Related-artist candidates crossing the connection threshold skip the
-            review queue. Centroid (taste-match) candidates always queue regardless.
-          </span>
-        </span>
-      </label>
+      <p className="text-xs text-slate-500 border-t border-purple-900/20 pt-4">
+        Graph candidates use Qdrant connection counts to <em>recently listened</em> artists only.
+        Below the suggest threshold: ignored. Between suggest and auto-add: Suggested Artists queue.
+        At/above auto-add (when set &gt; 0): added to Lidarr and skipped in the queue.
+        Centroid (taste-match) candidates always queue regardless.
+      </p>
 
       <div className="border-t border-purple-900/20 pt-4 grid sm:grid-cols-2 gap-4">
         <div className="space-y-2">
@@ -243,11 +268,37 @@ function PlaylistsSettingsCard() {
           <input className={inputCls} value={(form.excluded_genres || []).join(", ")}
             onChange={e => set("excluded_genres", e.target.value.split(",").map(g => g.trim()).filter(Boolean))} />
         </label>
+        <label className={`${labelCls} sm:col-span-2`}>
+          Blacklisted artists <span className="text-slate-600">(comma-separated — never added to playlists)</span>
+          <input className={inputCls} value={(form.blacklisted_artists || []).join(", ")}
+            onChange={e => set("blacklisted_artists", e.target.value.split(",").map(g => g.trim()).filter(Boolean))} />
+        </label>
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-slate-300 border-t border-purple-900/20 pt-4">
-        <input type="checkbox" checked={!!form.auto_create_playlists} onChange={e => set("auto_create_playlists", e.target.checked)} />
-        Auto-create Plex playlists on scheduled runs (not just manual Accept)
+      <label className="flex items-start gap-2 text-sm text-slate-300 border-t border-purple-900/20 pt-4">
+        <input type="checkbox" className="mt-0.5" checked={!!form.auto_create_playlists}
+          onChange={e => set("auto_create_playlists", e.target.checked)} />
+        <span>
+          Auto-create new Plex playlists on scheduled runs
+          <span className="block text-xs text-slate-500">
+            Off by default — new genre playlists stay as drafts until you Approve them on the Playlists page.
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-2 text-sm text-slate-300">
+        <input type="checkbox" className="mt-0.5" checked={!!form.auto_update_playlists}
+          onChange={e => {
+            set("auto_update_playlists", e.target.checked);
+            set("auto_add_tracks_default", e.target.checked);
+          }} />
+        <span>
+          Auto-update approved playlists
+          <span className="block text-xs text-slate-500">
+            On by default. After the artist DB refresh, scheduled runs add new eligible tracks
+            to playlists already pushed to Plex.
+          </span>
+        </span>
       </label>
 
       <label className="flex items-start gap-2 text-sm text-slate-300">
@@ -255,9 +306,8 @@ function PlaylistsSettingsCard() {
         <span>
           LLM-generated playlist names
           <span className="block text-xs text-slate-500">
-            Uses the Local LLM Assist connection to name new playlists instead of
-            "Powarr · genre". Falls back to the template when the LLM is unavailable.
-            Only applies to playlists created after enabling.
+            Uses Local LLM Assist for Spotify-style names at create time. You can also
+            regenerate on demand from the Playlists page. Falls back to "Powarr · genre".
           </span>
         </span>
       </label>
@@ -274,10 +324,6 @@ function PlaylistsSettingsCard() {
               value={form.schedule_interval_hours || 24} onChange={e => set("schedule_interval_hours", parseInt(e.target.value))} />
           </label>
         )}
-        <label className="flex items-center gap-2 text-sm text-slate-300">
-          <input type="checkbox" checked={!!form.auto_add_tracks_default} onChange={e => set("auto_add_tracks_default", e.target.checked)} />
-          Auto-add tracks to playlists (default)
-        </label>
       </div>
 
       <div className="flex items-center gap-3 pt-2">

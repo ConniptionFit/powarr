@@ -211,3 +211,24 @@ def update_playlist(playlist_id: int, body: dict = Body(...),
         **{k: getattr(pl, k) for k in PlaylistDetailOut.model_fields},
         pending_count=pending
     )
+
+
+@router.post("/{playlist_id}/approve")
+async def approve(playlist_id: int):
+    """SP-05 — create the Plex playlist (if needed) and accept pending candidates."""
+    result = await playlist_generator.approve_playlist(playlist_id)
+    if not result.get("ok") and result.get("message") == "Playlist not found":
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
+
+
+@router.post("/{playlist_id}/suggest-name")
+async def suggest_name(playlist_id: int, db: Session = Depends(get_db)):
+    """SP-08 — on-demand LLM playlist name (does not save; PUT title to apply)."""
+    pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    artists = [c.artist_name for c in db.query(SmartPlaylistCandidate).filter_by(
+        playlist_id=pl.id).order_by(SmartPlaylistCandidate.created_at.desc()).limit(5).all()]
+    name = await playlist_generator.suggest_playlist_name_for(db, pl.genre_tag, artists)
+    return {"ok": bool(name), "suggested_title": name, "fallback": f"Powarr · {pl.genre_tag}"}
