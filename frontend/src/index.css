@@ -2,15 +2,30 @@
 @tailwind components;
 @tailwind utilities;
 
+/* v0.44.0 quiet-canvas theme (TrailMix redesign handoff): near-black canvas,
+   Plus Jakarta Sans body, Roboto Slab headings. Fonts are bundled locally via
+   @fontsource imports in main.tsx — no external font requests at runtime. */
 body {
-  background-color: #1a1a2e;
-  color: #e2e8f0;
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  background-color: #0c0e11;
+  color: #f0f2f5;
+  font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  h1,
+  h2,
+  h3 {
+    font-family: "Roboto Slab", ui-serif, Georgia, serif;
+  }
+}
+
+::selection {
+  background: rgba(164, 198, 57, 0.3);
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #1a1a2e; }
-::-webkit-scrollbar-thumb { background: #4c1d95; border-radius: 3px; }
+::-webkit-scrollbar-track { background: #0c0e11; }
+::-webkit-scrollbar-thumb { background: #3a4030; border-radius: 3px; }
 
 /* Active Processes tray — indeterminate progress bar for tasks with no known total. */
 @keyframes progress-indeterminate {

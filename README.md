@@ -165,7 +165,7 @@ Spotify-style and regenerable on demand (sparkle button).
 ## Development
 
 - Backend: Python 3.12, FastAPI, SQLAlchemy (`backend/app/`)
-- Frontend: React 18 + TypeScript + Tailwind (`frontend/src/`), built into the same image
+- Frontend: React 18 + TypeScript + Tailwind (`frontend/src/`), built into the same image. v0.44.0 ships a full visual redesign (same layout/IA): dark "quiet canvas" theme — near-black canvas, olive primary accent, Plus Jakarta Sans body + Roboto Slab headings, fonts bundled locally
 - Tests: `docker exec powarr python -m unittest discover -s app/tests`
 - Schema changes are additive-only via `_migrate()` — no Alembic ceremony
 - `docker-compose.yml` is intentionally gitignored (holds the DB password); `docker-compose.example.yml` is the tracked template

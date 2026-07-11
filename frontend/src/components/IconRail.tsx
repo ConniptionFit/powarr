@@ -11,7 +11,7 @@ function RailItem({ area, active, onClick }: { area: AreaDef; active: boolean; o
       className={`relative w-full flex flex-col items-center gap-1 py-3 px-1 rounded-lg transition-colors ${
         active ? "text-brand-light" : "text-slate-400 hover:text-white hover:bg-white/5"
       }`}
-      style={active ? { background: "rgba(124,58,237,0.16)" } : undefined}
+      style={active ? { background: "rgba(164,198,57,0.12)" } : undefined}
     >
       {active && (
         <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-brand-light" />
@@ -54,7 +54,7 @@ export default function IconRail({ onNavigate }: { onNavigate?: () => void }) {
           onClick={() => go(LOGS_AREA)}
         />
       </div>
-      <div className="w-full text-center pb-2 text-[9px] text-slate-600">v0.43.0</div>
+      <div className="w-full text-center pb-2 text-[9px] text-slate-600">v0.44.0</div>
     </div>
   );
 }

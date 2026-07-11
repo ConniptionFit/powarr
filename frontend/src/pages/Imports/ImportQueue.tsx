@@ -68,7 +68,7 @@ export default function ImportQueue() {
         <button
           onClick={handleScan}
           disabled={scanning}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors disabled:opacity-50"
         >
           <RefreshCw size={15} className={scanning ? "animate-spin" : ""} />
           {scanning ? "Scanning…" : "Scan Now"}
@@ -81,7 +81,7 @@ export default function ImportQueue() {
             key={f}
             onClick={() => setStatusFilter(f)}
             className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              statusFilter === f ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border border-purple-900/40"
+              statusFilter === f ? "bg-brand text-surface font-semibold" : "bg-surface-raised text-slate-400 hover:text-white border border-purple-900/40"
             }`}
           >
             {filterLabel(f)}

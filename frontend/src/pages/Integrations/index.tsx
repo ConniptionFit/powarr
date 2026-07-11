@@ -177,7 +177,7 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
         <button
           onClick={() => saveMut.mutate()}
           disabled={saveMut.isPending}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-dark text-white text-sm transition-colors disabled:opacity-40"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors disabled:opacity-40"
         >
           <Save size={13} />
           Save
@@ -438,7 +438,7 @@ function OllamaCard() {
         <button
           onClick={() => saveMut.mutate()}
           disabled={saveMut.isPending}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-dark text-white text-sm transition-colors disabled:opacity-40"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors disabled:opacity-40"
         >
           <Save size={13} />
           Save
@@ -534,7 +534,7 @@ function LastFmCard({ cfg }: { cfg: IntegrationConfig }) {
         <button
           onClick={() => saveMut.mutate()}
           disabled={saveMut.isPending}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-dark text-white text-sm transition-colors disabled:opacity-40"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors disabled:opacity-40"
         >
           <Save size={13} />
           Save
@@ -661,7 +661,7 @@ function QdrantCard() {
         <button
           onClick={() => saveMut.mutate()}
           disabled={saveMut.isPending}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-dark text-white text-sm transition-colors disabled:opacity-40"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors disabled:opacity-40"
         >
           <Save size={13} />
           Save

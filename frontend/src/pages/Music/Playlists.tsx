@@ -302,7 +302,7 @@ function BlacklistSection({ onMsg }: { onMsg: (m: string) => void }) {
           placeholder="One artist per line (optional bulk edit)"
         />
         <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || draft == null}
-          className="px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-dark text-white text-sm disabled:opacity-50">
+          className="px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-light text-surface font-semibold text-sm disabled:opacity-50">
           {saveMut.isPending ? "Saving…" : "Save blacklist"}
         </button>
       </div>

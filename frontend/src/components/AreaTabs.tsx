@@ -15,7 +15,7 @@ export default function AreaTabs() {
           className={({ isActive }) =>
             `px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
               isActive
-                ? "border-purple-500 text-brand-light"
+                ? "border-brand text-brand-light"
                 : "border-transparent text-slate-400 hover:text-white"
             }`
           }

@@ -42,7 +42,7 @@ export interface BotStateProps {
 /** Semantic color per state. */
 export const BOT_STATE_COLORS: Record<BotStateVariant, string> = {
   available: "#34d399",
-  thinking: "#a78bfa",
+  thinking: "#b8dc43",
   reading: "#38bdf8",
   searching: "#22d3ee",
   responding: "#818cf8",

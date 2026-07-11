@@ -96,7 +96,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
             <button
               type="submit"
               disabled={submitting || !username || !password}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors disabled:opacity-50"
             >
               {submitting && <Loader2 size={14} className="animate-spin" />}
               Sign In

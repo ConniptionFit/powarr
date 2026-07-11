@@ -336,7 +336,7 @@ export default function DeletionSuggestions() {
             <button
               onClick={explainVisible}
               title="Generate an LLM deletion rationale for every listed item (cached ones are skipped) — runs in the background"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors"
             >
               <Bot size={15} />
               Explain Visible ({displayItems.length})
@@ -345,7 +345,7 @@ export default function DeletionSuggestions() {
           <button
             onClick={handleSync}
             disabled={syncing}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors disabled:opacity-50"
           >
             <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
             {syncing ? "Syncing…" : "Sync Plex"}
@@ -383,13 +383,13 @@ export default function DeletionSuggestions() {
           <div className="flex items-center rounded-lg overflow-hidden border border-purple-900/40 ml-1">
             <button
               onClick={() => setShowMode("show")}
-              className={`px-3 py-1.5 text-sm transition-colors ${showMode === "show" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}
+              className={`px-3 py-1.5 text-sm transition-colors ${showMode === "show" ? "bg-brand text-surface font-semibold" : "bg-surface-raised text-slate-400 hover:text-white"}`}
             >
               By Show
             </button>
             <button
               onClick={() => setShowMode("episode")}
-              className={`px-3 py-1.5 text-sm transition-colors ${showMode === "episode" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}
+              className={`px-3 py-1.5 text-sm transition-colors ${showMode === "episode" ? "bg-brand text-surface font-semibold" : "bg-surface-raised text-slate-400 hover:text-white"}`}
             >
               By Episode
             </button>

@@ -63,7 +63,7 @@ function PipelineFlowCard({ queueCount, reviewCount, autoResolvedCount }: {
   );
 }
 
-function Sparkline({ values, color = "#a78bfa" }: { values: number[]; color?: string }) {
+function Sparkline({ values, color = "#a4c639" }: { values: number[]; color?: string }) {
   const w = 160, h = 36, pad = 2;
   if (!values.length) return null;
   const max = Math.max(...values, 1);
@@ -236,7 +236,7 @@ export default function Dashboard() {
           <button
             onClick={handleSync}
             disabled={syncing}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-yellow-700 hover:bg-yellow-600 text-white text-sm transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors disabled:opacity-50"
           >
             <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
             {syncing ? "Syncing…" : "Sync Library"}
@@ -366,7 +366,7 @@ export default function Dashboard() {
                   <div className="flex items-end gap-6">
                     <div className="flex-1 min-w-0">
                       <p className="text-xs text-violet-300 mb-1">New</p>
-                      <Sparkline values={importTrends.new} color="#a78bfa" />
+                      <Sparkline values={importTrends.new} color="#a4c639" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs text-teal-300 mb-1">Resolved</p>

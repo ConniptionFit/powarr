@@ -976,7 +976,7 @@ export default function MatchReview() {
           <button
             onClick={handleScan}
             disabled={scanning}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors disabled:opacity-50"
           >
             <RefreshCw size={15} className={scanning ? "animate-spin" : ""} />
             {scanning ? "Scanning…" : "Scan Now"}
@@ -1000,7 +1000,7 @@ export default function MatchReview() {
             key={f}
             onClick={() => { setStatusFilter(f); setSelected(new Set()); setExpanded(null); }}
             className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              statusFilter === f ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border border-purple-900/40"
+              statusFilter === f ? "bg-brand text-surface font-semibold" : "bg-surface-raised text-slate-400 hover:text-white border border-purple-900/40"
             }`}
           >
             {filterLabel(f)}
@@ -1029,7 +1029,7 @@ export default function MatchReview() {
           onClick={() => setPackFilter(f => f === "packs" ? "all" : "packs")}
           title="Show only season-pack downloads"
           className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
-            packFilter === "packs" ? "bg-brand border-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
+            packFilter === "packs" ? "bg-brand border-brand text-surface font-semibold" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
           }`}
         >
           Packs only
@@ -1038,7 +1038,7 @@ export default function MatchReview() {
           onClick={() => setPackFilter(f => f === "singles" ? "all" : "singles")}
           title="Show only single-episode (non-pack) downloads"
           className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
-            packFilter === "singles" ? "bg-brand border-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
+            packFilter === "singles" ? "bg-brand border-brand text-surface font-semibold" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
           }`}
         >
           Singles only
@@ -1129,7 +1129,7 @@ export default function MatchReview() {
                 onClick={() => llmRunMut.mutate([...selected])}
                 disabled={llmRunMut.isPending}
                 title="Score the selected items with the local LLM (most in-depth reasoning available, regardless of the configured verbosity)"
-                className="flex items-center gap-1.5 px-3 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-xs disabled:opacity-50"
+                className="flex items-center gap-1.5 px-3 py-1 bg-brand hover:bg-brand-light text-surface font-semibold rounded text-xs disabled:opacity-50"
               >
                 {llmRunMut.isPending ? <BotState variant="thinking" size={12} /> : <Bot size={12} />} Run LLM on Selected
               </button>

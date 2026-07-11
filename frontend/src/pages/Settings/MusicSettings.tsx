@@ -217,7 +217,7 @@ function ArtistDiscoverySettingsCard() {
 
       <div className="flex items-center gap-3 pt-2">
         <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}
-          className="px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-dark text-white text-sm disabled:opacity-50">
+          className="px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-light text-surface font-semibold text-sm disabled:opacity-50">
           Save
         </button>
         {msg && <span className="text-xs text-slate-400">{msg}</span>}
@@ -329,7 +329,7 @@ function PlaylistsSettingsCard() {
 
       <div className="flex items-center gap-3 pt-2">
         <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}
-          className="px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-dark text-white text-sm disabled:opacity-50">
+          className="px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-light text-surface font-semibold text-sm disabled:opacity-50">
           Save
         </button>
         {msg && <span className="text-xs text-slate-400">{msg}</span>}

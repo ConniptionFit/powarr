@@ -165,7 +165,7 @@ function ImportMatchingSection() {
         <button
           onClick={() => mut.mutate(cfg)}
           disabled={mut.isPending}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors disabled:opacity-50"
         >
           <Save size={13} />
           {saved ? "Saved!" : "Save"}
@@ -297,7 +297,7 @@ function CleanupSection() {
         <button
           onClick={() => mut.mutate(cfg)}
           disabled={mut.isPending}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors disabled:opacity-50"
         >
           <Save size={13} />
           {saved ? "Saved!" : "Save"}
@@ -430,7 +430,7 @@ function SyncSection() {
         <button
           onClick={() => mut.mutate(cfg)}
           disabled={mut.isPending}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors disabled:opacity-50"
         >
           <Save size={13} />
           {saved ? "Saved!" : "Save"}
@@ -498,7 +498,7 @@ function BackupSection() {
         <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Automated Backups</h2>
         <button
           onClick={save}
-          className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+          className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors"
         >
           <Save size={13} />
           {saved ? "Saved!" : "Save"}
@@ -546,7 +546,7 @@ function BackupSection() {
         <button
           onClick={runNow}
           disabled={running}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors ml-6 disabled:opacity-50"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors ml-6 disabled:opacity-50"
         >
           <Play size={14} />
           {running ? "Running…" : "Run Now"}
@@ -748,7 +748,7 @@ function LLMAssistSection() {
         <span className="text-xs text-slate-500">connection is configured on the Integrations page</span>
         <button
           onClick={save}
-          className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+          className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors"
         >
           <Save size={13} />
           {saved ? "Saved!" : "Save"}
@@ -999,7 +999,7 @@ function LLMAssistSection() {
           <div className="flex items-center rounded-lg overflow-hidden border border-purple-900/40">
             {(["match", "pack", "explain"] as PromptTask[]).map(t => (
               <button key={t} onClick={() => setTask(t)}
-                      className={`px-3 py-1.5 text-sm transition-colors ${task === t ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
+                      className={`px-3 py-1.5 text-sm transition-colors ${task === t ? "bg-brand text-surface font-semibold" : "bg-surface-raised text-slate-400 hover:text-white"}`}>
                 {PROMPT_TASK_LABEL[t]}
               </button>
             ))}
@@ -1019,7 +1019,7 @@ function LLMAssistSection() {
             onClick={refine}
             disabled={refining}
             title="Send your rough draft to the LLM and have it rewritten as a clean template"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors disabled:opacity-50"
           >
             <Wand2 size={13} className={refining ? "animate-pulse" : ""} />
             {refining ? "Cleaning up…" : "Clean Up My Draft"}
@@ -1088,7 +1088,7 @@ function LLMAssistSection() {
         </div>
         <button
           onClick={runNow}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors ml-6"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors ml-6"
         >
           <Play size={14} />
           Run Now
@@ -1104,7 +1104,7 @@ function LLMAssistSection() {
         </div>
         <button
           onClick={runCandidates}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors ml-6"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors ml-6"
         >
           <Play size={14} />
           Run Now
@@ -1142,7 +1142,7 @@ function LlmScheduleSection() {
         <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Scheduled LLM Backlog Scanning</h2>
         <button
           onClick={save}
-          className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+          className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors"
         >
           <Save size={13} />
           {saved ? "Saved!" : "Save"}
@@ -1271,7 +1271,7 @@ function SecuritySection() {
   if (!status) return null;
 
   const inputCls = "w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600";
-  const btnCls = "px-3 py-1.5 rounded bg-brand hover:bg-brand-dark text-white text-sm transition-colors disabled:opacity-40";
+  const btnCls = "px-3 py-1.5 rounded bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors disabled:opacity-40";
   const subtleBtnCls = "px-3 py-1.5 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors disabled:opacity-40";
 
   return (
@@ -1554,7 +1554,7 @@ function NotificationsSection() {
               try { await settingsApi.updateNotifications(cfg); setMsg("Saved"); }
               catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-dark text-white text-sm transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-light text-surface font-semibold text-sm transition-colors"
           >
             <Save size={13} /> Save
           </button>
@@ -1648,7 +1648,7 @@ function ScoringProfilesSection() {
         </div>
         <button
           onClick={save}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors"
         >
           <Save size={13} />
           {saved ? "Saved!" : "Save & Rescore"}
@@ -1734,7 +1734,7 @@ function ScoringWeightsSection() {
         <button
           onClick={() => mut.mutate(weights)}
           disabled={mut.isPending}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-surface font-semibold hover:bg-brand-light text-sm transition-colors disabled:opacity-50"
         >
           <Save size={15} />
           {saved ? "Saved!" : "Save & Rescore"}
