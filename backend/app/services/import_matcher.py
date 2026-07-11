@@ -18,11 +18,16 @@ from app.models.failed_import import FailedImport
 from app.models.integration import Integration
 from app.schemas.settings import ImportMatchingSettings, OllamaSettings
 from app.services import llm_assist
+from app.services.auto_eligible import passes_auto_thresholds
 
 logger = logging.getLogger("powarr")
 
 STUCK_STATES = {"importPending", "importFailed", "importBlocked"}
 OPEN_STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "orphan_pending")
+# Scan dedupe additions (v0.44.0): a resolve_failed row already sits in triage, and
+# an orphaned row whose queue entry never left the *arr (still_in_queue) is the same
+# dead download being re-detected — creating a fresh suggestion for either just loops
+# the same release through the Import Queue forever (Prof single incident, 2026-07-11).
 
 _SEASON_EP_RE = re.compile(r"[sS](\d{1,2})[eE](\d{1,3})")
 _SEASON_RANGE_RE = re.compile(r"\b[sS](\d{1,2})\s*-\s*[sS]?(\d{1,2})\b")
@@ -1133,6 +1138,23 @@ async def remove_from_download_clients(download_id: str, db) -> list[str]:
     return messages or ["No download client integration enabled"]
 
 
+async def purge_dead_queue_entry(client, row, cfg: ImportMatchingSettings) -> None:
+    """Remove the *arr's own queue record for a row orphaned because its download
+    files are gone. The *arr keeps such dead entries indefinitely, and re-detecting
+    the same stuck record every scan is what looped one release through the Import
+    Queue forever (2026-07-11 incident). Same orphan_auto_purge opt-in as the
+    download-client orphan purge; fails soft — a failed *arr call never blocks the
+    local status change that triggered it."""
+    if not cfg.orphan_auto_purge:
+        return
+    if not (row.queue_item_id and row.queue_item_id.isdigit()):
+        return
+    if await client.remove_from_queue(int(row.queue_item_id)):
+        row.still_in_queue = False
+        logger.info(f"Orphan cleanup: removed dead queue entry for '{row.raw_title}' "
+                    f"from {row.source_app}")
+
+
 async def _check_orphans(db, cfg: ImportMatchingSettings, summary: dict) -> None:
     """Pending rows whose download vanished from every configured download client
     (and whose output path isn't on disk) can never be completed. Default: mark
@@ -1208,16 +1230,26 @@ async def _check_orphans(db, cfg: ImportMatchingSettings, summary: dict) -> None
     db.commit()
 
 
-def _orphan_known_missing_files(db, summary: dict) -> None:
+async def _orphan_known_missing_files(db, cfg: ImportMatchingSettings, summary: dict) -> None:
     """Clear triage rows whose last push already proved the download has no
     files left (empty *arr manualimport). Complements the download-client
     orphan check — Lidarr often returns zero candidates while the torrent
-    hash is still listed, so client presence alone wouldn't orphan them."""
+    hash is still listed, so client presence alone wouldn't orphan them.
+    Also removes the dead *arr queue entry (orphan_auto_purge opt-in) so the
+    same record doesn't come back as a fresh suggestion every scan."""
     rows = db.query(FailedImport).filter(
         FailedImport.status.in_(("suggested", "resolve_failed")),
     ).all()
     now = datetime.utcnow()
     changed = False
+    arr_clients: dict[str, Any] = {}
+
+    def _arr_client(app_name: str):
+        if app_name not in arr_clients:
+            arr_row = db.query(Integration).filter_by(name=app_name, enabled=True).first()
+            arr_clients[app_name] = _get_client(app_name, arr_row) if arr_row else None
+        return arr_clients[app_name]
+
     for row in rows:
         if not looks_like_missing_files(row.message):
             continue
@@ -1231,6 +1263,9 @@ def _orphan_known_missing_files(db, summary: dict) -> None:
         changed = True
         logger.warning(f"Orphan check: '{row.raw_title}' ({row.source_app}) — "
                        f"prior push found no files; marked orphaned")
+        client = _arr_client(row.source_app)
+        if client:
+            await purge_dead_queue_entry(client, row, cfg)
     if changed:
         db.commit()
 
@@ -1351,6 +1386,7 @@ async def _verify_resolved(db, app_name: str, client, cfg: ImportMatchingSetting
                     summary["orphaned"] += 1
                     logger.warning(f"Import verify: '{row.raw_title}' ({app_name}) push not "
                                    f"confirmed and download is gone — marked orphaned")
+                    await purge_dead_queue_entry(client, row, cfg)
             else:
                 row.status = "resolve_failed"
                 row.message = ((row.message + " | ") if row.message else "") + \
@@ -1411,7 +1447,7 @@ async def _scan_once_inner(task_id: str) -> dict:
                      "below_floor": 0, "in_grace": 0, "closed_external": 0, "verified": 0,
                      "resolve_failed": 0, "orphaned": 0, "orphan_pending": 0,
                      "quality_downgrade_auto_rejected": 0, "suspicious_auto_rejected": 0,
-                     "new_suggestion_ids": []}
+                     "backlog_auto_queued": 0, "new_suggestion_ids": []}
     db = SessionLocal()
     scanned_apps = 0
     try:
@@ -1472,9 +1508,17 @@ async def _scan_once_inner(task_id: str) -> dict:
                     continue
                 download_id = rec.get("downloadId")
                 queue_item_id = str(rec.get("id", ""))
+                from sqlalchemy import and_, or_
                 dedupe = db.query(FailedImport).filter(
                     FailedImport.source_app == app_name,
-                    FailedImport.status.in_(OPEN_STATUSES),
+                    or_(
+                        FailedImport.status.in_(OPEN_STATUSES + ("resolve_failed",)),
+                        # Orphaned rows block only while the same dead queue entry
+                        # is still present (_close_stale_rows clears the flag once
+                        # it leaves, so a genuine later re-grab surfaces normally).
+                        and_(FailedImport.status == "orphaned",
+                             FailedImport.still_in_queue.is_(True)),
+                    ),
                 )
                 if download_id:
                     dedupe = dedupe.filter(FailedImport.download_id == download_id)
@@ -1579,8 +1623,9 @@ async def _scan_once_inner(task_id: str) -> dict:
                     if queue_item_id and queue_item_id.isdigit():
                         if await client.remove_from_queue(int(queue_item_id)):
                             logger.info(f"Quality covered: removed '{item.raw_title}' from {app_name}'s queue")
-                elif (cfg.auto_resolve_enabled and match["matched_id"]
-                        and match["confidence"] >= cfg.high_confidence_threshold and download_id):
+                elif (cfg.auto_resolve_enabled and match["matched_id"] and download_id
+                        and passes_auto_thresholds(
+                            match["heuristic_confidence"], match["llm_confidence"], cfg)):
                     result = await client.push_import_command(
                         download_id, match["matched_id"], folder=output_path)
                     if result["ok"]:
@@ -1597,6 +1642,7 @@ async def _scan_once_inner(task_id: str) -> dict:
                         summary["orphaned"] += 1
                         logger.warning(f"Import scan: '{item.raw_title}' ({app_name}) files gone "
                                        f"at auto-resolve — marked orphaned")
+                        await purge_dead_queue_entry(client, item, cfg)
                     item.message = result["message"]
 
                 if item.status == "suggested":
@@ -1610,7 +1656,21 @@ async def _scan_once_inner(task_id: str) -> dict:
                 if item.status == "suggested":
                     summary["new_suggestion_ids"].append(item.id)
         await _check_orphans(db, cfg, summary)
-        _orphan_known_missing_files(db, summary)
+        await _orphan_known_missing_files(db, cfg, summary)
+
+        # Auto-import backlog drain (v0.44.0): suggested rows that meet the
+        # auto-import thresholds NOW (settings changed, or an LLM score landed
+        # after row creation) go through the same coalesced accept pipeline a
+        # user Accept uses — auto-resolve is no longer only a row-creation-time
+        # decision. resolve_failed rows are deliberately excluded (a push that
+        # already failed once shouldn't retry unattended every scan).
+        if cfg.auto_resolve_enabled:
+            from app.services import auto_eligible
+            backlog = [r.id for r in auto_eligible.auto_eligible_query(db, cfg)
+                       .filter(FailedImport.status == "suggested").all()]
+            if backlog:
+                summary["backlog_auto_queued"] = len(backlog)
+                await _queue_auto_imports(backlog)
 
         # Last-scan timestamp for the dashboard's "next scan" countdown — updated on
         # every completed cycle, manual "Scan Now" included, so it reflects reality

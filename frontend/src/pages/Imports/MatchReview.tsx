@@ -1087,7 +1087,7 @@ export default function MatchReview() {
           <button
             onClick={processEligible}
             disabled={batchMut.isPending}
-            title={`Batch-import ${autoEligible?.count ?? stats?.auto_eligible_count} item(s) at or above the auto-resolve threshold (${Math.round((matchSettings.high_confidence_threshold ?? 0.9) * 100)}%)`}
+            title={`Batch-import ${autoEligible?.count ?? stats?.auto_eligible_count} item(s) passing the auto-import gate (${matchSettings.auto_import_mode ?? "either"}: algorithm ≥ ${Math.round((matchSettings.high_confidence_threshold ?? 0.9) * 100)}%, LLM ≥ ${Math.round((matchSettings.llm_auto_threshold ?? 0.8) * 100)}%)`}
             className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-green-700 hover:bg-green-600 text-white transition-colors disabled:opacity-50"
           >
             <Check size={14} />

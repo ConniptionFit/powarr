@@ -131,6 +131,8 @@ export interface ImportMatchingSettings {
   high_confidence_threshold: number;
   low_confidence_floor: number;
   auto_resolve_enabled: boolean;
+  auto_import_mode: "llm" | "algorithm" | "either" | "both"; // which signal(s) gate auto-import (v0.44.0)
+  llm_auto_threshold: number; // LLM leg of the auto-import gate (0-1)
   grace_period_minutes: number;
   include_stalled: boolean;
   verify_timeout_minutes: number;

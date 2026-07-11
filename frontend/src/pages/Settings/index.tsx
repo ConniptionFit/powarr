@@ -174,7 +174,29 @@ function ImportMatchingSection() {
 
       {toggleRow("Detection Enabled", "Poll enabled *arr queues for stuck downloads (read-only)", "enabled")}
       {numRow("Poll Interval", "Seconds between background scans (minimum 60)", "poll_interval_seconds", { min: 60, max: 86400, step: 30, unit: "sec" })}
-      {numRow("High Confidence Threshold", "Matches at or above this are eligible for auto-resolve", "high_confidence_threshold", { min: 0, max: 1, step: 0.01 })}
+      {numRow("Algorithm Auto-Import Threshold", "Deterministic (algorithm) confidence needed for the algorithm leg of the auto-import gate (0–1, e.g. 0.90 = 90%)", "high_confidence_threshold", { min: 0, max: 1, step: 0.01 })}
+      {numRow("LLM Auto-Import Threshold", "LLM confidence needed for the LLM leg of the auto-import gate (0–1, e.g. 0.80 = 80%)", "llm_auto_threshold", { min: 0, max: 1, step: 0.01 })}
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Auto-Import Requires</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Which signal(s) must clear their threshold above before an import is pushed automatically.
+            Either (default): one passing signal is enough — e.g. LLM 95% with algorithm 50% still imports.
+            Both: the same example fails. Rows the LLM never scored fail the LLM leg.
+          </p>
+        </div>
+        <select
+          value={cfg.auto_import_mode}
+          onChange={e => set("auto_import_mode", e.target.value as ImportMatchingSettings["auto_import_mode"])}
+          className="ml-6 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white"
+        >
+          <option value="either">Either (LLM or Algorithm)</option>
+          <option value="both">Both (LLM and Algorithm)</option>
+          <option value="llm">LLM only</option>
+          <option value="algorithm">Algorithm only</option>
+        </select>
+      </div>
       {numRow("Low Confidence Floor", "Matches below this are logged only, never listed", "low_confidence_floor", { min: 0, max: 1, step: 0.01 })}
       {numRow("Grace Period", "Skip queue items younger than this — the *arr app often retries on its own", "grace_period_minutes", { min: 0, max: 1440, step: 5, unit: "min" })}
       {numRow("Verify Timeout", "Pushed imports unconfirmed in history after this are marked failed", "verify_timeout_minutes", { min: 5, max: 1440, step: 5, unit: "min" })}

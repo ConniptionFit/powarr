@@ -604,6 +604,22 @@ async def run_full_discovery_cycle(db=None) -> dict[str, Any]:
             run.finished_at = datetime.utcnow()
             db.commit()
             return {"ok": False, "message": run.message}
+        # Freshen Qdrant before the centroid/graph steps: pull current Lidarr
+        # monitored/fulfillment state and Last.fm play counts into every point,
+        # so this run's taste centroid and connection counts reflect recent play
+        # history rather than the last standalone sync. Fail-soft — a sync
+        # failure (e.g. Lidarr down) still lets discovery run on existing state.
+        sync = await run_differential_sync(db)
+        if sync.get("ok"):
+            sync_row = db.query(AppSetting).filter_by(key="last_artist_discovery_sync").first()
+            if not sync_row:
+                sync_row = AppSetting(key="last_artist_discovery_sync")
+                db.add(sync_row)
+            sync_row.value = datetime.utcnow().isoformat()
+            db.commit()
+        else:
+            logger.warning(f"Artist Discovery: pre-run differential sync failed "
+                           f"({sync.get('message')}) — continuing with existing Qdrant state")
         ingest = await ingest_scrobbles(db, cfg)
         centroid = await run_centroid_discovery(db, cfg)
         graph = await run_graph_sync(db, cfg)
@@ -613,9 +629,11 @@ async def run_full_discovery_cycle(db=None) -> dict[str, Any]:
         run.candidates_found = found
         run.candidates_added = added
         run.finished_at = datetime.utcnow()
-        run.message = f"Ingested {ingest.get('ingested', 0)}, {found} new candidate(s), {added} auto-promoted"
+        run.message = (f"Synced {sync.get('updated', 0)} point(s), ingested {ingest.get('ingested', 0)}, "
+                       f"{found} new candidate(s), {added} auto-promoted")
         db.commit()
-        return {"ok": True, "message": run.message, "ingest": ingest, "centroid": centroid, "graph": graph}
+        return {"ok": True, "message": run.message, "sync": sync, "ingest": ingest,
+                "centroid": centroid, "graph": graph}
     except Exception as e:
         logger.error(f"Artist Discovery full cycle failed: {e}", exc_info=True)
         run.message = f"Error: {e}"

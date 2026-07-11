@@ -29,9 +29,18 @@ class ScoringProfiles(BaseModel):
 class ImportMatchingSettings(BaseModel):
     enabled: bool = True  # read-only queue polling/detection
     poll_interval_seconds: int = 300
-    high_confidence_threshold: float = 0.90  # >= this → eligible for auto-resolve
+    high_confidence_threshold: float = 0.90  # algorithm (heuristic) leg of the auto-import gate (0-1)
     low_confidence_floor: float = 0.50  # < this → log only, no triage row
     auto_resolve_enabled: bool = True  # writes back to *arr apps — on by default (user can disable)
+    # Auto-import gating (v0.44.0, user-confirmed 2026-07-11) — which signal(s)
+    # must clear their own threshold before a matched row auto-imports.
+    #   algorithm: heuristic_confidence >= high_confidence_threshold
+    #   llm:       llm_confidence       >= llm_auto_threshold
+    #   either (default) / both: OR / AND of the two legs.
+    # Rows with no LLM signal simply fail the LLM leg — "either" degrades to
+    # algorithm-only; "llm" and "both" never pass without an LLM score.
+    auto_import_mode: str = "either"  # llm | algorithm | either | both
+    llm_auto_threshold: float = 0.80
     grace_period_minutes: int = 10  # skip queue items younger than this — *arr often self-retries
     include_stalled: bool = False  # also flag stalled downloads, not just import failures
     verify_timeout_minutes: int = 30  # resolved rows unverified after this → resolve_failed

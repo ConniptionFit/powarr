@@ -93,7 +93,8 @@ class TestCollectAutoEligible(unittest.TestCase):
 
     def _row(self, **kw):
         from types import SimpleNamespace
-        base = dict(id=1, status="suggested", matched_id=5, confidence=0.95)
+        base = dict(id=1, status="suggested", matched_id=5, confidence=0.95,
+                    heuristic_confidence=None, llm_confidence=None)
         base.update(kw)
         return SimpleNamespace(**base)
 

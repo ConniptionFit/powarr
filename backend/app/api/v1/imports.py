@@ -722,6 +722,9 @@ async def _accept(item_id: int, db: Session) -> dict:
             item.message if warn in item.message else f"{item.message} | {warn}")
         result = {**result, "ok": False, "reason": "no_files", "message": item.message,
                   "warning": warn}
+        # Clear the *arr's dead queue record too (orphan_auto_purge opt-in) —
+        # otherwise the same entry is re-detected as a new suggestion every scan.
+        await import_matcher.purge_dead_queue_entry(client, item, load_import_matching(db))
     db.commit()
     return {"id": item.id, "status": item.status, **result}
 
