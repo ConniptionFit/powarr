@@ -79,7 +79,8 @@ function ArtistDiscoverySettingsCard() {
 
   return (
     <div className="space-y-4">
-      <label className="flex items-center gap-2 text-sm text-slate-300">
+      <label className="flex items-center gap-2 text-sm text-slate-300"
+        title="Master toggle. Off disables ingestion, centroid discovery, graph sync, and both schedules below.">
         <input type="checkbox" checked={!!form.enabled} onChange={e => set("enabled", e.target.checked)} />
         Enabled
       </label>
@@ -87,33 +88,39 @@ function ArtistDiscoverySettingsCard() {
       <QdrantHint />
 
       <div className="grid sm:grid-cols-2 gap-3">
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="Standalone Ollama connection used only for artist-embedding calls — never shares a host/config with Local LLM Assist, even if both point at the same server.">
           Ollama host <span className="text-slate-600">(standalone — independent of LLM Assist)</span>
           <input className={inputCls} value={form.ollama_host || ""} onChange={e => set("ollama_host", e.target.value)} placeholder="http://10.1.1.x:11434" />
         </label>
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="Ollama model that turns an artist's name + tags into the taste vector stored in Qdrant (default all-minilm). Changing this after artists are already tracked can mismatch vector dimensions against existing points — best set once, before first use.">
           Embedding model
           <input className={inputCls} value={form.embed_model || ""} onChange={e => set("embed_model", e.target.value)} />
         </label>
       </div>
 
       <div className="border-t border-purple-900/20 pt-4 grid sm:grid-cols-3 gap-3">
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="Minimum cosine similarity (0–1) an undiscovered artist must have to your taste centroid (built from your top 15 most-played discovered artists) to surface as a candidate. Higher = stricter, fewer but closer matches.">
           Similarity threshold
           <input type="number" step="0.01" min="0" max="1" className={inputCls}
             value={form.similarity_threshold ?? 0.75} onChange={e => set("similarity_threshold", parseFloat(e.target.value))} />
         </label>
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="Caps how many new centroid-similarity candidates a single discovery cycle can create.">
           Max candidates / run
           <input type="number" className={inputCls}
             value={form.max_candidates_per_run ?? 5} onChange={e => set("max_candidates_per_run", parseInt(e.target.value))} />
         </label>
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="How many of each seed artist's Last.fm similar artists to process per graph-sync pass (Last.fm returns up to 15; this trims further). Higher finds more candidates per seed but does more enrichment work per cycle.">
           Related artists / seed
           <input type="number" className={inputCls}
             value={form.related_artists_limit ?? 3} onChange={e => set("related_artists_limit", parseInt(e.target.value))} />
         </label>
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="Minimum number of recently-listened seed artists a related artist must connect to before it appears in the Suggested Artists queue. Below this, the connection is tracked but nothing is shown yet.">
           Suggest threshold (graph)
           <input type="number" min="1" className={inputCls}
             value={form.suggest_connection_threshold ?? 3}
@@ -122,7 +129,8 @@ function ArtistDiscoverySettingsCard() {
             Recent-listen connections to show in Suggested Artists
           </span>
         </label>
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="Minimum recently-listened connection count to skip the review queue and add straight to Lidarr. 0 disables auto-add entirely — everything above the suggest threshold just queues instead.">
           Auto-add threshold (graph)
           <input type="number" min="0" className={inputCls}
             value={form.auto_add_connection_threshold ?? 0}
@@ -131,7 +139,8 @@ function ArtistDiscoverySettingsCard() {
             0 = off. At/above this count → Lidarr, skip suggested queue
           </span>
         </label>
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="Suggest/auto-add connection counts only count seed artists you've actually listened to (via Last.fm recent tracks) within this many days — long-monitored-but-unplayed artists don't count toward either threshold.">
           Scrobble lookback (days)
           <input type="number" className={inputCls}
             value={form.scrobble_lookback_days ?? 30} onChange={e => set("scrobble_lookback_days", parseInt(e.target.value))} />
@@ -139,12 +148,14 @@ function ArtistDiscoverySettingsCard() {
             Only count connections to artists heard in this window
           </span>
         </label>
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="How many days before a monitored Lidarr artist (a graph 'seed') is queried against Last.fm's related-artist API again. Each graph sync re-scans up to 5 of the most-overdue seeds, oldest first.">
           Seed re-scan (days)
           <input type="number" className={inputCls}
             value={form.related_artists_refresh_days ?? 30} onChange={e => set("related_artists_refresh_days", parseInt(e.target.value))} />
         </label>
-        <label className={labelCls}>
+        <label className={labelCls}
+          title="Clears the stored thumbnail image on accepted artists this many days after acceptance, to avoid holding enrichment art indefinitely. Bio and years-active are kept. 0 = never purge.">
           Thumbnail retention (days)
           <input type="number" min="0" className={inputCls}
             value={form.thumbnail_retention_days ?? 30}
@@ -156,21 +167,21 @@ function ArtistDiscoverySettingsCard() {
       </div>
 
       <div className="border-t border-purple-900/20 pt-4 grid sm:grid-cols-3 gap-3">
-        <label className={labelCls}>
+        <label className={labelCls} title="Used when Accept adds a candidate to Lidarr. Leave as First available to use whatever Lidarr itself returns as its default.">
           Root folder
           <select className={inputCls} value={form.root_folder_path || ""} onChange={e => set("root_folder_path", e.target.value)}>
             <option value="">First available</option>
             {profiles?.root_folders.map(f => <option key={f.path} value={f.path}>{f.path}</option>)}
           </select>
         </label>
-        <label className={labelCls}>
+        <label className={labelCls} title="Used when Accept adds a candidate to Lidarr. Leave as First available to use whatever Lidarr itself returns as its default.">
           Quality profile
           <select className={inputCls} value={form.quality_profile_id || 0} onChange={e => set("quality_profile_id", parseInt(e.target.value))}>
             <option value={0}>First available</option>
             {profiles?.quality_profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </label>
-        <label className={labelCls}>
+        <label className={labelCls} title="Used when Accept adds a candidate to Lidarr. Leave as First available to use whatever Lidarr itself returns as its default.">
           Metadata profile
           <select className={inputCls} value={form.metadata_profile_id || 0} onChange={e => set("metadata_profile_id", parseInt(e.target.value))}>
             <option value={0}>First available</option>
@@ -188,7 +199,8 @@ function ArtistDiscoverySettingsCard() {
 
       <div className="border-t border-purple-900/20 pt-4 grid sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <label className="flex items-center gap-2 text-sm text-slate-300">
+          <label className="flex items-center gap-2 text-sm text-slate-300"
+            title="Automatically runs Last.fm ingestion + centroid discovery + graph sync on this interval — the same work as clicking Run Discovery Now on the Artist Discovery page.">
             <input type="checkbox" checked={!!form.schedule_enabled} onChange={e => set("schedule_enabled", e.target.checked)} />
             Scheduled discovery cycle
           </label>
@@ -201,7 +213,8 @@ function ArtistDiscoverySettingsCard() {
           )}
         </div>
         <div className="space-y-2">
-          <label className="flex items-center gap-2 text-sm text-slate-300">
+          <label className="flex items-center gap-2 text-sm text-slate-300"
+            title="Automatically refreshes Lidarr monitored/fulfillment status and Last.fm play counts on every existing Qdrant point on this interval — independent of the discovery cycle above (which also runs this sync once as its first step). Can also be triggered manually via Sync Now here or the Full Sync button on the Qdrant card in Settings → Integrations.">
             <input type="checkbox" checked={!!form.sync_schedule_enabled} onChange={e => set("sync_schedule_enabled", e.target.checked)} />
             Scheduled differential sync
           </label>
