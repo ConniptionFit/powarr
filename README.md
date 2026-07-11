@@ -148,7 +148,10 @@ centroid and connection counts are always computed from fresh Lidarr state and r
 history; the standalone sync schedule still exists for keeping Qdrant current between runs.
 Both the discovery cycle and the sync run on independent optional schedules, or on demand,
 and a collapsible **Recent runs** history sits under the queue (v0.41.0). Both this page and Playlists are
-queue-only — all configuration lives at **Settings → Music**.
+queue-only — all configuration lives at **Settings → Music**. The same on-demand sync is also
+reachable as a **Full Sync** button directly on the Qdrant connection card under
+**Settings → Integrations** (v0.45.0) — useful if you just want to refresh the shared collection
+without opening Artist Discovery. Strictly manual; it's never triggered by a schedule.
 
 **Smart Playlists (v0.42.0):** new Plex playlists stay as **drafts** until Approve (auto-create
 off by default); **auto-update** of approved playlists is on by default and runs **after** the

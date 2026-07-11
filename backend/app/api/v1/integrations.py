@@ -131,6 +131,17 @@ async def qdrant_test(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {**result, "collection_info": info}
 
 
+@router.post("/qdrant/full-sync")
+async def qdrant_full_sync(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Manual, on-demand full resync of every point in the shared collection —
+    same differential sync Artist Discovery runs on its own schedule/Run Now,
+    exposed here so it can be triggered from the connection card directly
+    without visiting Music -> Artist Discovery. Never runs automatically from
+    this route."""
+    from app.services import artist_discovery as artist_discovery_service
+    return await artist_discovery_service.run_differential_sync(db)
+
+
 @router.post("/seerr/sync")
 async def sync_seerr(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Refresh request-based deletion protection from Seerr on demand."""

@@ -559,6 +559,7 @@ function QdrantCard() {
   const [apiKeySet, setApiKeySet] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
   const [testing, setTesting] = useState(false);
+  const [syncResult, setSyncResult] = useState<any>(null);
 
   useEffect(() => {
     if (cfg) {
@@ -590,6 +591,12 @@ function QdrantCard() {
       setApiKey("");
       qc.invalidateQueries({ queryKey: ["qdrant-settings"] });
     },
+  });
+
+  const fullSyncMut = useMutation({
+    mutationFn: () => req<any>("/integrations/qdrant/full-sync", { method: "POST" }),
+    onSuccess: r => setSyncResult(r),
+    onError: (e: unknown) => setSyncResult({ ok: false, message: e instanceof Error ? e.message : String(e) }),
   });
 
   return (
@@ -672,6 +679,27 @@ function QdrantCard() {
             {testResult.message}
           </div>
         )}
+      </div>
+
+      <div className="mt-4 pt-4 border-t border-purple-900/20">
+        <div className="flex items-center flex-wrap gap-2">
+          <button
+            onClick={() => { setSyncResult(null); fullSyncMut.mutate(); }}
+            disabled={fullSyncMut.isPending || !qdrantUrl}
+            title="Manually resync every point in the collection against current Lidarr/Last.fm state. Not scheduled — only runs when clicked."
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors disabled:opacity-40"
+          >
+            {fullSyncMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+            Full Sync
+          </button>
+          <span className="text-slate-500 text-xs">Manual only — resyncs every point against Lidarr/Last.fm</span>
+          {syncResult && (
+            <div className={`flex items-center gap-1.5 text-sm ml-1 ${syncResult.ok ? "text-green-400" : "text-red-400"}`}>
+              {syncResult.ok ? <CheckCircle size={14} /> : <XCircle size={14} />}
+              {syncResult.message}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
