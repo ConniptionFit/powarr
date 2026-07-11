@@ -22,6 +22,7 @@ from app.database import SessionLocal
 from app.models.app_setting import AppSetting
 from app.models.artist_discovery import ArtistDiscoveryRun, DiscoveredArtist
 from app.models.integration import Integration
+from app.models.media import MediaItem
 from app.schemas.settings import ArtistDiscoverySettings
 
 logger = logging.getLogger("powarr")
@@ -148,6 +149,33 @@ def _lidarr_client(db):
     return _get_client(row)
 
 
+def _plex_artist_names(db) -> set[str]:
+    """Normalized artist names actually present in the locally-synced Plex library
+    (MediaItem tracks, from the regular Plex sync) — a real "already own this in
+    Plex" signal, distinct from `plex_fulfillment` which is derived from Lidarr's
+    own download-percentage stats, not Plex itself."""
+    rows = (db.query(MediaItem.parent_title)
+            .filter(MediaItem.media_type == "track", MediaItem.parent_title.isnot(None))
+            .distinct().all())
+    return {_norm_artist(r[0]) for r in rows if r[0]}
+
+
+async def _lidarr_artist_index(db) -> tuple[dict[str, dict], dict[str, dict]] | None:
+    """(by_mbid, by_name) of every Lidarr artist, monitored or not — "already in
+    Lidarr" for exclusion purposes is a broader question than `is_monitored_lidarr`
+    (which only tracks the monitored subset used as graph-sync seeds). None means
+    Lidarr isn't configured at all — distinct from a configured-but-empty library."""
+    lidarr_row = db.query(Integration).filter_by(name="lidarr", enabled=True).first()
+    if not lidarr_row:
+        return None
+    from app.api.v1.integrations import _get_client
+    lidarr = _get_client(lidarr_row)
+    artists = await lidarr.get_artists()
+    by_mbid = {a.get("foreignArtistId"): a for a in artists if a.get("foreignArtistId")}
+    by_name = {_norm_artist(a.get("artistName") or ""): a for a in artists}
+    return by_mbid, by_name
+
+
 async def _enrich_candidate(db, mbid: str | None, name: str) -> dict[str, Any]:
     """Best-effort image/bio/genres/years_active — never raises, never blocks
     candidate creation on failure."""
@@ -232,6 +260,8 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             "era": "",
             "is_monitored_lidarr": False,
             "plex_fulfillment": "none",
+            "in_lidarr": False,
+            "in_plex": False,
             "total_plays_global": plays,
             "last_played_timestamp": int(datetime.utcnow().timestamp()),
             "is_discovered": True,
@@ -289,7 +319,9 @@ async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, 
         return {"ok": False, "message": "Qdrant not configured (Settings → Integrations)", "candidates": 0}
     hits = await qdrant.search(
         centroid, limit=cfg.max_candidates_per_run, score_threshold=cfg.similarity_threshold,
-        must=[{"key": "is_discovered", "match": {"value": False}}])
+        must=[{"key": "is_discovered", "match": {"value": False}}],
+        must_not=[{"key": "in_plex", "match": {"value": True}},
+                  {"key": "in_lidarr", "match": {"value": True}}])
     created = 0
     for h in hits:
         payload = h.get("payload") or {}
@@ -388,6 +420,12 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     recent_keys = await _recently_listened_keys(lastfm, cfg.scrobble_lookback_days)
     suggest_n = max(cfg.suggest_connection_threshold, 1)
     auto_add_n = _effective_auto_add_threshold(cfg)
+    # Live ownership check (not the possibly-stale Qdrant flags — a related artist
+    # can be seen here for the first time ever, with no prior point to have been
+    # synced) — an artist already in Plex or in Lidarr (monitored or not) is never
+    # worth suggesting, so it's excluded before any embedding/Qdrant work happens.
+    lidarr_by_mbid, lidarr_by_name = await _lidarr_artist_index(db) or ({}, {})
+    plex_names = _plex_artist_names(db)
 
     created = 0
     promoted = 0
@@ -408,6 +446,11 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             if not rname:
                 continue
             rmbid = (r.get("mbid") or "").strip() or None
+            rname_norm = _norm_artist(rname)
+            already_owned = bool(lidarr_by_mbid.get(rmbid) or lidarr_by_name.get(rname_norm)) \
+                or rname_norm in plex_names
+            if already_owned:
+                continue
             rid = qdrant.point_id(rmbid, rname)
             try:
                 existing = await qdrant.retrieve_points([rid])
@@ -437,7 +480,8 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                 epayload = {
                     "musicbrainz_id": rmbid or "", "artist_name": rname, "genres": tags,
                     "mood_tags": [], "era": "", "is_monitored_lidarr": False,
-                    "plex_fulfillment": "none", "total_plays_global": 0,
+                    "plex_fulfillment": "none", "in_lidarr": False, "in_plex": False,
+                    "total_plays_global": 0,
                     "last_played_timestamp": 0, "is_discovered": False,
                     "associated_seed_mbids": [seed_mbid or seed_name],
                     "last_related_scan_timestamp": 0,
@@ -466,7 +510,9 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                         if result.get("ok"):
                             promoted += 1
                 continue  # any prior row (any status) blocks re-creation
-            if epayload.get("is_monitored_lidarr") or recent_n < suggest_n:
+            # already_owned was checked before any point/candidate work began above,
+            # so no is_monitored_lidarr re-check is needed here — just the threshold.
+            if recent_n < suggest_n:
                 continue
             # AD-07 auto-add band: add to Lidarr, no suggested-queue row
             if auto_add_n and recent_n >= auto_add_n:
@@ -662,18 +708,14 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
             run.finished_at = datetime.utcnow()
             db.commit()
             return {"ok": False, "message": run.message}
-        lidarr_row = db.query(Integration).filter_by(name="lidarr", enabled=True).first()
-        if not lidarr_row:
+        lidarr_index = await _lidarr_artist_index(db)
+        if lidarr_index is None:
             run.message = "Lidarr integration not enabled"
             run.finished_at = datetime.utcnow()
             db.commit()
             return {"ok": False, "message": run.message}
-        from app.api.v1.integrations import _get_client
-        lidarr = _get_client(lidarr_row)
-
-        artists = await lidarr.get_artists()
-        by_mbid = {a.get("foreignArtistId"): a for a in artists if a.get("foreignArtistId")}
-        by_name = {_norm_artist(a.get("artistName") or ""): a for a in artists}
+        by_mbid, by_name = lidarr_index
+        plex_names = _plex_artist_names(db)
 
         lastfm = _lastfm_client(db)
         play_counts: dict[str, int] = {}
@@ -701,7 +743,10 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
                     stats = lidarr_artist.get("statistics") or {}
                     pct = stats.get("percentOfTracks") or 0
                     fulfillment = "complete" if pct >= 100 else ("partial" if pct > 0 else "none")
-                updates: dict[str, Any] = {"is_monitored_lidarr": is_monitored, "plex_fulfillment": fulfillment}
+                updates: dict[str, Any] = {
+                    "is_monitored_lidarr": is_monitored, "plex_fulfillment": fulfillment,
+                    "in_lidarr": bool(lidarr_artist), "in_plex": name_key in plex_names,
+                }
                 plays = play_counts.get(name_key)
                 if plays is not None:
                     updates["total_plays_global"] = max(payload.get("total_plays_global") or 0, plays)
@@ -806,7 +851,7 @@ async def add_to_lidarr(db, candidate_id: int) -> dict[str, Any]:
     if qdrant:
         pid = qdrant.point_id(cand.musicbrainz_id, cand.artist_name)
         try:
-            await qdrant.set_payload([pid], {"is_monitored_lidarr": True})
+            await qdrant.set_payload([pid], {"is_monitored_lidarr": True, "in_lidarr": True})
         except Exception as e:
             logger.warning(f"Artist Discovery: Qdrant flag update failed for {cand.artist_name}: {e}")
 

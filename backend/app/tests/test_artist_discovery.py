@@ -256,6 +256,38 @@ class RecentConnectionCountTests(unittest.TestCase):
         self.assertEqual(_effective_auto_add_threshold(cfg), 3)
 
 
+class AlreadyOwnedFilterTests(unittest.TestCase):
+    """Mirrors run_graph_sync's already_owned check: a related artist already in
+    Lidarr (monitored or not, matched by mbid or normalized name) or already in
+    the locally-synced Plex library is excluded before any candidate is created."""
+
+    @staticmethod
+    def _already_owned(lidarr_by_mbid, lidarr_by_name, plex_names, rmbid, rname):
+        rname_norm = _norm_artist(rname)
+        return bool(lidarr_by_mbid.get(rmbid) or lidarr_by_name.get(rname_norm)) \
+            or rname_norm in plex_names
+
+    def test_unmonitored_lidarr_artist_is_still_excluded(self):
+        # The whole point of in_lidarr vs is_monitored_lidarr: an unmonitored
+        # Lidarr artist must still be excluded from suggestions.
+        by_mbid = {"mbid-1": {"foreignArtistId": "mbid-1", "monitored": False}}
+        owned = self._already_owned(by_mbid, {}, set(), "mbid-1", "Some Artist")
+        self.assertTrue(owned)
+
+    def test_lidarr_name_match_excludes_when_no_mbid(self):
+        by_name = {"some artist": {"artistName": "Some Artist"}}
+        owned = self._already_owned({}, by_name, set(), None, "Some Artist")
+        self.assertTrue(owned)
+
+    def test_plex_only_artist_is_excluded(self):
+        owned = self._already_owned({}, {}, {"some artist"}, None, "Some Artist")
+        self.assertTrue(owned)
+
+    def test_artist_in_neither_is_not_excluded(self):
+        owned = self._already_owned({}, {}, {"someone else"}, "other-mbid", "New Artist")
+        self.assertFalse(owned)
+
+
 class BlacklistTests(unittest.TestCase):
     def test_blacklist_match_is_normalized(self):
         from app.schemas.settings import SmartPlaylistSettings
