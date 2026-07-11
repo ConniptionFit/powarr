@@ -6,6 +6,7 @@ import unittest
 
 from app.integrations import musicbrainz
 from app.integrations.qdrant import QdrantIntegration
+from app.models.artist_discovery import DiscoveredArtist
 from app.services.artist_discovery import _norm_artist
 from app.services.artist_enrichment import _lidarr_image
 
@@ -286,6 +287,41 @@ class AlreadyOwnedFilterTests(unittest.TestCase):
     def test_artist_in_neither_is_not_excluded(self):
         owned = self._already_owned({}, {}, {"someone else"}, "other-mbid", "New Artist")
         self.assertFalse(owned)
+
+
+class MatchRatingSortTests(unittest.TestCase):
+    """Candidates list endpoint sorts best-match-first: centroid rows (real
+    similarity_score) always outrank graph rows (connection count only), each
+    group ordered internally by its own signal, descending."""
+
+    @staticmethod
+    def _sorted_names(rows):
+        from app.api.v1.artist_discovery import _match_rating_key
+        rows = sorted(rows, key=_match_rating_key, reverse=True)
+        return [r.artist_name for r in rows]
+
+    def test_centroid_ranked_by_score_descending(self):
+        rows = [
+            DiscoveredArtist(artist_name="Low", source="centroid", similarity_score=0.60),
+            DiscoveredArtist(artist_name="High", source="centroid", similarity_score=0.91),
+            DiscoveredArtist(artist_name="Mid", source="centroid", similarity_score=0.75),
+        ]
+        self.assertEqual(self._sorted_names(rows), ["High", "Mid", "Low"])
+
+    def test_graph_ranked_by_connection_count_descending(self):
+        rows = [
+            DiscoveredArtist(artist_name="Few", source="graph", associated_seed_mbids='["a"]'),
+            DiscoveredArtist(artist_name="Many", source="graph", associated_seed_mbids='["a","b","c"]'),
+            DiscoveredArtist(artist_name="None", source="graph", associated_seed_mbids=None),
+        ]
+        self.assertEqual(self._sorted_names(rows), ["Many", "Few", "None"])
+
+    def test_scored_centroid_rows_always_outrank_unscored_graph_rows(self):
+        rows = [
+            DiscoveredArtist(artist_name="WeakCentroid", source="centroid", similarity_score=0.55),
+            DiscoveredArtist(artist_name="StrongGraph", source="graph", associated_seed_mbids='["a","b","c","d","e"]'),
+        ]
+        self.assertEqual(self._sorted_names(rows), ["WeakCentroid", "StrongGraph"])
 
 
 class BlacklistTests(unittest.TestCase):

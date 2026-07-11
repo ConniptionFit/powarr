@@ -37,6 +37,17 @@ class CandidateOut(BaseModel):
     years_active: Optional[str] = None
 
 
+def _match_rating_key(row: DiscoveredArtist) -> tuple[bool, float, int]:
+    """Best-match-first ranking. Centroid rows carry a real 0-1 similarity score
+    (the % shown in the UI) and always outrank graph rows, which have no
+    comparable score — sorted among themselves by connection count instead of
+    inventing a cross-scale conversion. `sort(reverse=True)` on this tuple wants
+    True > False and higher numbers first, which lines up with "best match" for
+    every field, so a single sort call handles both groups."""
+    connections = len(json.loads(row.associated_seed_mbids)) if row.associated_seed_mbids else 0
+    return (row.similarity_score is not None, row.similarity_score or 0.0, connections)
+
+
 def _candidate_out(row: DiscoveredArtist) -> CandidateOut:
     # clean_tags/clean_era also run at candidate creation — re-applying here
     # covers rows stored before the placeholder filtering existed (AD-06).
@@ -87,7 +98,10 @@ def list_candidates(status: str = Query("pending"),
     q = db.query(DiscoveredArtist).filter_by(status=status)
     if source:
         q = q.filter_by(source=source)
+    # created_at desc first so _match_rating_key's stable sort breaks ties
+    # (equal score, or equal connection count) by newest-first, same as before.
     rows = q.order_by(DiscoveredArtist.created_at.desc()).limit(500).all()
+    rows.sort(key=_match_rating_key, reverse=True)
     return [_candidate_out(r) for r in rows]
 
 
