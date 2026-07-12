@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.app_setting import AppSetting
 from app.models.deletion_log import DeletionLog
 from app.models.media import MediaItem
-from app.schemas.media import MediaItemOut, MediaStats, DeletionLogOut, DeletionStats, DeletionPreview
+from app.schemas.media import MediaItemOut, MediaStats, DeletionLogOut, DeletionStats, DeletionPreview, DuplicateGroup
 from app.schemas.settings import ScoringWeights, CleanupSettings
 from app.services.deleter import propagate_and_delete
 
@@ -59,6 +59,18 @@ def list_media(
     col = getattr(MediaItem, sort_by, MediaItem.score)
     q = q.order_by(col.desc() if order == "desc" else col.asc())
     return q.offset(offset).limit(limit).all()
+
+
+@router.get("/duplicates", response_model=list[DuplicateGroup])
+def list_duplicates(db: Session = Depends(get_db)):
+    """LIB-03: groups of MediaItem rows that look like the same title living
+    as separate Plex library entries (a stale grab left after an upgrade, a
+    re-add, a duplicate import) — distinct from the score-sorted Deletion
+    Suggestions flow. Read-only; actual removal goes through the existing
+    preview-delete / batch-delete endpoints with whichever ids the caller
+    picks to keep vs. delete."""
+    from app.services.duplicate_finder import find_duplicate_groups
+    return find_duplicate_groups(db)
 
 
 @router.get("/stats", response_model=MediaStats)

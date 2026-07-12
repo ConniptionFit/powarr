@@ -90,3 +90,36 @@ class DeletionPreview(BaseModel):
     soft_delete_days: int
     would_pend: bool  # true when this delete would soft-delete (pending window) rather than delete immediately
     protected_count: int  # items in this selection currently protected by any flag (Seerr/Tautulli/seeding)
+
+
+class DuplicateGroupItem(BaseModel):
+    """LIB-03 — one MediaItem row within a duplicate group."""
+    id: int
+    plex_rating_key: str
+    title: str
+    library_section: Optional[str] = None
+    file_path: Optional[str] = None
+    file_size: int = 0
+    added_at: Optional[datetime] = None
+    score: float = 0.0
+
+    model_config = {"from_attributes": True}
+
+
+class DuplicateGroup(BaseModel):
+    """LIB-03 — a set of MediaItem rows that look like the same logical title
+    living as separate Plex library entries. `suggested_keep_id` defaults to
+    the largest file in the group (Powarr's only quality proxy without an
+    extra *arr lookup); the user picks what actually gets deleted.
+    `has_size_signal` is False for container types (show/artist, often
+    album) whose file_size/file_path live on child episodes/tracks rather
+    than the parent row — every member is 0 there, so `suggested_keep_id`
+    is just a deterministic tie-break, not a real recommendation."""
+    media_type: str
+    title: str
+    year: Optional[int] = None
+    items: list[DuplicateGroupItem]
+    suggested_keep_id: int
+    has_size_signal: bool = True
+    total_size_bytes: int
+    reclaimable_bytes: int

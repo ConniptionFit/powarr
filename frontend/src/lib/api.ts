@@ -98,6 +98,29 @@ export interface DeletionPreview {
   protected_count: number;
 }
 
+// LIB-03 — duplicate & upgrade hunter.
+export interface DuplicateGroupItem {
+  id: number;
+  plex_rating_key: string;
+  title: string;
+  library_section: string | null;
+  file_path: string | null;
+  file_size: number;
+  added_at: string | null;
+  score: number;
+}
+
+export interface DuplicateGroup {
+  media_type: string;
+  title: string;
+  year: number | null;
+  items: DuplicateGroupItem[];
+  suggested_keep_id: number;
+  has_size_signal: boolean;
+  total_size_bytes: number;
+  reclaimable_bytes: number;
+}
+
 // LIB-02 — explicit Sonarr episode delete policy modes, only meaningful when
 // every previewed item is a Sonarr-linked episode.
 export type EpisodeDeleteMode = "episode_files" | "unmonitor_season" | "unmonitor_series" | "remove_from_sonarr";
@@ -126,6 +149,7 @@ export const mediaApi = {
       method: "POST", body: JSON.stringify(ids),
     }),
   libraries: () => req<string[]>("/media/libraries"),
+  duplicates: () => req<DuplicateGroup[]>("/media/duplicates"),
   restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
   explain: (id: number, force = false) =>
     req<{ rationale: string | null; message: string | null; cached: boolean }>(
