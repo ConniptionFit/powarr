@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity, AlertTriangle, Shuffle, ChevronRight } from "lucide-react";
-import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes, parseApiDate, type DepHealth } from "../../lib/api";
+import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes, parseApiDate, type DepHealth, type ImportFunnel } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
 
 function PipelineChip({ icon: Icon, label, count, color, onClick }: {
@@ -58,6 +58,63 @@ function PipelineFlowCard({ queueCount, reviewCount, autoResolvedCount }: {
           count={autoResolvedCount}
           color="bg-green-900/40 text-green-300"
         />
+      </div>
+    </div>
+  );
+}
+
+// AN-01 — per-*arr-app funnel: how many releases each app failed to import
+// this week, out of how many total, and why (queue-stuck sub-state or Powarr
+// orphaned). Complements PipelineFlowCard's cross-app snapshot above with the
+// per-app breakdown and historical rate the item specifically asked for.
+function FunnelByAppCard({ funnel }: { funnel: ImportFunnel | undefined }) {
+  if (!funnel || funnel.by_app.length === 0) return null;
+  return (
+    <div className="mt-4 bg-surface-raised rounded-xl border border-purple-900/30 p-5">
+      <p className="text-slate-400 text-xs uppercase tracking-wider mb-3">
+        Import Funnel — last {funnel.days ?? "all-time"} {funnel.days ? "days" : ""}
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-slate-500 text-left text-xs uppercase tracking-wider">
+              <th className="pb-2 pr-4 font-medium">App</th>
+              <th className="pb-2 pr-4 font-medium text-right">Total</th>
+              <th className="pb-2 pr-4 font-medium text-right">Accepted/Auto</th>
+              <th className="pb-2 pr-4 font-medium text-right">Verified</th>
+              <th className="pb-2 pr-4 font-medium text-right" title="Rejected + Orphaned + Resolve-Failed">Failed</th>
+              <th className="pb-2 font-medium">Top failure reason</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-purple-900/10">
+            {funnel.by_app.map(g => {
+              const topReason = Object.entries(g.failure_reason_breakdown)
+                .sort((a, b) => b[1] - a[1])[0];
+              return (
+                <tr key={g.app}>
+                  <td className="py-2 pr-4 text-white font-medium capitalize">{g.app}</td>
+                  <td className="py-2 pr-4 text-right text-slate-300">{g.total}</td>
+                  <td className="py-2 pr-4 text-right text-slate-300">{g.accepted_or_auto}</td>
+                  <td className="py-2 pr-4 text-right text-slate-300">
+                    {g.verified}
+                    {g.verified_rate != null && (
+                      <span className="text-slate-600 text-xs ml-1">({Math.round(g.verified_rate * 100)}%)</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 text-right">
+                    <span className={g.failed > 0 ? "text-red-300" : "text-slate-300"}>
+                      {g.failed}/{g.total}
+                      {g.failed_rate != null && ` (${Math.round(g.failed_rate * 100)}%)`}
+                    </span>
+                  </td>
+                  <td className="py-2 text-slate-400 text-xs">
+                    {topReason ? `${topReason[0]} (${topReason[1]})` : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -169,6 +226,13 @@ export default function Dashboard() {
   const { data: importTrends, isError: trendsErr } = useQuery({
     queryKey: ["import-trends"],
     queryFn: () => importsApi.trends(30),
+  });
+
+  // AN-01 — per-app funnel, 7-day window to match the "this week" framing
+  // already used elsewhere on this page (auto_resolved_7d).
+  const { data: importFunnel, isError: funnelErr } = useQuery({
+    queryKey: ["import-funnel"],
+    queryFn: () => importsApi.funnel(7),
   });
 
   const { data: deletionStats, isError: delErr, isLoading: delLoading } = useQuery({
@@ -393,6 +457,8 @@ export default function Dashboard() {
           autoResolvedCount={importErr ? null : importStats?.auto_resolved_7d ?? 0}
         />
       )}
+
+      {!isLoading && !funnelErr && <FunnelByAppCard funnel={importFunnel} />}
     </div>
   );
 }

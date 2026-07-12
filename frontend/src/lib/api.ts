@@ -486,11 +486,36 @@ export interface ImportTrends {
   resolved: number[];
 }
 
+// AN-01 (v0.70.0) — per-source_app funnel stats
+export interface ImportFunnelGroup {
+  app: string;
+  total: number;
+  suggested: number;
+  accepted: number;
+  auto_resolved: number;
+  accepted_or_auto: number;
+  verified: number;
+  verified_rate: number | null;
+  rejected: number;
+  orphaned: number;
+  resolve_failed: number;
+  closed_external: number;
+  failed: number;
+  failed_rate: number | null;
+  failure_reason_breakdown: Record<string, number>;
+}
+export interface ImportFunnel {
+  days: number | null;
+  overall: Omit<ImportFunnelGroup, "app">;
+  by_app: ImportFunnelGroup[];
+}
+
 export const importsApi = {
   list: (status?: string) =>
     req<FailedImport[]>(`/imports${status ? `?status=${status}` : ""}`),
   stats: () => req<ImportStats>("/imports/stats"),
   trends: (days = 30) => req<ImportTrends>(`/imports/trends?days=${days}`),
+  funnel: (days?: number) => req<ImportFunnel>(`/imports/funnel${days ? `?days=${days}` : ""}`),
   exportCsv: (status?: string) =>
     downloadCsv(`/imports/export.csv${status ? `?status=${status}` : ""}`),
   autoEligible: () => req<AutoEligible>("/imports/auto-eligible"),

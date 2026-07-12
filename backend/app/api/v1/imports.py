@@ -319,6 +319,15 @@ def import_trends(db: Session = Depends(get_db), days: int = Query(30, ge=7, le=
     return {"days": days, "labels": labels, "new": new_vals, "resolved": res_vals}
 
 
+@router.get("/funnel")
+def import_funnel(db: Session = Depends(get_db), days: Optional[int] = Query(None, ge=1, le=365)):
+    """AN-01 — per-source_app funnel (suggested -> accepted/auto -> verified)
+    plus a failure-reason breakdown, for the Overview "X failed (Y%) this
+    week" readout. Omit days for all-time."""
+    from app.services.import_funnel import compute_import_funnel
+    return compute_import_funnel(db, days)
+
+
 @router.get("/auto-eligible", response_model=AutoEligibleOut)
 def auto_eligible(db: Session = Depends(get_db)):
     """IDs eligible for the Process N Items button (v0.28.0).
