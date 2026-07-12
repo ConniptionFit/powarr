@@ -1341,11 +1341,17 @@ def _close_stale_rows(db, app_name: str, queue: list[dict], summary: dict,
     db.commit()
 
 
-async def _verify_resolved(db, app_name: str, client, cfg: ImportMatchingSettings, summary: dict) -> None:
+async def _verify_resolved(db, app_name: str, client, cfg: ImportMatchingSettings, summary: dict,
+                           history: list[dict] | None = None) -> None:
     """Confirm pushed imports actually landed: look for an import event in recent history.
     Unverified past the timeout → resolve_failed (surfaced back into triage), unless the
     download is already gone from every download client — then orphan it instead of
-    bouncing a dead push back into triage."""
+    bouncing a dead push back into triage.
+
+    SCAL-03: `history` is optional so callers with their own already-fetched full-app
+    history (unfiltered, eventType=None — a superset of this function's needs) can pass
+    it straight through and skip a second get_history() round-trip for the same app in
+    the same scan cycle. Falls back to fetching its own when not provided."""
     pending = db.query(FailedImport).filter(
         FailedImport.source_app == app_name,
         FailedImport.status.in_(("auto_resolved", "accepted")),
@@ -1353,11 +1359,12 @@ async def _verify_resolved(db, app_name: str, client, cfg: ImportMatchingSetting
     ).all()
     if not pending:
         return
-    try:
-        history = await client.get_history(event_type=None)
-    except Exception as e:
-        logger.warning(f"Import verify: {app_name} history fetch failed: {e}")
-        return
+    if history is None:
+        try:
+            history = await client.get_history(event_type=None)
+        except Exception as e:
+            logger.warning(f"Import verify: {app_name} history fetch failed: {e}")
+            return
     imported_ids = {h.get("downloadId") for h in history
                     if "imported" in str(h.get("eventType", "")).lower() and h.get("downloadId")}
     now = datetime.utcnow()
@@ -1491,20 +1498,36 @@ async def _scan_once_inner(task_id: str) -> dict:
                 continue
 
             _close_stale_rows(db, app_name, queue, summary, include_stalled=cfg.include_stalled)
-            await _verify_resolved(db, app_name, client, cfg, summary)
 
             stuck = [rec for rec in queue if _is_stuck(rec, cfg.include_stalled)]
             summary["scanned"].append({"app": app_name, "queue": len(queue), "stuck": len(stuck)})
+
+            # SCAL-03: one unfiltered history fetch per app per cycle serves both
+            # _verify_resolved (needs every event type) and the stuck-item matcher
+            # below (needs "grabbed" events only, client-filtered from the same
+            # list) instead of two separate get_history() round-trips to the *arr.
+            needs_verify = db.query(FailedImport).filter(
+                FailedImport.source_app == app_name,
+                FailedImport.status.in_(("auto_resolved", "accepted")),
+                FailedImport.verified.is_(None),
+            ).first() is not None
+            history: list[dict] = []
+            if needs_verify or stuck:
+                try:
+                    history = await client.get_history(event_type=None)
+                    circuit_breaker.record_result(app_name, True)
+                except Exception as e:
+                    circuit_breaker.record_result(app_name, False, str(e))
+                    logger.warning(f"Import scan: {app_name} history fetch failed: {e}")
+                    history = []
+
+            if needs_verify:
+                await _verify_resolved(db, app_name, client, cfg, summary, history=history)
+
             if not stuck:
                 continue
 
-            try:
-                history = await client.get_history()
-                circuit_breaker.record_result(app_name, True)
-            except Exception as e:
-                circuit_breaker.record_result(app_name, False, str(e))
-                logger.warning(f"Import scan: {app_name} history fetch failed: {e}")
-                history = []
+            grabbed_history = [h for h in history if h.get("eventType") == "grabbed"]
             _, lib_method, _ = APP_FIELDS[app_name]
             try:
                 library = await getattr(client, lib_method)()
@@ -1540,7 +1563,7 @@ async def _scan_once_inner(task_id: str) -> dict:
                     summary["skipped_existing"] += 1
                     continue
 
-                match = await _match_record(app_name, rec, history, library, cfg, ollama,
+                match = await _match_record(app_name, rec, grabbed_history, library, cfg, ollama,
                                             queue=queue, client=client)
                 if match["confidence"] < cfg.low_confidence_floor:
                     logger.info(
