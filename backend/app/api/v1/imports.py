@@ -9,7 +9,7 @@ from typing import Optional
 from app.database import get_db, SessionLocal
 from app.models.failed_import import FailedImport
 from app.models.integration import Integration
-from app.schemas.failed_import import FailedImportOut, ImportStats, AutoEligibleOut
+from app.schemas.failed_import import FailedImportOut, ImportStats, AutoEligibleOut, RecentDownloadOut
 from app.services import import_matcher
 from app.services.import_matcher import scan_once, _get_client
 from app.services.auto_eligible import (
@@ -98,6 +98,42 @@ def list_imports(
     elif status:
         q = q.filter(FailedImport.status == status)
     return q.order_by(FailedImport.created_at.desc()).offset(offset).limit(limit).all()
+
+
+@router.get("/recent-downloads", response_model=list[RecentDownloadOut])
+async def recent_downloads(
+    db: Session = Depends(get_db),
+    source_app: Optional[str] = Query(None, description="Narrow to one *arr app; all enabled apps otherwise"),
+    search: Optional[str] = Query(None, description="Case-insensitive match against release title or library title"),
+    limit: int = Query(100, le=500),
+):
+    """FI-09 — browse/search recently grabbed downloads (history-based, all
+    enabled *arr apps), independent of stuck-import detection. Distinct from
+    Scan Now, which only surfaces items the queue/history heuristics flag as
+    stuck."""
+    from app.services.recent_downloads import list_recent_downloads
+    return await list_recent_downloads(db, source_app=source_app, search=search, max_records=limit)
+
+
+@router.post("/recent-downloads/reimport")
+async def force_reimport(payload: dict = Body(...), db: Session = Depends(get_db)):
+    """FI-09 — force a re-import of a specific past grab, chosen from
+    /recent-downloads rather than the stuck-import triage table. Goes through
+    the exact same push_import_command() path as Accept (downloadId-only
+    manual-import GET, library-folder guard) — this endpoint only supplies a
+    different source for download_id/matched_id, it does not bypass any of
+    those safety rules. Never writes a FailedImport row."""
+    source_app = payload.get("source_app")
+    download_id = payload.get("download_id")
+    matched_id = payload.get("matched_id")
+    if not source_app or not download_id or not matched_id:
+        raise HTTPException(status_code=400, detail="source_app, download_id, and matched_id are required")
+    row = db.query(Integration).filter_by(name=source_app, enabled=True).first()
+    if not row:
+        raise HTTPException(status_code=400, detail=f"{source_app} integration not enabled")
+    client = _get_client(source_app, row)
+    result = await client.push_import_command(download_id, matched_id)
+    return result
 
 
 @router.get("/stats", response_model=ImportStats)

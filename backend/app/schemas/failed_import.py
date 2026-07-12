@@ -60,3 +60,15 @@ class AutoEligibleOut(BaseModel):
     threshold: float
     count: int
     ids: list[int] = []
+
+
+class RecentDownloadOut(BaseModel):
+    """FI-09 — one row per distinct downloadId recently grabbed by an *arr
+    app, independent of stuck-import detection."""
+    source_app: str
+    source_title: str
+    download_id: str
+    matched_id: Optional[int] = None
+    matched_title: Optional[str] = None
+    event_date: Optional[str] = None
+    still_in_queue: bool = False

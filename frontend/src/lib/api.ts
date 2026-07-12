@@ -501,7 +501,31 @@ export const importsApi = {
     req<{ id: number; overrides: Record<string, unknown> }>(`/imports/${id}/file-mapping`, {
       method: "PUT", body: JSON.stringify({ path, episode_id: episodeId, season, episode, title }),
     }),
+  // FI-09 — browse/search recent grabs across all enabled *arr apps + force
+  // a one-shot re-import, independent of stuck-import detection (Scan Now).
+  recentDownloads: (params?: { source_app?: string; search?: string; limit?: number }) => {
+    const qs = params
+      ? "?" + new URLSearchParams(Object.entries(params).filter(([, v]) => v != null) as string[][]).toString()
+      : "";
+    return req<RecentDownload[]>(`/imports/recent-downloads${qs}`);
+  },
+  forceReimport: (sourceApp: string, downloadId: string, matchedId: number) =>
+    req<{ ok: boolean; imported?: number; skipped?: number; message: string; reason?: string }>(
+      "/imports/recent-downloads/reimport", {
+        method: "POST",
+        body: JSON.stringify({ source_app: sourceApp, download_id: downloadId, matched_id: matchedId }),
+      }),
 };
+
+export interface RecentDownload {
+  source_app: string;
+  source_title: string;
+  download_id: string;
+  matched_id: number | null;
+  matched_title: string | null;
+  event_date: string | null;
+  still_in_queue: boolean;
+}
 
 // --- Active processes (tracked background tasks) ---
 export interface TaskProgress {

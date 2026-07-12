@@ -42,6 +42,7 @@ export const AREAS: AreaDef[] = [
     base: "/imports",
     screens: [
       { path: "/imports", label: "Imports" },
+      { path: "/imports/recent-downloads", label: "Recent Downloads" },
     ],
   },
   {
