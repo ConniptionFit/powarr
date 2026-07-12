@@ -202,3 +202,83 @@ class PlexIntegration(BaseIntegration):
                 return [str(m["ratingKey"]) for m in meta if m.get("ratingKey")]
         except Exception:
             return []
+
+    async def find_artist(self, name: str) -> dict | None:
+        """AD-14: best-effort live lookup of an artist's own ratingKey by name —
+        needed as the seed for the two artist-level similarity calls below, since
+        the locally-synced MediaItem table only stores track-level ratingKeys.
+        Walks each "artist"-type library section with Plex's own title filter;
+        returns the first case-insensitive exact match, or None (not configured,
+        not found, or any request error — never raises)."""
+        if not name:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+                libs_r = await client.get(f"{self.url}/library/sections", headers=headers)
+                libs_r.raise_for_status()
+                sections = libs_r.json()["MediaContainer"].get("Directory", [])
+                target = name.strip().lower()
+                for section in sections:
+                    if section.get("type") != "artist":
+                        continue
+                    r = await client.get(
+                        f"{self.url}/library/sections/{section['key']}/all",
+                        headers=headers, params={"type": 8, "title": name})
+                    if r.status_code != 200:
+                        continue
+                    for m in (r.json().get("MediaContainer") or {}).get("Metadata") or []:
+                        if (m.get("title") or "").strip().lower() == target and m.get("ratingKey"):
+                            return {"ratingKey": str(m["ratingKey"]), "title": m["title"]}
+            return None
+        except Exception:
+            return None
+
+    async def sonically_similar_artists(self, rating_key: str, *, limit: int = 15) -> list[str]:
+        """AD-14: artist-level Sonic Analysis neighbors via the same /nearest
+        endpoint used for tracks — Plex's own "Sonically Similar" tab on an
+        Artist page uses this call scoped to the artist's own ratingKey rather
+        than a track's. Unverified against a live server (no safe way to test
+        without a real Plex token in this environment) — needs a live check
+        after deploy; fails soft to [] on any error or unexpected shape so a
+        wrong assumption here just means zero Plex-sonic badges, nothing breaks."""
+        if not rating_key:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+                r = await client.get(
+                    f"{self.url}/library/metadata/{rating_key}/nearest",
+                    headers=headers, params={"limit": limit})
+                if r.status_code != 200:
+                    return []
+                meta = (r.json().get("MediaContainer") or {}).get("Metadata") or []
+                return [m["title"] for m in meta
+                        if m.get("title") and m.get("type") in (None, "artist")]
+        except Exception:
+            return []
+
+    async def related_artists(self, rating_key: str, *, limit: int = 15) -> list[str]:
+        """AD-14: Plex's own "Similar Artists" / Related hub — metadata-agent-driven
+        recommendations, distinct from Sonic Analysis. Parses every Hub's Metadata
+        entries and keeps artist-type results only (defensive against hub-label
+        variance across Plex Media Server versions). Same unverified-live caveat
+        as sonically_similar_artists above; fails soft to [] on any error."""
+        if not rating_key:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+                r = await client.get(
+                    f"{self.url}/library/metadata/{rating_key}/related", headers=headers)
+                if r.status_code != 200:
+                    return []
+                hubs = (r.json().get("MediaContainer") or {}).get("Hub") or []
+                names: list[str] = []
+                for hub in hubs:
+                    for m in hub.get("Metadata") or []:
+                        if m.get("type") == "artist" and m.get("title"):
+                            names.append(m["title"])
+                return names[:limit]
+        except Exception:
+            return []

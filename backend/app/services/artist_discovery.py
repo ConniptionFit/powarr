@@ -149,6 +149,14 @@ def _lidarr_client(db):
     return _get_client(row)
 
 
+def _plex_client(db):
+    row = db.query(Integration).filter_by(name="plex", enabled=True).first()
+    if not row:
+        return None
+    from app.api.v1.integrations import _get_client
+    return _get_client(row)
+
+
 def _plex_artist_names(db) -> set[str]:
     """Normalized artist names actually present in the locally-synced Plex library
     (MediaItem tracks, from the regular Plex sync) — a real "already own this in
@@ -963,8 +971,72 @@ async def search_related_artists(db, artist: str, limit: int = 50) -> dict[str, 
             "already_owned": already_owned,
             "image_url": enrichment.get("image_url"), "bio": enrichment.get("bio"),
             "genres": clean_tags(enrichment.get("genres")), "years_active": enrichment.get("years_active"),
+            "similarity_sources": ["lastfm"],
         })
+
+    await _augment_with_plex_similarity(db, artist, results, lidarr_by_name, plex_names)
     return {"ok": True, "message": f"{len(results)} related artist(s) for '{artist}'", "results": results}
+
+
+async def _augment_with_plex_similarity(db, seed_artist: str, results: list[dict],
+                                         lidarr_by_name: dict, plex_names: set[str]) -> None:
+    """AD-14: best-effort second/third similarity source on top of Last.fm —
+    Plex's own Sonic Analysis and metadata-based "Related" recommendations for
+    the seed artist, badged onto matching results (or added as new plex-only
+    entries when Plex surfaces a name Last.fm didn't). Only contributes anything
+    when the seed artist is actually found in the user's Plex library — Related
+    Artists is meant to work for artists you don't own, so a miss here just
+    means no Plex badges, never an error surfaced to the user. The two Plex
+    integration calls are unverified against a live server as of v0.49.0 (see
+    integrations/plex.py) — if the assumed response shape is wrong they simply
+    return [] and this function is a no-op."""
+    plex = _plex_client(db)
+    if not plex:
+        return
+    try:
+        seed = await plex.find_artist(seed_artist)
+    except Exception:
+        seed = None
+    if not seed:
+        return
+
+    try:
+        sonic_names = await plex.sonically_similar_artists(seed["ratingKey"])
+    except Exception:
+        sonic_names = []
+    try:
+        related_names = await plex.related_artists(seed["ratingKey"])
+    except Exception:
+        related_names = []
+    if not sonic_names and not related_names:
+        return
+
+    seed_norm = _norm_artist(seed_artist)
+    by_name_norm = {_norm_artist(r["artist_name"]): r for r in results}
+    for source_key, names in (("plex_sonic", sonic_names), ("plex_similar", related_names)):
+        for pname in names:
+            pname = (pname or "").strip()
+            if not pname:
+                continue
+            norm = _norm_artist(pname)
+            if norm == seed_norm:
+                continue  # Plex sometimes includes the seed itself in these lists
+            existing = by_name_norm.get(norm)
+            if existing:
+                if source_key not in existing["similarity_sources"]:
+                    existing["similarity_sources"].append(source_key)
+                continue
+            already_owned = bool(lidarr_by_name.get(norm)) or norm in plex_names
+            enrichment = await _enrich_candidate(db, None, pname)
+            new_entry = {
+                "musicbrainz_id": None, "artist_name": pname, "match_score": 0.0,
+                "already_owned": already_owned,
+                "image_url": enrichment.get("image_url"), "bio": enrichment.get("bio"),
+                "genres": clean_tags(enrichment.get("genres")), "years_active": enrichment.get("years_active"),
+                "similarity_sources": [source_key],
+            }
+            results.append(new_entry)
+            by_name_norm[norm] = new_entry
 
 
 async def add_related_artist(db, mbid: str | None, name: str) -> dict[str, Any]:

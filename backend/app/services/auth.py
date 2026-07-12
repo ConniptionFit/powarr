@@ -32,7 +32,13 @@ _CACHE_TTL = 10
 
 def default_config() -> dict:
     return {
-        "enabled": False,
+        "enabled": True,  # SEC-A-01 (v0.49.0, user-confirmed): fresh installs only —
+        # existing DBs keep whatever's already stored, never force-migrated (no safe
+        # way to tell "user left it off" from "old default applied" for a field that
+        # has always existed). lan_bypass + DEFAULT_LAN_CIDRS below are the guard
+        # against lockout: password auth is required for anything off-LAN, but
+        # 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, ::1/128 always
+        # pass straight through.
         "username": "",
         "password_hash": "",
         "totp_enabled": False,

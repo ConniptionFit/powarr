@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Search, Users, Plus, CircleCheck } from "lucide-react";
 import { req } from "../../lib/api";
-import ArtistCard from "../../components/ArtistCard";
+import ArtistCard, { SourceBadge } from "../../components/ArtistCard";
 
 interface RelatedArtist {
   musicbrainz_id: string | null;
@@ -13,7 +13,15 @@ interface RelatedArtist {
   bio: string | null;
   genres: string[];
   years_active: string | null;
+  similarity_sources: string[];
 }
+
+// AD-14: one badge per contributing source, each result gets 1-3 of these.
+const SOURCE_BADGES: Record<string, SourceBadge> = {
+  lastfm: { label: "Last.fm", className: "bg-red-900/40 text-red-300" },
+  plex_sonic: { label: "Sonically Similar", className: "bg-amber-900/40 text-amber-300" },
+  plex_similar: { label: "Plex Similar", className: "bg-teal-900/40 text-teal-300" },
+};
 
 interface SearchResult {
   ok: boolean;
@@ -48,6 +56,7 @@ function RelatedArtistCard({ a, onAdd, adding, added }: {
       bio={a.bio}
       genres={a.genres}
       subtitle={a.match_score > 0 ? `${Math.round(a.match_score * 100)}% sonic/tag match` : "Related artist"}
+      sourceBadges={(a.similarity_sources || []).map(s => SOURCE_BADGES[s]).filter(Boolean)}
       actions={
         owned ? (
           <span className="flex items-center gap-1 text-xs text-slate-500 px-2 py-1" title="Already in your library">

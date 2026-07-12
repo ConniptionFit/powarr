@@ -25,7 +25,12 @@ function ArtistAvatar({ url, name }: { url: string | null; name: string }) {
   );
 }
 
-export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, era, subtitle, actions }: {
+export interface SourceBadge {
+  label: string;
+  className: string;
+}
+
+export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, era, subtitle, actions, sourceBadges }: {
   name: string;
   yearsActive?: string | null;
   imageUrl: string | null;
@@ -34,6 +39,7 @@ export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, e
   era?: string | null;
   subtitle: string;
   actions: React.ReactNode;
+  sourceBadges?: SourceBadge[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const bioText = bio || "";
@@ -50,7 +56,18 @@ export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, e
               {name}
               {yearsActive && <span className="text-slate-500 font-normal"> · {yearsActive}</span>}
             </p>
-            <p className="text-xs text-slate-500">{subtitle}</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <p className="text-xs text-slate-500">{subtitle}</p>
+              {sourceBadges && sourceBadges.length > 0 && (
+                <span className="flex gap-1">
+                  {sourceBadges.map(b => (
+                    <span key={b.label} className={`text-[10px] px-1.5 py-0.5 rounded-full leading-none ${b.className}`}>
+                      {b.label}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex gap-1 shrink-0">{actions}</div>
         </div>

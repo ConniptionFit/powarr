@@ -147,6 +147,87 @@ class SearchRelatedArtistsTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(owned["match_score"], 0.9)
 
 
+class _FakePlex:
+    def __init__(self, seed=None, sonic=None, related=None):
+        self._seed = seed
+        self._sonic = sonic or []
+        self._related = related or []
+
+    async def find_artist(self, name):
+        return self._seed
+
+    async def sonically_similar_artists(self, rating_key, **kwargs):
+        return self._sonic
+
+    async def related_artists(self, rating_key, **kwargs):
+        return self._related
+
+
+class PlexSimilarityAugmentTests(unittest.IsolatedAsyncioTestCase):
+    """AD-14: Plex Sonic Analysis + Related-hub augmentation on top of Last.fm."""
+
+    def setUp(self):
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+    async def _search(self, plex, lastfm_results=None):
+        lastfm = AsyncMock()
+        lastfm.get_similar_artists = AsyncMock(return_value=lastfm_results or [
+            {"name": "New Artist", "mbid": "mbid-new", "match": "0.5"},
+        ])
+        with patch("app.services.artist_discovery._lastfm_client", return_value=lastfm), \
+             patch("app.services.artist_discovery._lidarr_artist_index",
+                   new=AsyncMock(return_value=({}, {}))), \
+             patch("app.services.artist_discovery._plex_client", return_value=plex), \
+             patch("app.services.artist_discovery._enrich_candidate",
+                   new=AsyncMock(return_value={"image_url": None, "bio": None,
+                                               "genres": [], "years_active": None})):
+            return await search_related_artists(self.db, "Seed Artist")
+
+    async def test_no_plex_configured_leaves_lastfm_only_sources(self):
+        result = await self._search(plex=None)
+        self.assertEqual(result["results"][0]["similarity_sources"], ["lastfm"])
+
+    async def test_seed_artist_not_found_in_plex_is_a_noop(self):
+        plex = _FakePlex(seed=None, sonic=["Some Other Artist"])
+        result = await self._search(plex=plex)
+        self.assertEqual(result["results"][0]["similarity_sources"], ["lastfm"])
+        self.assertEqual(len(result["results"]), 1)
+
+    async def test_sonic_match_on_existing_result_adds_source_badge(self):
+        plex = _FakePlex(seed={"ratingKey": "123", "title": "Seed Artist"},
+                         sonic=["New Artist"])
+        result = await self._search(plex=plex)
+        self.assertEqual(len(result["results"]), 1)
+        self.assertIn("plex_sonic", result["results"][0]["similarity_sources"])
+        self.assertIn("lastfm", result["results"][0]["similarity_sources"])
+
+    async def test_related_hub_new_name_creates_plex_only_entry(self):
+        plex = _FakePlex(seed={"ratingKey": "123", "title": "Seed Artist"},
+                         related=["Plex Only Artist"])
+        result = await self._search(plex=plex)
+        self.assertEqual(len(result["results"]), 2)
+        plex_only = next(r for r in result["results"] if r["artist_name"] == "Plex Only Artist")
+        self.assertEqual(plex_only["similarity_sources"], ["plex_similar"])
+        self.assertIsNone(plex_only["musicbrainz_id"])
+        self.assertEqual(plex_only["match_score"], 0.0)
+
+    async def test_seed_artist_itself_is_excluded_from_plex_results(self):
+        plex = _FakePlex(seed={"ratingKey": "123", "title": "Seed Artist"},
+                         sonic=["Seed Artist"])
+        result = await self._search(plex=plex)
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["artist_name"], "New Artist")
+
+    async def test_both_plex_sources_can_badge_the_same_new_entry(self):
+        plex = _FakePlex(seed={"ratingKey": "123", "title": "Seed Artist"},
+                         sonic=["Plex Artist"], related=["Plex Artist"])
+        result = await self._search(plex=plex)
+        plex_entry = next(r for r in result["results"] if r["artist_name"] == "Plex Artist")
+        self.assertEqual(set(plex_entry["similarity_sources"]), {"plex_sonic", "plex_similar"})
+
+
 class AddRelatedArtistTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         engine = create_engine("sqlite://")

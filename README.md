@@ -165,6 +165,9 @@ already-owned artists are flagged rather than hidden, and anything new can be ad
 Lidarr with one click, no review-queue step. **v0.49.0**: a **hide already-owned artists** toggle
 (checked by default) declutters the results down to net-new candidates, and a **Load more**
 button pages through additional matches (50 at a time) instead of a fixed 15-result cap.
+**v0.49.1**: results also pull from Plex's own **Sonically Similar** analysis and **Similar
+Artists** recommendations (in addition to Last.fm) when the seed artist is in your Plex library,
+with a colored badge per source on each result card so you can see which service(s) surfaced it.
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
 **drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is
@@ -182,7 +185,7 @@ the playlist's max size; never changes which artists are included, only which of
 | Reverse-proxied *arr apps | Include the base path in the URL (`http://host:8989/sonarr`); redirects are followed either way |
 | Download clients | qBittorrent (v0.6.0): dedicated **Username/Password** fields (WebUI credentials; SID session cookie handled automatically, works on qBittorrent 4.x and 5.x). Transmission: API key field takes `username:password` |
 | Auto-resolve | On by default since v0.43.0 — writes to live *arr apps; disable in Settings → Failed Import Matching. v0.44.0: gated by **Auto-Import Requires** (Either/Both/LLM/Algorithm) with separate algorithm (0.90) and LLM (0.80) thresholds |
-| Auth | Off by default; enable in Settings → Security. LAN CIDRs bypass login; TOTP works with any authenticator app |
+| Auth | On by default since v0.49.1 for fresh installs (existing installs keep whatever they had — never force-migrated); disable in Settings → Security if unwanted. LAN CIDRs (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `127.0.0.0/8`, `::1/128`) bypass login by default so enabling it can't lock out local access; TOTP works with any authenticator app |
 | Integration secrets | API keys and download-client passwords are **write-only** (v0.23.0): the API never returns a stored secret, so the Integrations form shows a "saved — leave blank to keep" placeholder. Leave a secret field blank to keep the current value; type a new one only to change it |
 | API | Everything at `/api/v1/*`, interactive docs at `/api/docs` |
 | Automated backups | The image now installs `postgresql-client-16` (v0.26.0, matched to this deployment's Postgres 16 — pulled from the PGDG apt repo since Debian bookworm's own repo ships v15) so scheduled `pg_dump` can run inside the container |

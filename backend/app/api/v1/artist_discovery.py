@@ -188,6 +188,7 @@ class RelatedArtistOut(BaseModel):
     bio: Optional[str] = None
     genres: list[str] = []
     years_active: Optional[str] = None
+    similarity_sources: list[str] = ["lastfm"]  # AD-14: "lastfm" | "plex_sonic" | "plex_similar"
 
 
 class RelatedSearchOut(BaseModel):
