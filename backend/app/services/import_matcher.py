@@ -421,6 +421,14 @@ def score_pack_match(title_sim: float, target_seasons: set | None, complete: boo
                      f"{', '.join(str(s) for s in outside)}) — hard penalty")
     elif mapped_episodes is not None and total_episodes:
         ratio = mapped_episodes / total_episodes
+        # FI-02: some shows (e.g. Hey Arnold-style segmented/anthology numbering)
+        # have Sonarr aired-episode counts roughly double the actual downloadable
+        # unit count, so a genuinely complete pack still reads as ~50% covered.
+        # A numeric ratio can't safely tell that apart from a real half-downloaded
+        # season (both land at the same ratio) without risking false full-confidence
+        # on a truly partial pack, so this stays a rationale caveat, not a score
+        # change — triage-only, matches the item's own "harmless today" scope.
+        near_half = mapped_episodes >= 2 and 0.4 <= ratio <= 0.6
         if ratio >= 0.9:
             numeric = 1.0
             parts.append(f"{mapped_episodes}/{total_episodes} episodes of {label} present in the "
@@ -431,6 +439,10 @@ def score_pack_match(title_sim: float, target_seasons: set | None, complete: boo
         else:
             numeric = 0.5
             parts.append(f"sparse pack coverage ({mapped_episodes}/{total_episodes} episodes of {label})")
+        if near_half:
+            parts.append(f"coverage sits near 50% ({mapped_episodes}/{total_episodes}) — some shows "
+                         f"double-count aired episodes (segmented/anthology numbering); this pack "
+                         f"may actually be complete, verify manually before assuming it's partial")
     elif sibling_seasons:
         numeric = 0.75
         parts.append(f"{len(sibling_seasons)} queue record(s) map into {label} (full coverage unverified)")

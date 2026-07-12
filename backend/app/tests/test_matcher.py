@@ -248,6 +248,30 @@ class TestScorePackMatch(unittest.TestCase):
         self.assertTrue(has_num)
         self.assertTrue(any("full coverage unverified" in p for p in parts))
 
+    def test_fi02_near_half_coverage_gets_double_count_caveat(self):
+        """FI-02: shows with segmented/anthology numbering (e.g. Hey Arnold) can
+        inflate Sonarr's aired-episode count ~2x, so a genuinely complete pack
+        still reads near 50%. This must not change the score (no safe way to
+        tell a real half-download apart from double-counted metadata from the
+        ratio alone) — just add a rationale caveat for the human reviewing it."""
+        score, has_num, parts, label = score_pack_match(
+            0.85, {1}, False, [1] * 10, mapped_episodes=10, total_episodes=20, cfg=CFG)
+        self.assertTrue(any("double-count aired episodes" in p for p in parts))
+        # score unchanged from the plain ratio=0.5 "partial" tier (0.75 numeric credit)
+        self.assertAlmostEqual(score, (CFG.title_weight * 0.85 + CFG.number_weight * 0.75)
+                               / (CFG.title_weight + CFG.number_weight), places=3)
+
+    def test_far_from_half_coverage_has_no_caveat(self):
+        score, has_num, parts, label = score_pack_match(
+            0.85, {1}, False, [1] * 18, mapped_episodes=18, total_episodes=20, cfg=CFG)
+        self.assertFalse(any("double-count aired episodes" in p for p in parts))
+
+    def test_near_half_with_too_few_mapped_has_no_caveat(self):
+        """Avoid a spurious caveat on a 1/2 pack — too little data to mean anything."""
+        score, has_num, parts, label = score_pack_match(
+            0.85, {1}, False, [1], mapped_episodes=1, total_episodes=2, cfg=CFG)
+        self.assertFalse(any("double-count aired episodes" in p for p in parts))
+
 
 class TestScoreEpisodeMatch(unittest.TestCase):
     def test_standard_title_and_numbers_match(self):
