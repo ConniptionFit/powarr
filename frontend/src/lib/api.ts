@@ -526,7 +526,30 @@ export const importsApi = {
     req<{ id: number; dismissed: boolean }>(`/imports/malformed-audit/${id}/dismiss`, { method: "POST" }),
   malformedAuditRunNow: () =>
     req<{ checked: number; flagged: number }>("/imports/malformed-audit/run", { method: "POST" }),
+  // LLM-06 — in-app accuracy dashboard, pre-aggregated from llm_match_log.
+  llmLogStats: (days?: number) =>
+    req<LlmAccuracyStats>(`/imports/llm-log/stats${days ? `?days=${days}` : ""}`),
+  exportLlmLogCsv: () => downloadCsv("/imports/llm-log/export.csv"),
 };
+
+export interface LlmLogGroupStats {
+  key: string;
+  total: number;
+  parse_ok_rate: number | null;
+  agree_rate: number | null;
+  enforced_rate: number | null;
+  avg_latency_ms: number | null;
+  outcome_agreement_rate: number | null;
+  outcome_sample_size: number;
+  resolution_breakdown: Record<string, number>;
+}
+
+export interface LlmAccuracyStats {
+  overall: LlmLogGroupStats;
+  by_source_app: LlmLogGroupStats[];
+  by_model: LlmLogGroupStats[];
+  by_scaffold_version: LlmLogGroupStats[];
+}
 
 export interface RecentDownload {
   source_app: string;

@@ -7,6 +7,7 @@ import Duplicates from "./pages/Library/Duplicates";
 import DeletionHistory from "./pages/Library/DeletionHistory";
 import MatchReview from "./pages/Imports/MatchReview";
 import RecentDownloads from "./pages/Imports/RecentDownloads";
+import LlmAccuracy from "./pages/Imports/LlmAccuracy";
 import ArtistDiscovery from "./pages/Music/ArtistDiscovery";
 import RelatedArtists from "./pages/Music/RelatedArtists";
 import Playlists from "./pages/Music/Playlists";
@@ -127,6 +128,7 @@ export default function App() {
 
               <Route path="/imports" element={<div className="p-4 sm:p-8"><MatchReview /></div>} />
               <Route path="/imports/recent-downloads" element={<div className="p-4 sm:p-8"><RecentDownloads /></div>} />
+              <Route path="/imports/llm-accuracy" element={<div className="p-4 sm:p-8"><LlmAccuracy /></div>} />
               {/* Redirect old /imports/queue URL for backwards compatibility */}
               <Route path="/imports/queue" element={<Navigate to="/imports" replace />} />
 

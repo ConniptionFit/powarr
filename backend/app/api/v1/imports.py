@@ -232,6 +232,18 @@ def export_imports_csv(
     )
 
 
+@router.get("/llm-log/stats")
+def llm_log_stats(db: Session = Depends(get_db), days: Optional[int] = Query(None, ge=1, le=365)):
+    """LLM-06 — in-app accuracy dashboard: parse_ok/agree/enforcement rates,
+    avg latency, and outcome-agreement (verdict vs. eventual accept/reject)
+    grouped by source_app/model/scaffold_version. `days` narrows to a recent
+    window; omitted = all retained rows (90-day/5k-row retention, see
+    services/llm_match_log.py). CSV export alone is raw rows for offline
+    replay — this is the same data pre-aggregated for at-a-glance tuning."""
+    from app.services.llm_match_log import compute_accuracy_stats
+    return compute_accuracy_stats(db, days=days)
+
+
 @router.get("/llm-log/export.csv")
 def export_llm_match_log_csv(
     db: Session = Depends(get_db),

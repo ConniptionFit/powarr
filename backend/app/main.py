@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.65.0", docs_url="/api/docs", openapi_url=None)
+app = FastAPI(title="Powarr", version="0.66.0", docs_url="/api/docs", openapi_url=None)
 
 # Paths that stay reachable without a session: the auth flow itself, the
 # health endpoint (Docker healthcheck probes from inside the container), and

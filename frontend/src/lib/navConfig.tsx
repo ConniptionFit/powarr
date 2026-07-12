@@ -43,6 +43,7 @@ export const AREAS: AreaDef[] = [
     screens: [
       { path: "/imports", label: "Imports" },
       { path: "/imports/recent-downloads", label: "Recent Downloads" },
+      { path: "/imports/llm-accuracy", label: "LLM Accuracy" },
     ],
   },
   {

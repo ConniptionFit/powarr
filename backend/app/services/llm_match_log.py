@@ -46,6 +46,91 @@ def record(db, *, failed_import_id: int | None, site: str, source_app: str,
         logger.info(f"LLM match log write failed (non-fatal): {e}")
 
 
+_GOOD_RESOLUTIONS = {"accepted", "auto_resolved"}
+# "orphaned" is deliberately NOT in here — real finding from testing this
+# against live data: the resolution reflects whether the download's files
+# were still there when the row closed, not whether the LLM's match
+# judgment was right. An orphaned row can happen after a perfectly correct
+# agree — the download client removed the torrent for reasons that have
+# nothing to do with match quality. Scoring it as "the LLM was wrong" would
+# conflate two unrelated failure modes and produce a misleading accuracy
+# number (an early version of this code did exactly that: 47 real logged
+# calls, 100% agree rate, but only an 8.5% "outcome match" — because 43 of
+# them were orphaned, not because the matches were bad).
+_BAD_RESOLUTIONS = {"rejected"}
+
+
+def _group_stats(rows: list[LlmMatchLog]) -> dict:
+    """LLM-06 — aggregate one group of log rows into the numbers the accuracy
+    dashboard shows. `outcome_agreement_rate` is the closest thing to a real
+    accuracy signal this app has: of calls with BOTH a parsed verdict and a
+    closed ground-truth resolution that actually reflects match quality
+    (accepted/auto_resolved/rejected — NOT orphaned, see _BAD_RESOLUTIONS),
+    how often did "agrees" line up with the row eventually being accepted/
+    auto-resolved (agrees=True) or rejected (agrees=False)? It's a proxy, not ground truth on the LLM's
+    reasoning — a right verdict for the wrong reason still counts as agreement
+    here — but it's the only closed-loop signal available without a human
+    labeling pass."""
+    total = len(rows)
+    if total == 0:
+        return {
+            "total": 0, "parse_ok_rate": None, "agree_rate": None,
+            "enforced_rate": None, "avg_latency_ms": None,
+            "outcome_agreement_rate": None, "outcome_sample_size": 0,
+            "resolution_breakdown": {},
+        }
+    parsed = [r for r in rows if r.parse_ok]
+    agreeing = [r for r in parsed if r.agrees is True]
+    enforced = [r for r in parsed if r.enforced]
+    latencies = [r.latency_ms for r in rows if r.latency_ms is not None]
+
+    resolution_breakdown: dict[str, int] = {}
+    for r in rows:
+        if r.resolution:
+            resolution_breakdown[r.resolution] = resolution_breakdown.get(r.resolution, 0) + 1
+
+    scored = [r for r in parsed if r.agrees is not None and r.resolution in _GOOD_RESOLUTIONS | _BAD_RESOLUTIONS]
+    correct = sum(1 for r in scored
+                 if (r.agrees and r.resolution in _GOOD_RESOLUTIONS)
+                 or (not r.agrees and r.resolution in _BAD_RESOLUTIONS))
+
+    return {
+        "total": total,
+        "parse_ok_rate": round(len(parsed) / total, 3),
+        "agree_rate": round(len(agreeing) / len(parsed), 3) if parsed else None,
+        "enforced_rate": round(len(enforced) / len(parsed), 3) if parsed else None,
+        "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else None,
+        "outcome_agreement_rate": round(correct / len(scored), 3) if scored else None,
+        "outcome_sample_size": len(scored),
+        "resolution_breakdown": resolution_breakdown,
+    }
+
+
+def compute_accuracy_stats(db, days: int | None = None) -> dict:
+    """LLM-06 — in-app accuracy dashboard data, grouped by source_app/model/
+    scaffold_version. CSV export (llm-log/export.csv) is raw rows for offline
+    replay; this is the same data pre-aggregated for at-a-glance tuning."""
+    q = db.query(LlmMatchLog)
+    if days:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        q = q.filter(LlmMatchLog.created_at >= cutoff)
+    rows = q.all()
+
+    def _by(attr: str) -> list[dict]:
+        groups: dict[str, list[LlmMatchLog]] = {}
+        for r in rows:
+            key = getattr(r, attr) or "(unknown)"
+            groups.setdefault(key, []).append(r)
+        return [{"key": k, **_group_stats(v)} for k, v in sorted(groups.items())]
+
+    return {
+        "overall": _group_stats(rows),
+        "by_source_app": _by("source_app"),
+        "by_model": _by("model"),
+        "by_scaffold_version": _by("scaffold_version"),
+    }
+
+
 def maintain(db) -> dict:
     """Backfill resolutions from closed failed-import rows, then prune by age and
     row cap. Idempotent; cheap at personal-library scale."""
