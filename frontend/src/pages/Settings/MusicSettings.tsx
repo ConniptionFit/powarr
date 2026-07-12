@@ -41,6 +41,7 @@ interface SPSettings {
   llm_playlist_names: boolean;
   sonic_similarity_enabled: boolean;
   genre_aliases: Record<string, string>;
+  playlist_templates: Record<string, string[]>;
 }
 
 interface LidarrProfiles {
@@ -63,6 +64,24 @@ function textToAliases(text: string): Record<string, string> {
   for (const line of text.split("\n")) {
     const [alias, canonical] = line.split("=").map(s => s.trim());
     if (alias && canonical) out[alias] = canonical;
+  }
+  return out;
+}
+
+// SP-12 — playlist_templates is a map (template name -> genre list); same
+// "name = value(s)" line pattern as genre_aliases above, comma-separated
+// genres on the right. Empty by default — which genres mean "Workout" vs
+// "Focus" is a taste judgment left entirely to the user.
+function templatesToText(templates: Record<string, string[]> | undefined): string {
+  return Object.entries(templates || {}).map(([name, genres]) => `${name} = ${genres.join(", ")}`).join("\n");
+}
+function textToTemplates(text: string): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const line of text.split("\n")) {
+    const [name, genreList] = line.split("=");
+    const trimmedName = name?.trim();
+    const genres = (genreList || "").split(",").map(g => g.trim()).filter(Boolean);
+    if (trimmedName && genres.length > 0) out[trimmedName] = genres;
   }
   return out;
 }
@@ -275,11 +294,12 @@ function PlaylistsSettingsCard() {
   // incomplete "alias = " line mid-typing isn't silently dropped by the
   // round-trip through textToAliases/aliasesToText on every keystroke.
   const [aliasText, setAliasText] = useState<string | null>(null);
+  const [templateText, setTemplateText] = useState<string | null>(null);
   const form = draft ?? settings ?? null;
 
   const saveMut = useMutation({
     mutationFn: () => req<SPSettings>("/smart-playlists/settings", { method: "PUT", body: JSON.stringify(form || {}) }),
-    onSuccess: () => { setDraft(null); setAliasText(null); setMsg("Saved"); qc.invalidateQueries({ queryKey: ["sp-settings"] }); },
+    onSuccess: () => { setDraft(null); setAliasText(null); setTemplateText(null); setMsg("Saved"); qc.invalidateQueries({ queryKey: ["sp-settings"] }); },
     onError: (e: Error) => setMsg(e.message),
   });
 
@@ -321,6 +341,16 @@ function PlaylistsSettingsCard() {
           <span className="block text-slate-600 mt-1">
             Case/punctuation variants ("Hip-Hop" vs "Hip Hop") always merge automatically — use this for
             genuinely different-looking labels you want treated as the same genre.
+          </span>
+        </label>
+        <label className={`${labelCls} sm:col-span-2`}
+          title="SP-12 — a named playlist generated from the UNION of several genres instead of one. Which genres mean 'Workout' vs 'Focus' is entirely up to you.">
+          Playlist templates <span className="text-slate-600">(one per line, "Name = Genre1, Genre2, ...")</span>
+          <textarea className={`${inputCls} font-mono`} rows={3} placeholder={"Workout = Rock, Electronic, Hip-Hop"}
+            value={templateText ?? templatesToText(form.playlist_templates)}
+            onChange={e => { setTemplateText(e.target.value); set("playlist_templates", textToTemplates(e.target.value)); }} />
+          <span className="block text-slate-600 mt-1">
+            Each template becomes its own playlist from the combined artist pool of its listed genres.
           </span>
         </label>
       </div>

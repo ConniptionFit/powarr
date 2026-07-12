@@ -80,6 +80,9 @@ def _migrate():
             # from created_at (draft-definition creation) and updated_at (any edit);
             # feeds the weekly digest's "playlists created" section.
             "plex_created_at": "TIMESTAMP",
+            # SP-12 — True when genre_tag names a configured template (union of
+            # several genres) rather than a single real genre.
+            "is_template": "BOOLEAN DEFAULT FALSE",
         },
         "discovered_artists": {
             "image_url": "VARCHAR",

@@ -25,6 +25,11 @@ class SmartPlaylist(Base):
     # Per-playlist overrides (optional)
     auto_add_override = Column(Boolean, nullable=True)  # None = use global default
     max_tracks_override = Column(Integer, nullable=True)  # None = use global default
+    # SP-12 — True when genre_tag names a configured template (SmartPlaylistSettings.
+    # playlist_templates) generated from the UNION of several genres, not a single
+    # real genre. Distinguishes "Workout" the template from a genuine genre that
+    # happens to be named the same.
+    is_template = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

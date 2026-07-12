@@ -28,6 +28,7 @@ class PlaylistOut(BaseModel):
     artist_count: int = 0
     last_generated_at: Optional[datetime] = None
     last_run_message: Optional[str] = None
+    is_template: bool = False  # SP-12 — genre_tag names a configured template, not a real genre
 
     model_config = {"from_attributes": True}
 
@@ -115,6 +116,7 @@ def list_playlists(db: Session = Depends(get_db)):
             artist_count=included,
             last_generated_at=pl.last_generated_at,
             last_run_message=pl.last_run_message,
+            is_template=pl.is_template or False,
         ))
     return out
 

@@ -332,6 +332,60 @@ def _mark_artist_included(db, pl: SmartPlaylist, artist: dict) -> None:
     ))
 
 
+def _artists_for_template(by_genre: dict[str, list[dict]], genres: list[str],
+                          aliases: dict[str, str] | None) -> list[dict]:
+    """SP-12 — union of artists across a template's configured genre list,
+    reusing the by_genre map _artists_by_genre already fetched (no extra
+    Qdrant scroll). Dedupes by normalized artist name across genres."""
+    target_keys = {_normalize_genre_key(_resolve_genre_alias(g, aliases)) for g in genres}
+    seen: set[str] = set()
+    out: list[dict] = []
+    for g, artists in by_genre.items():
+        if _normalize_genre_key(g) not in target_keys:
+            continue
+        for a in artists:
+            key = _norm_artist(a["artist_name"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(a)
+    return out
+
+
+async def _upsert_playlist_group(db, cfg: SmartPlaylistSettings, plex, group_key: str,
+                                 artists: list[dict], *, is_template: bool = False) -> tuple[bool, int, bool]:
+    """Create-or-sync one genre/template playlist group. Shared by the
+    per-genre loop and the SP-12 per-template loop below — only the source of
+    `artists` differs. Returns (created, tracks_added, synced)."""
+    pl = db.query(SmartPlaylist).filter_by(genre_tag=group_key).first()
+    if not pl:
+        title = await _playlist_title(db, cfg, group_key, [a["artist_name"] for a in artists])
+        pl = SmartPlaylist(genre_tag=group_key, title=title, enabled=True, is_template=is_template)
+        db.add(pl)
+        db.flush()
+        pl.last_run_message = f"Suggested — {len(artists)} artist(s), awaiting Approve"
+        return True, 0, False
+
+    # Managed (on Plex): auto-include all non-blacklisted artists
+    if pl.plex_playlist_id and pl.enabled:
+        should_update = (pl.auto_add_override
+                         if pl.auto_add_override is not None
+                         else (cfg.auto_update_playlists or cfg.auto_add_tracks_default))
+        if should_update:
+            if not plex:
+                pl.last_run_message = "Plex not enabled — cannot sync"
+                return False, 0, False
+            added = await _sync_tracks_to_plex(db, plex, pl, artists, cfg)
+            pl.last_run_message = f"Synced {len(artists)} artist(s), +{added} track(s)"
+            return False, added, True
+        pl.last_run_message = "Auto-update off for this playlist"
+        return False, 0, False
+
+    # Suggested draft — refresh artist count message only
+    pl.last_run_message = f"Suggested — {len(artists)} artist(s), awaiting Approve"
+    return False, 0, False
+
+
 async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
     """Discover genre playlists + sync Managed ones. Suggested drafts are created
     without pushing to Plex. No per-artist pending queue (SP-01)."""
@@ -355,34 +409,27 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
         plex = _plex_client(db)
 
         for g, artists in by_genre.items():
-            pl = db.query(SmartPlaylist).filter_by(genre_tag=g).first()
-            if not pl:
-                title = await _playlist_title(db, cfg, g, [a["artist_name"] for a in artists])
-                pl = SmartPlaylist(genre_tag=g, title=title, enabled=True)
-                db.add(pl)
-                db.flush()
-                created_playlists += 1
-                pl.last_run_message = f"Suggested — {len(artists)} artist(s), awaiting Approve"
-                continue
+            created, added, did_sync = await _upsert_playlist_group(db, cfg, plex, g, artists)
+            created_playlists += int(created)
+            tracks_added += added
+            synced += int(did_sync)
 
-            # Managed (on Plex): auto-include all non-blacklisted artists
-            if pl.plex_playlist_id and pl.enabled:
-                should_update = (pl.auto_add_override
-                                 if pl.auto_add_override is not None
-                                 else (cfg.auto_update_playlists or cfg.auto_add_tracks_default))
-                if should_update:
-                    if not plex:
-                        pl.last_run_message = "Plex not enabled — cannot sync"
-                        continue
-                    added = await _sync_tracks_to_plex(db, plex, pl, artists, cfg)
-                    tracks_added += added
-                    synced += 1
-                    pl.last_run_message = f"Synced {len(artists)} artist(s), +{added} track(s)"
-                else:
-                    pl.last_run_message = "Auto-update off for this playlist"
-            else:
-                # Suggested draft — refresh artist count message only
-                pl.last_run_message = f"Suggested — {len(artists)} artist(s), awaiting Approve"
+        # SP-12 — named intent templates, each a playlist generated from the
+        # UNION of several genres. Only on a full pass (genre is None) — a
+        # single-genre regen call is for refreshing one existing playlist,
+        # not for re-discovering templates.
+        if genre is None:
+            for template_name, genres in (cfg.playlist_templates or {}).items():
+                if not template_name or not genres:
+                    continue
+                artists = _artists_for_template(by_genre, genres, cfg.genre_aliases)
+                if len(artists) < cfg.min_artists_per_genre:
+                    continue
+                created, added, did_sync = await _upsert_playlist_group(
+                    db, cfg, plex, template_name, artists, is_template=True)
+                created_playlists += int(created)
+                tracks_added += added
+                synced += int(did_sync)
 
         db.commit()
         return {

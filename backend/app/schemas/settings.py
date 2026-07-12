@@ -261,6 +261,18 @@ class SmartPlaylistSettings(BaseModel):
     # left to the user rather than a hardcoded opinion. Keys/values matched
     # case-insensitively; the value is the canonical display label.
     genre_aliases: dict[str, str] = {}
+    # SP-12 — named intent templates (e.g. "Workout": ["Rock", "Electronic",
+    # "Hip-Hop"]), each a playlist generated from the UNION of its listed
+    # genres instead of a single genre. Empty by default — which genres mean
+    # "workout" vs "focus" is a taste judgment left entirely to the user, same
+    # precedent as genre_aliases above, not a hardcoded opinion. The item's
+    # other ask (weighting by Sonic Analysis energy/valence) isn't
+    # implementable as literally described — Plex's public API exposes Sonic
+    # Analysis only via nearest-neighbor similarity search (already used by
+    # sonic_similarity_enabled above), not queryable raw energy/valence
+    # values — so template playlists get whatever sonic bias that existing
+    # setting already provides, same as any other playlist.
+    playlist_templates: dict[str, list[str]] = {}
 
 
 class ArtistDiscoverySettings(BaseModel):

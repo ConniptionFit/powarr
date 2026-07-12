@@ -18,6 +18,7 @@ interface Playlist {
   pending_count: number;
   last_generated_at: string | null;
   last_run_message: string | null;
+  is_template: boolean; // SP-12 — genre_tag names a configured template, not a real genre
 }
 
 interface PlaylistDetail extends Playlist {
@@ -128,8 +129,15 @@ function PlaylistCard({ pl, onMsg, suggested }: { pl: Playlist; onMsg: (m: strin
     <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-4">
       <div className="flex items-start justify-between mb-2 gap-2">
         <div className="min-w-0">
-          <p className="text-white text-sm font-medium truncate">{pl.title}</p>
-          <p className="text-slate-500 text-xs">Genre: {pl.genre_tag}</p>
+          <p className="text-white text-sm font-medium truncate">
+            {pl.title}
+            {pl.is_template && (
+              <span className="ml-2 px-1.5 py-0.5 rounded bg-indigo-900/40 text-indigo-300 text-[10px] font-bold uppercase tracking-wide align-middle">
+                Template
+              </span>
+            )}
+          </p>
+          <p className="text-slate-500 text-xs">{pl.is_template ? "Template" : "Genre"}: {pl.genre_tag}</p>
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {suggested ? (
