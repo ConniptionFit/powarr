@@ -378,7 +378,10 @@ async def llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db
     from app.schemas.settings import OllamaSettings
     cfg = db.query(AppSetting).filter_by(key="ollama").first()
     ollama_cfg = OllamaSettings(**json.loads(cfg.value)) if cfg and cfg.value else OllamaSettings()
-    if not ollama_cfg.task_enabled("match"):
+    # Coarse "connected at all" gate — a per-app override (LLM-08) can enable
+    # match for a specific app even when the global match_enabled toggle is off,
+    # so the real per-row enablement is resolved per source_app inside the run.
+    if not (ollama_cfg.enabled and ollama_cfg.host and ollama_cfg.model_for("match")):
         raise HTTPException(status_code=400, detail="LLM assist is not enabled for import matching — check Settings → LLM Assist")
     if ids:
         count = db.query(FailedImport).filter(FailedImport.id.in_(ids)).count()
@@ -434,10 +437,17 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
         return {"matches": [], "message": "No matched library entry — run LLM-run first to match this download"}
     if not item.download_id:
         return {"matches": [], "message": "No download id on this item"}
-    from app.schemas.settings import OllamaSettings
+    from app.schemas.settings import ImportMatchingSettings, LlmPolicies, OllamaSettings
     row_cfg = db.query(AppSetting).filter_by(key="ollama").first()
     ollama_cfg = OllamaSettings(**json.loads(row_cfg.value)) if row_cfg and row_cfg.value else OllamaSettings()
-    if not ollama_cfg.task_enabled("match"):
+    matching_row = db.query(AppSetting).filter_by(key="import_matching").first()
+    matching_cfg = (ImportMatchingSettings(**json.loads(matching_row.value))
+                    if matching_row and matching_row.value else ImportMatchingSettings())
+    policies_row = db.query(AppSetting).filter_by(key="llm_policies").first()
+    policies = (LlmPolicies(**json.loads(policies_row.value))
+                if policies_row and policies_row.value else LlmPolicies())
+    match_enabled, match_model, _ = import_matcher._match_policy(ollama_cfg, matching_cfg, policies, item.source_app)
+    if not match_enabled:
         raise HTTPException(status_code=400, detail="LLM assist is not enabled for import matching — check Settings → LLM Assist")
 
     # Fetch file list from the download
@@ -466,7 +476,7 @@ async def llm_review_pack(item_id: int, db: Session = Depends(get_db)):
                                                 messages=item.message) or ""
     folder_name = folder.rstrip("/").split("/")[-1] if folder else ""
     matches = await llm_assist.review_pack_files(
-        host=ollama_cfg.host, model=ollama_cfg.model_for("match"),
+        host=ollama_cfg.host, model=match_model,
         release_title=item.raw_title, candidate_title=item.matched_title,
         file_names=file_names,
         api_style=ollama_cfg.api_style,

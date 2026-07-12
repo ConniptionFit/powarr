@@ -16,7 +16,7 @@ from app.database import SessionLocal
 from app.models.app_setting import AppSetting
 from app.models.failed_import import FailedImport
 from app.models.integration import Integration
-from app.schemas.settings import ImportMatchingSettings, OllamaSettings
+from app.schemas.settings import ImportMatchingSettings, LlmPolicies, OllamaSettings
 from app.services import llm_assist
 from app.services.auto_eligible import passes_auto_thresholds
 
@@ -90,13 +90,31 @@ def publish(event: dict) -> None:
             pass
 
 
-def load_settings(db) -> tuple[ImportMatchingSettings, OllamaSettings]:
+def load_settings(db) -> tuple[ImportMatchingSettings, OllamaSettings, LlmPolicies]:
     def _load(key, schema):
         row = db.query(AppSetting).filter_by(key=key).first()
         if not row or not row.value:
             return schema()
         return schema(**json.loads(row.value))
-    return _load("import_matching", ImportMatchingSettings), _load("ollama", OllamaSettings)
+    return (_load("import_matching", ImportMatchingSettings), _load("ollama", OllamaSettings),
+            _load("llm_policies", LlmPolicies))
+
+
+def _match_policy(ollama: OllamaSettings, cfg: ImportMatchingSettings,
+                  policies: LlmPolicies, source_app: str | None) -> tuple[bool, str, float]:
+    """Effective (enabled, model, blend_weight) for one source_app (LLM-08) — the
+    global per-task match config + import-matching blend weight, with any
+    per-app overlay applied on top. An overlay can only turn match ON for an app
+    when the master switch/host/model are configured at all; it can turn a
+    specific app OFF (or override its model/blend weight) independent of the
+    other apps."""
+    overlay = (policies.by_app or {}).get(source_app or "") or {}
+    model = (overlay.get("match_model") or "").strip() or ollama.model_for("match")
+    toggle = overlay.get("match_enabled", ollama.match_enabled)
+    enabled = bool(ollama.enabled and ollama.host and model and toggle)
+    blend = overlay.get("llm_blend_weight")
+    blend = cfg.llm_blend_weight if blend is None else blend
+    return enabled, model, blend
 
 
 def _get_client(name: str, row: Integration):
@@ -863,6 +881,7 @@ def _lidarr_readarr_match(app_name: str, rec: dict, history: list[dict],
 
 async def _match_record(app_name: str, rec: dict, history: list[dict], library: list[dict],
                         cfg: ImportMatchingSettings, ollama: OllamaSettings,
+                        policies: LlmPolicies | None = None,
                         queue: list[dict] | None = None, client=None) -> dict:
     """Produce {matched_id, matched_title, confidence, heuristic_confidence,
     match_rationale, pack, llm_confidence, llm_rationale}. The rationale is a
@@ -1018,8 +1037,10 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     llm_rationale = None
     llm_agrees = None
     llm_log = None
+    match_enabled, match_model, blend_weight = _match_policy(
+        ollama, cfg, policies or LlmPolicies(), app_name)
     # Year hard-fail skips the LLM — the deterministic scorer already settled it.
-    if matched_title and not year_mismatch and ollama.task_enabled("match"):
+    if matched_title and not year_mismatch and match_enabled:
         # Build comprehensive context: triggered series, queue state, pack info
         triggered_id = rec.get(id_key)
         triggered_item = lib_by_id.get(triggered_id) if triggered_id else None
@@ -1061,7 +1082,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             det_summary = f"{match_rationale} (heuristic confidence {heuristic_confidence})"
         capture: dict = {}
         llm = await llm_assist.review_match(
-            ollama.host, ollama.model_for("match"), raw_title, matched_title,
+            ollama.host, match_model, raw_title, matched_title,
             det_summary=det_summary,
             context=llm_context,
             api_style=ollama.api_style, template=ollama.match_prompt,
@@ -1082,7 +1103,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             # once the FailedImport row exists (LLM-LOG-01).
             llm_log = {
                 "site": "scan", "source_app": app_name,
-                "model": ollama.model_for("match"),
+                "model": match_model,
                 "release_title": raw_title, "candidate_title": matched_title,
                 "context": llm_context, "det_summary": det_summary,
                 "capture": capture, "checks": checks,
@@ -1094,7 +1115,7 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             llm_confidence = round(max(0.0, min(1.0, heuristic_confidence + llm["confidence_adjustment"])), 3)
             llm_rationale = llm["rationale"]
             llm_agrees = llm["agrees"]
-            confidence = blend_confidence(confidence, llm_confidence, cfg.llm_blend_weight)
+            confidence = blend_confidence(confidence, llm_confidence, blend_weight)
 
     return {
         "matched_id": matched_id,
@@ -1543,7 +1564,7 @@ async def _scan_once_inner(task_id: str) -> dict:
     db = SessionLocal()
     scanned_apps = 0
     try:
-        cfg, ollama = load_settings(db)
+        cfg, ollama, policies = load_settings(db)
         enabled_apps = [name for name in ("sonarr", "radarr", "lidarr", "readarr")
                         if getattr(cfg, f"{name}_enabled", True)
                         and db.query(Integration).filter_by(name=name, enabled=True).first()]
@@ -1637,7 +1658,7 @@ async def _scan_once_inner(task_id: str) -> dict:
                     continue
 
                 match = await _match_record(app_name, rec, grabbed_history, library, cfg, ollama,
-                                            queue=queue, client=client)
+                                            policies=policies, queue=queue, client=client)
                 if match["confidence"] < cfg.low_confidence_floor:
                     logger.info(
                         f"Import scan: '{rec.get('title')}' ({app_name}) below confidence floor "
@@ -2065,7 +2086,7 @@ async def rescore_music(ids: list[int] | None = None, limit: int = 500) -> dict:
     rescored = skipped = 0
     db = SessionLocal()
     try:
-        cfg, _ = load_settings(db)
+        cfg, _, policies = load_settings(db)
         q = db.query(FailedImport).filter(
             FailedImport.source_app.in_(("lidarr", "readarr")))
         if ids:
@@ -2086,8 +2107,10 @@ async def rescore_music(ids: list[int] | None = None, limit: int = 500) -> dict:
                 skipped += 1
                 continue
             if row.llm_confidence is not None:
+                app_blend = (policies.by_app or {}).get(row.source_app or "", {}).get(
+                    "llm_blend_weight", cfg.llm_blend_weight)
                 row.confidence = blend_confidence(
-                    row.heuristic_confidence, row.llm_confidence, cfg.llm_blend_weight)
+                    row.heuristic_confidence, row.llm_confidence, app_blend)
             rescored += 1
         db.commit()
         auto_queued = await _queue_auto_imports(collect_auto_eligible(rows, cfg))
@@ -2107,8 +2130,8 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
     auto_ids: list[int] = []
     db = SessionLocal()
     try:
-        cfg, ollama = load_settings(db)
-        if not ollama.task_enabled("match"):
+        cfg, ollama, policies = load_settings(db)
+        if not (ollama.enabled and ollama.host and ollama.model_for("match")):
             return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled for import matching"}
         q = db.query(FailedImport)
         if ids:
@@ -2147,6 +2170,15 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 continue
             if row.heuristic_confidence is None:
                 row.heuristic_confidence = row.confidence
+            match_enabled, match_model, blend_weight = _match_policy(
+                ollama, cfg, policies, row.source_app)
+            if not match_enabled:
+                skipped += 1
+                _llm_tray_skipped += 1
+                tasks.update_task(
+                    task_id, current=cur,
+                    message=f"{_llm_tray_scored} scored, {_llm_tray_skipped} skipped")
+                continue
             if getattr(ollama, "compact_det_summary", True):
                 det_summary = llm_assist.compact_det_summary(
                     row.match_rationale or "series/title heuristics only",
@@ -2176,7 +2208,7 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
             capture: dict = {}
             rescore_context = " | ".join(ctx_parts)
             llm = await llm_assist.review_match(
-                ollama.host, ollama.model_for("match"), row.raw_title, row.matched_title,
+                ollama.host, match_model, row.raw_title, row.matched_title,
                 det_summary=det_summary,
                 context=rescore_context,
                 api_style=ollama.api_style, template=ollama.match_prompt,
@@ -2197,7 +2229,7 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 from app.services import llm_match_log
                 llm_match_log.record(
                     db, failed_import_id=row.id, site="rescore",
-                    source_app=row.source_app, model=ollama.model_for("match"),
+                    source_app=row.source_app, model=match_model,
                     release_title=row.raw_title, candidate_title=row.matched_title,
                     context=rescore_context, det_summary=det_summary,
                     capture=capture, checks=checks,
@@ -2217,7 +2249,7 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
             row.llm_rationale = llm["rationale"]
             row.llm_agrees = llm["agrees"]
             row.confidence = blend_confidence(row.heuristic_confidence, row.llm_confidence,
-                                              cfg.llm_blend_weight)
+                                              blend_weight)
             db.commit()
             scored += 1
             _llm_tray_scored += 1
@@ -2248,7 +2280,7 @@ async def poller_loop():
         try:
             db = SessionLocal()
             try:
-                cfg, _ = load_settings(db)
+                cfg, _, _ = load_settings(db)
             finally:
                 db.close()
             interval = max(60, int(cfg.poll_interval_seconds))

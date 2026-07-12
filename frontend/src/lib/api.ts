@@ -261,6 +261,23 @@ export interface OllamaSettings {
   compact_det_summary?: boolean;
 }
 
+// LLM-08 (v0.68.0) — per-source_app overrides (match_enabled, match_model,
+// llm_blend_weight) and per-Plex-library overrides (explain_enabled,
+// explain_model). Empty by default; unlisted apps/libraries keep global behavior.
+export interface LlmAppOverride {
+  match_enabled?: boolean;
+  match_model?: string;
+  llm_blend_weight?: number;
+}
+export interface LlmLibraryOverride {
+  explain_enabled?: boolean;
+  explain_model?: string;
+}
+export interface LlmPolicies {
+  by_app: Record<string, LlmAppOverride>;
+  by_library: Record<string, LlmLibraryOverride>;
+}
+
 export interface LlmStats {
   calls: number;
   successes: number;
@@ -345,6 +362,9 @@ export const settingsApi = {
   getOllama: () => req<OllamaSettings>("/settings/ollama"),
   updateOllama: (s: OllamaSettings) =>
     req<OllamaSettings>("/settings/ollama", { method: "PUT", body: JSON.stringify(s) }),
+  getLlmPolicies: () => req<LlmPolicies>("/settings/llm-policies"),
+  updateLlmPolicies: (p: LlmPolicies) =>
+    req<LlmPolicies>("/settings/llm-policies", { method: "PUT", body: JSON.stringify(p) }),
   getLlmSchedule: () => req<LlmScheduleSettings>("/settings/llm-schedule"),
   updateLlmSchedule: (s: LlmScheduleSettings) =>
     req<LlmScheduleSettings>("/settings/llm-schedule", { method: "PUT", body: JSON.stringify(s) }),

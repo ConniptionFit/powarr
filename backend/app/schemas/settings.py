@@ -168,6 +168,29 @@ class OllamaSettings(BaseModel):
                 "second_opinion": self.second_opinion_enabled}.get(task, False)
 
 
+class LlmPolicies(BaseModel):
+    """Per-source_app and per-Plex-library partial overlays on LLM behavior
+    (v0.68.0, LLM-08) — extends the global per-task toggles (v0.27.0) and mirrors
+    ScoringProfiles' by_library overlay shape (v0.30.0). User-confirmed 2026-07-12:
+    empty by default, so every app/library keeps today's global behavior
+    (including the existing 0.3 llm_blend_weight) until a row is explicitly added.
+
+    `by_app` keys are FailedImport.source_app values (sonarr/radarr/lidarr/readarr).
+    Overlay dict values: `match_enabled` (bool), `match_model` (str),
+    `llm_blend_weight` (float). Match review + confidence blending only ever
+    operate on FailedImport rows, which carry no library_section — source_app is
+    the only axis that makes sense for them.
+
+    `by_library` keys are MediaItem.library_section names. Overlay dict values:
+    `explain_enabled` (bool), `explain_model` (str). Deletion rationale only ever
+    operates on MediaItem rows, which carry no source_app — library is the only
+    axis that makes sense for it. (Does not extend to the LLM-07 second-opinion
+    task — out of LLM-08's stated scope.)
+    """
+    by_app: dict[str, dict] = {}
+    by_library: dict[str, dict] = {}
+
+
 class CleanupSettings(BaseModel):
     excluded_libraries: list[str] = []  # library_section names never suggested for deletion
     soft_delete_days: int = 0  # 0 = delete immediately (current behavior); >0 = pending window

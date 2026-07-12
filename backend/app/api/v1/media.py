@@ -268,15 +268,18 @@ async def media_llm_run(payload: dict = Body(default={}), db: Session = Depends(
     """On-demand LLM deletion rationales. {"ids": [...]} for specific items; omit
     to process candidates lacking a current cached rationale. Runs in the
     background — an SSE "media_llm_run" event fires when it finishes."""
-    from app.schemas.settings import OllamaSettings
+    from app.schemas.settings import LlmPolicies, OllamaSettings
     from app.services import llm_assist, media_llm, tasks
     ids = payload.get("ids") or None
     if llm_assist.slot_active():
         raise HTTPException(status_code=409, detail="An LLM run is already in progress")
     ollama = _get_setting(db, "ollama", OllamaSettings)
-    if not ollama.task_enabled("explain"):
+    policies = _get_setting(db, "llm_policies", LlmPolicies)
+    # Coarse "connected at all" gate — a per-library override (LLM-08) can
+    # enable explain for a specific library even when the global toggle is off.
+    if not (ollama.enabled and ollama.host and ollama.model_for("explain")):
         raise HTTPException(status_code=400, detail="LLM assist is not enabled for deletion rationales — check Settings → LLM Assist")
-    count = len(media_llm.eligible_candidates(db, ollama, ids))
+    count = len(media_llm.eligible_candidates(db, ollama, ids, policies=policies))
     tasks.spawn_background(media_llm.llm_media_run(ids))
     return {"started": count, "total_eligible": count,
             "message": f"LLM run started on {count} candidate(s) — results stream in live"}
@@ -310,13 +313,15 @@ async def explain_media(item_id: int, force: bool = Query(False), db: Session = 
     item = db.query(MediaItem).filter_by(id=item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Media item not found")
-    from app.schemas.settings import OllamaSettings
+    from app.schemas.settings import LlmPolicies, OllamaSettings
+    from app.services.media_llm import _explain_policy
     ollama = _get_setting(db, "ollama", OllamaSettings)
-    if not ollama.task_enabled("explain"):
+    policies = _get_setting(db, "llm_policies", LlmPolicies)
+    if not _explain_policy(ollama, policies, item.library_section)[0]:
         return {"rationale": None, "message": "LLM assist not configured for deletion rationales", "cached": False}
     from app.services import llm_assist, media_llm
     if (not force and item.llm_rationale
-            and item.llm_rationale_key == media_llm.rationale_key(ollama, item)):
+            and item.llm_rationale_key == media_llm.rationale_key(ollama, item, policies)):
         return {"rationale": item.llm_rationale, "message": None, "cached": True,
                 "generated_at": item.llm_rationale_at}
     if not llm_assist.acquire_slot():
@@ -324,7 +329,7 @@ async def explain_media(item_id: int, force: bool = Query(False), db: Session = 
         # shared slot, so rapid clicks/tabs can't pile up parallel generations.
         raise HTTPException(status_code=409, detail="Another LLM task is already running")
     try:
-        rationale = await media_llm.generate_and_store(item, ollama, db)
+        rationale = await media_llm.generate_and_store(item, ollama, db, policies)
     finally:
         llm_assist.release_slot()
     return {"rationale": rationale, "message": None if rationale else "No response from LLM",
@@ -368,12 +373,15 @@ async def explain_media_stream(item_id: int, db: Session = Depends(get_db)):
     import json as _json
     from fastapi.responses import StreamingResponse
     from app.database import SessionLocal
-    from app.schemas.settings import OllamaSettings
+    from app.schemas.settings import LlmPolicies, OllamaSettings
     from app.services import llm_assist, media_llm
-    if not db.query(MediaItem.id).filter_by(id=item_id).first():
+    from app.services.media_llm import _explain_policy
+    row = db.query(MediaItem.id, MediaItem.library_section).filter_by(id=item_id).first()
+    if not row:
         raise HTTPException(status_code=404, detail="Media item not found")
     ollama = _get_setting(db, "ollama", OllamaSettings)
-    if not ollama.task_enabled("explain"):
+    policies = _get_setting(db, "llm_policies", LlmPolicies)
+    if not _explain_policy(ollama, policies, row.library_section)[0]:
         raise HTTPException(status_code=400, detail="LLM assist not configured for deletion rationales")
     if not llm_assist.acquire_slot():
         raise HTTPException(status_code=409, detail="Another LLM task is already running")
@@ -383,15 +391,16 @@ async def explain_media_stream(item_id: int, db: Session = Depends(get_db)):
         sdb = SessionLocal()
         try:
             item = sdb.query(MediaItem).filter_by(id=item_id).first()
+            _, effective_model = _explain_policy(ollama, policies, item.library_section)
             full = ""
             if ollama.verbosity == "minimal":
                 # One-word verdict — nothing to stream; reuse the plain path.
-                full = await media_llm.generate_and_store(item, ollama, sdb) or ""
+                full = await media_llm.generate_and_store(item, ollama, sdb, policies) or ""
                 if full:
                     yield f"data: {_json.dumps({'delta': full})}\n\n"
             else:
                 async for chunk in llm_assist.explain_deletion_stream(
-                        ollama.host, ollama.model_for("explain"), media_llm.item_summary(item, sdb),
+                        ollama.host, effective_model, media_llm.item_summary(item, sdb),
                         ollama.api_style, template=ollama.explain_prompt,
                         verbosity=ollama.verbosity, model_size=ollama.model_size,
                         keep_alive_minutes=ollama.keep_alive_minutes,
@@ -403,7 +412,7 @@ async def explain_media_stream(item_id: int, db: Session = Depends(get_db)):
                 if full:
                     item.llm_rationale = full
                     item.llm_rationale_at = datetime.utcnow()
-                    item.llm_rationale_key = media_llm.rationale_key(ollama, item)
+                    item.llm_rationale_key = media_llm.rationale_key(ollama, item, policies)
                     sdb.commit()
             yield f"data: {_json.dumps({'done': True, 'rationale': full or None, 'message': None if full else 'No response from LLM'})}\n\n"
         finally:

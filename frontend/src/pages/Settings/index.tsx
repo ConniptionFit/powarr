@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup, Activity, RotateCcw, Plug, SlidersHorizontal, Music } from "lucide-react";
 import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ScoringProfiles,
          type ImportMatchingSettings, type CleanupSettings, type SyncSettings, type NotificationSettings,
-         type OllamaSettings, type LlmScheduleSettings, type BackupSettings, type BackupFile } from "../../lib/api";
+         type OllamaSettings, type LlmPolicies, type LlmAppOverride, type LlmLibraryOverride,
+         type LlmScheduleSettings, type BackupSettings, type BackupFile } from "../../lib/api";
 import IntegrationsPage from "../Integrations";
 import MusicSettings from "./MusicSettings";
 
@@ -1247,6 +1248,178 @@ function LLMAssistSection() {
   );
 }
 
+const LLM_POLICY_APPS = ["sonarr", "radarr", "lidarr", "readarr"] as const;
+
+// LLM-08 (v0.68.0) — per-source_app match/blend overrides + per-Plex-library
+// explain overrides. Mirrors ScoringProfilesSection's overlay-editor shape
+// (v0.30.0): pick a key, edit its partial overlay, blank = inherit global.
+function LlmPoliciesSection() {
+  const qc = useQueryClient();
+  const { data: policies } = useQuery({ queryKey: ["llm-policies"], queryFn: settingsApi.getLlmPolicies });
+  const { data: libraries = [] } = useQuery({ queryKey: ["libraries"], queryFn: mediaApi.libraries });
+  const [cfg, setCfg] = useState<LlmPolicies | null>(null);
+  const [app, setApp] = useState<string>(LLM_POLICY_APPS[0]);
+  const [lib, setLib] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => { if (policies) setCfg(policies); }, [policies]);
+  useEffect(() => { if (!lib && libraries.length > 0) setLib(libraries[0]); }, [libraries, lib]);
+
+  if (!cfg) return null;
+
+  const appOverlay = cfg.by_app[app] || {};
+  const libOverlay = (lib && cfg.by_library[lib]) || {};
+
+  const setAppField = (field: keyof LlmAppOverride, value: boolean | string | number | undefined) => {
+    setCfg(c => {
+      if (!c) return c;
+      const next = { ...c.by_app };
+      const cur = { ...(next[app] || {}) };
+      if (value === undefined || value === "") delete cur[field];
+      else (cur as Record<string, unknown>)[field] = value;
+      if (Object.keys(cur).length === 0) delete next[app];
+      else next[app] = cur;
+      return { ...c, by_app: next };
+    });
+  };
+
+  const setLibField = (field: keyof LlmLibraryOverride, value: boolean | string | undefined) => {
+    if (!lib) return;
+    setCfg(c => {
+      if (!c) return c;
+      const next = { ...c.by_library };
+      const cur = { ...(next[lib] || {}) };
+      if (value === undefined || value === "") delete cur[field];
+      else (cur as Record<string, unknown>)[field] = value;
+      if (Object.keys(cur).length === 0) delete next[lib];
+      else next[lib] = cur;
+      return { ...c, by_library: next };
+    });
+  };
+
+  const save = async () => {
+    setMsg(null);
+    try {
+      await settingsApi.updateLlmPolicies(cfg);
+      qc.invalidateQueries({ queryKey: ["llm-policies"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center justify-between pt-5 pb-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Per-App / Per-Library LLM Policies</h2>
+          <p className="text-slate-500 text-xs mt-1">
+            Partial overlays on the global LLM config above. Blank/unset fields inherit the global value. Empty by default.
+          </p>
+        </div>
+        <button
+          onClick={save}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+        >
+          <Save size={13} />
+          {saved ? "Saved!" : "Save"}
+        </button>
+      </div>
+      {msg && <p className="text-xs text-red-400 pb-2">{msg}</p>}
+
+      <div className="py-3 border-b border-purple-900/20">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <p className="text-white text-sm font-medium">Per-app (match review + blend weight)</p>
+          <select
+            value={app}
+            onChange={e => setApp(e.target.value)}
+            className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white"
+          >
+            {LLM_POLICY_APPS.map(a => (
+              <option key={a} value={a}>{a}{cfg.by_app[a] ? " *" : ""}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center justify-between py-2">
+          <span className="text-slate-400 text-xs">Match enabled</span>
+          <select
+            value={appOverlay.match_enabled === undefined ? "" : String(appOverlay.match_enabled)}
+            onChange={e => setAppField("match_enabled", e.target.value === "" ? undefined : e.target.value === "true")}
+            className="bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white"
+          >
+            <option value="">inherit</option>
+            <option value="true">on</option>
+            <option value="false">off</option>
+          </select>
+        </div>
+        <div className="flex items-center justify-between py-2">
+          <span className="text-slate-400 text-xs">Match model</span>
+          <input
+            type="text"
+            placeholder="inherit"
+            value={appOverlay.match_model ?? ""}
+            onChange={e => setAppField("match_model", e.target.value || undefined)}
+            className="w-44 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white placeholder:text-slate-600"
+          />
+        </div>
+        <div className="flex items-center justify-between py-2">
+          <span className="text-slate-400 text-xs">LLM blend weight (0-1)</span>
+          <input
+            type="number" min={0} max={1} step={0.1}
+            placeholder="inherit (0.3)"
+            value={appOverlay.llm_blend_weight ?? ""}
+            onChange={e => setAppField("llm_blend_weight", e.target.value === "" ? undefined : Number(e.target.value))}
+            className="w-24 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white text-right placeholder:text-slate-600"
+          />
+        </div>
+      </div>
+
+      {libraries.length === 0 ? (
+        <p className="text-slate-500 text-xs py-3">No libraries found — run a Plex sync first for per-library explain overrides.</p>
+      ) : (
+        <div className="py-3">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <p className="text-white text-sm font-medium">Per-library (deletion rationale)</p>
+            <select
+              value={lib}
+              onChange={e => setLib(e.target.value)}
+              className="bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white"
+            >
+              {libraries.map(l => (
+                <option key={l} value={l}>{l}{cfg.by_library[l] ? " *" : ""}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center justify-between py-2">
+            <span className="text-slate-400 text-xs">Explain enabled</span>
+            <select
+              value={libOverlay.explain_enabled === undefined ? "" : String(libOverlay.explain_enabled)}
+              onChange={e => setLibField("explain_enabled", e.target.value === "" ? undefined : e.target.value === "true")}
+              className="bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white"
+            >
+              <option value="">inherit</option>
+              <option value="true">on</option>
+              <option value="false">off</option>
+            </select>
+          </div>
+          <div className="flex items-center justify-between py-2">
+            <span className="text-slate-400 text-xs">Explain model</span>
+            <input
+              type="text"
+              placeholder="inherit"
+              value={libOverlay.explain_model ?? ""}
+              onChange={e => setLibField("explain_model", e.target.value || undefined)}
+              className="w-44 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white placeholder:text-slate-600"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LlmScheduleSection() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["llm-schedule-settings"], queryFn: settingsApi.getLlmSchedule });
@@ -1991,6 +2164,7 @@ export default function SettingsPage() {
       {category === "llm-assist" && (
         <>
           <LLMAssistSection />
+          <LlmPoliciesSection />
           <LlmScheduleSection />
         </>
       )}

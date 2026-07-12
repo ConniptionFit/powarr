@@ -14,7 +14,7 @@ from datetime import datetime
 from app.database import SessionLocal
 from app.models.app_setting import AppSetting
 from app.models.media import MediaItem
-from app.schemas.settings import CleanupSettings, OllamaSettings, ScoringWeights
+from app.schemas.settings import CleanupSettings, LlmPolicies, OllamaSettings, ScoringWeights
 from app.services import llm_assist
 from app.services.import_matcher import publish
 from app.services.scorer import (
@@ -25,14 +25,31 @@ from app.services.scorer import (
 logger = logging.getLogger("powarr")
 
 
-def rationale_key(ollama: OllamaSettings, item: MediaItem) -> str:
+def _explain_policy(ollama: OllamaSettings, policies: LlmPolicies,
+                    library_section: str | None) -> tuple[bool, str]:
+    """Effective (enabled, model) for one Plex library (LLM-08) — the global
+    explain config with any per-library overlay applied on top. An overlay can
+    only turn explain ON for a library when the master switch/host/model are
+    configured at all; it can turn a specific library OFF (or override its
+    model) independent of the others."""
+    overlay = (policies.by_library or {}).get(library_section or "") or {}
+    model = (overlay.get("explain_model") or "").strip() or ollama.model_for("explain")
+    toggle = overlay.get("explain_enabled", ollama.explain_enabled)
+    enabled = bool(ollama.enabled and ollama.host and model and toggle)
+    return enabled, model
+
+
+def rationale_key(ollama: OllamaSettings, item: MediaItem, policies: LlmPolicies | None = None) -> str:
     """Cache key for a stored rationale: prompt/model config + the item fields the
     prompt is built from. Any change to either regenerates on next request."""
+    _, effective_model = _explain_policy(ollama, policies or LlmPolicies(),
+                                         getattr(item, "library_section", None))
     payload = json.dumps({
         "template": ollama.explain_prompt,
-        # Effective model for the explain task (== `model` when no override is
-        # set, so pre-v0.27.0 cached rationales stay valid).
-        "model": ollama.model_for("explain"),
+        # Effective model for the explain task — the per-library override
+        # (LLM-08) when set, otherwise == `model_for("explain")` (so pre-v0.68.0
+        # cached rationales stay valid when no library override is configured).
+        "model": effective_model,
         "api_style": ollama.api_style,
         "verbosity": ollama.verbosity,
         "model_size": ollama.model_size,
@@ -114,11 +131,14 @@ def item_summary(item: MediaItem, db=None, *, series_idx: dict | None = None,
     return ", ".join(parts)
 
 
-async def generate_and_store(item: MediaItem, ollama: OllamaSettings, db) -> str | None:
+async def generate_and_store(item: MediaItem, ollama: OllamaSettings, db,
+                             policies: LlmPolicies | None = None) -> str | None:
     """One LLM call for one item; persists rationale + timestamp + cache key on
     success. Fail-soft: returns None and stores nothing on no-response."""
+    policies = policies or LlmPolicies()
+    _, effective_model = _explain_policy(ollama, policies, getattr(item, "library_section", None))
     rationale = await llm_assist.explain_deletion(
-        ollama.host, ollama.model_for("explain"), item_summary(item, db), ollama.api_style,
+        ollama.host, effective_model, item_summary(item, db), ollama.api_style,
         template=ollama.explain_prompt, verbosity=ollama.verbosity,
         model_size=ollama.model_size, keep_alive_minutes=ollama.keep_alive_minutes,
         **llm_assist.prompt_kwargs(ollama),
@@ -126,7 +146,7 @@ async def generate_and_store(item: MediaItem, ollama: OllamaSettings, db) -> str
     if rationale:
         item.llm_rationale = rationale
         item.llm_rationale_at = datetime.utcnow()
-        item.llm_rationale_key = rationale_key(ollama, item)
+        item.llm_rationale_key = rationale_key(ollama, item, policies)
         db.commit()
     return rationale
 
@@ -151,13 +171,18 @@ async def llm_media_run(ids: list[int] | None = None, limit: int = 50) -> dict:
         db = SessionLocal()
         try:
             ollama = _load(db, "ollama", OllamaSettings)
-            if not ollama.task_enabled("explain"):
+            policies = _load(db, "llm_policies", LlmPolicies)
+            # Coarse "connected at all" gate — a per-library override (LLM-08)
+            # can enable explain for a specific library even when the global
+            # explain_enabled toggle is off; real per-item enablement is
+            # resolved per library_section inside eligible_candidates below.
+            if not (ollama.enabled and ollama.host and ollama.model_for("explain")):
                 tasks.finish_task(task_id, "done", "LLM assist is not configured/enabled for deletion rationales")
                 return {"scored": 0, "skipped": 0, "message": "LLM assist is not configured/enabled for deletion rationales"}
-            candidates = eligible_candidates(db, ollama, ids, limit)
+            candidates = eligible_candidates(db, ollama, ids, limit, policies)
             tasks.update_task(task_id, total=len(candidates))
             for i, item in enumerate(candidates, 1):
-                rationale = await generate_and_store(item, ollama, db)
+                rationale = await generate_and_store(item, ollama, db, policies)
                 if rationale:
                     scored += 1
                 else:
@@ -196,18 +221,24 @@ def _deletion_candidate_query(db):
 
 
 def eligible_candidates(db, ollama: OllamaSettings, ids: list[int] | None,
-                        limit: int = 50) -> list[MediaItem]:
+                        limit: int = 50, policies: LlmPolicies | None = None) -> list[MediaItem]:
     """Explicit ids as given; otherwise deletion candidates (same filters the
     Cleanup list applies). Either way, items with a current-key cached rationale
-    are skipped — regenerating one is the per-item force=true explain path."""
+    are skipped — regenerating one is the per-item force=true explain path.
+    Items whose library has explain disabled via a per-library override
+    (LLM-08) are always skipped, even when explicit ids are given."""
+    policies = policies or LlmPolicies()
     if ids:
         rows = db.query(MediaItem).filter(MediaItem.id.in_(ids)).all()
         return [r for r in rows
-                if not (r.llm_rationale and r.llm_rationale_key == rationale_key(ollama, r))
+                if _explain_policy(ollama, policies, r.library_section)[0]
+                and not (r.llm_rationale and r.llm_rationale_key == rationale_key(ollama, r, policies))
                 ][:limit]
     out = []
     for item in _deletion_candidate_query(db).all():
-        if item.llm_rationale and item.llm_rationale_key == rationale_key(ollama, item):
+        if not _explain_policy(ollama, policies, item.library_section)[0]:
+            continue
+        if item.llm_rationale and item.llm_rationale_key == rationale_key(ollama, item, policies):
             continue
         out.append(item)
         if len(out) >= limit:

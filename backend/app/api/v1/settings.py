@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.app_setting import AppSetting
 from app.schemas.settings import (ScoringWeights, ScoringProfiles, ImportMatchingSettings,
-                                  OllamaSettings, CleanupSettings, SyncSettings,
+                                  OllamaSettings, LlmPolicies, CleanupSettings, SyncSettings,
                                   NotificationSettings, LlmScheduleSettings, BackupSettings)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -88,6 +88,20 @@ def update_ollama(body: OllamaSettings, db: Session = Depends(get_db)):
     _put_json_setting(db, "ollama", body)
     from app.services import llm_assist
     llm_assist.set_breaker_config(body.breaker_threshold, body.breaker_cooldown_minutes)
+    return body
+
+
+@router.get("/llm-policies", response_model=LlmPolicies)
+def get_llm_policies(db: Session = Depends(get_db)):
+    return _get_json_setting(db, "llm_policies", LlmPolicies)
+
+
+@router.put("/llm-policies", response_model=LlmPolicies)
+def update_llm_policies(body: LlmPolicies, db: Session = Depends(get_db)):
+    """LLM-08 — per-source_app match/blend overrides + per-Plex-library explain
+    overrides. Purely a resolution-time overlay; no rescoring/re-blend triggered
+    on save (unlike scoring-profiles, which eagerly rescores every item)."""
+    _put_json_setting(db, "llm_policies", body)
     return body
 
 
