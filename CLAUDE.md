@@ -78,7 +78,15 @@ You are an LLM IDE agent responsible for reviewing, maintaining, and extending *
 
 ## Backlog
 
-Work open rows in the **To-Do table** in [[Future Improvements]] (priority then category) unless directed otherwise. Do not re-suggest explicitly declined items (blocklist-on-reject). Items flagged for confirmation (blend weight, auto-resolve thresholds) get user sign-off at implementation time. The Future Improvements file is parse-oriented: open work lives only in To-Do; shipped work in Complete.
+Work open rows in the **To-Do table** in [[Future Improvements]] (priority then category, i.e. High → Medium → Low, table order within a tier) unless directed otherwise. [[Future Improvements]] is **parse-oriented** — open work lives only in the To-Do table; shipped work lives only in Complete. Its formatting constraints, which this file must stay in sync with:
+
+- **To-Do table schema**: `| ID | Priority | Category | Item | Details | Requested |`. Every row needs an ID before it's actionable.
+- **ID convention**: a short category prefix + zero-padded number, unique and permanent once assigned (`LIB-02`, `FI-07`, `AD-14`, `SP-09`, `LLM-06`, `AN-01`, `INT-01`, `OPS-01`, `NOTIF-01`, `SEC-A-01`, `AUTH-01`, `UX-04`, `SCAL-03`, `TEL-01`, `RES-02`, `CONTROL-01`, `MOD-01`, etc.) — never reuse or renumber an ID, even after the row ships or is declined, since old session notes and code comments reference it permanently.
+- **Ship a row** → move it into **Complete** at the top of that section (`| **vX.Y.Z** — date | Category | **ID** description... |`) with version/date, then delete the corresponding To-Do row. Full ship-and-document mechanics are in Non-negotiable Principles item 1.
+- **Complete is meant to stay pruned, not grow forever** — Non-negotiable Principles item 1 calls for archiving/removing verified-complete entries once they're no longer useful as a reference, not accumulating every release indefinitely. In practice this file has drifted from that (Complete currently runs the full history back to v0.22.0) — a housekeeping pass to prune/archive older Complete entries is itself fair backlog work, not urgent.
+- **Feature Ideas & Innovation Opportunities** (bottom section) holds not-yet-triaged strategic ideas — never parse this section for open work. **Promotion workflow**: when an idea from here is accepted for real work, give it a To-Do row + ID and mark it `*Promoted:* see **ID** in To-Do` (or delete it) in place — don't leave a promoted idea duplicated in both sections.
+- **Declined-do-not-re-suggest list** lives at the top of the file (currently: `blocklist-on-reject`) — check it before proposing anything that resembles a previously-declined idea, even under new wording.
+- Items flagged for confirmation (blend weight, auto-resolve thresholds, auth-by-default, or any row whose Details column says "user decision"/"needs confirmation"/conditional-on-an-event-that-hasn't-happened) get **user sign-off before implementation**, not just before merge — don't build first and ask after.
 
 ## Extension Protocol
 
