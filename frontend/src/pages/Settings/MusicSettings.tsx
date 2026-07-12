@@ -39,6 +39,7 @@ interface SPSettings {
   schedule_interval_hours: number;
   llm_playlist_names: boolean;
   sonic_similarity_enabled: boolean;
+  genre_aliases: Record<string, string>;
 }
 
 interface LidarrProfiles {
@@ -49,6 +50,21 @@ interface LidarrProfiles {
 
 const labelCls = "text-xs text-slate-400 block";
 const inputCls = "mt-1 w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white";
+
+// SP-14 — genre_aliases is a map (alias -> canonical label); edited as plain
+// "alias = canonical" lines so it fits the same lightweight text-field
+// pattern as excluded_genres, rather than a bespoke key/value row editor.
+function aliasesToText(aliases: Record<string, string> | undefined): string {
+  return Object.entries(aliases || {}).map(([a, c]) => `${a} = ${c}`).join("\n");
+}
+function textToAliases(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const [alias, canonical] = line.split("=").map(s => s.trim());
+    if (alias && canonical) out[alias] = canonical;
+  }
+  return out;
+}
 
 function QdrantHint() {
   return (
@@ -245,11 +261,15 @@ function PlaylistsSettingsCard() {
   const { data: settings } = useQuery({ queryKey: ["sp-settings"], queryFn: () => req<SPSettings>("/smart-playlists/settings") });
   const [draft, setDraft] = useState<Partial<SPSettings> | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // Kept as raw text separately from the parsed genre_aliases object so an
+  // incomplete "alias = " line mid-typing isn't silently dropped by the
+  // round-trip through textToAliases/aliasesToText on every keystroke.
+  const [aliasText, setAliasText] = useState<string | null>(null);
   const form = draft ?? settings ?? null;
 
   const saveMut = useMutation({
     mutationFn: () => req<SPSettings>("/smart-playlists/settings", { method: "PUT", body: JSON.stringify(form || {}) }),
-    onSuccess: () => { setDraft(null); setMsg("Saved"); qc.invalidateQueries({ queryKey: ["sp-settings"] }); },
+    onSuccess: () => { setDraft(null); setAliasText(null); setMsg("Saved"); qc.invalidateQueries({ queryKey: ["sp-settings"] }); },
     onError: (e: Error) => setMsg(e.message),
   });
 
@@ -282,6 +302,16 @@ function PlaylistsSettingsCard() {
           Excluded genres <span className="text-slate-600">(comma-separated)</span>
           <input className={inputCls} value={(form.excluded_genres || []).join(", ")}
             onChange={e => set("excluded_genres", e.target.value.split(",").map(g => g.trim()).filter(Boolean))} />
+        </label>
+        <label className={`${labelCls} sm:col-span-2`}>
+          Genre aliases <span className="text-slate-600">(one per line, "alias = canonical name")</span>
+          <textarea className={`${inputCls} font-mono`} rows={3} placeholder={"Rap = Hip-Hop"}
+            value={aliasText ?? aliasesToText(form.genre_aliases)}
+            onChange={e => { setAliasText(e.target.value); set("genre_aliases", textToAliases(e.target.value)); }} />
+          <span className="block text-slate-600 mt-1">
+            Case/punctuation variants ("Hip-Hop" vs "Hip Hop") always merge automatically — use this for
+            genuinely different-looking labels you want treated as the same genre.
+          </span>
         </label>
       </div>
 

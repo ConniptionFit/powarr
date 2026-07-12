@@ -235,6 +235,13 @@ class SmartPlaylistSettings(BaseModel):
     # requires Plex Pass + sonic analysis having been run on the library; fails
     # soft to the prior insertion-order pick whenever analysis data is missing.
     sonic_similarity_enabled: bool = False
+    # SP-14 — case/punctuation/whitespace genre-label variants (e.g. "Hip-Hop" /
+    # "Hip Hop" / "hip_hop") always merge automatically into one playlist. This
+    # map additionally merges genuinely different-looking labels the user
+    # considers equivalent (e.g. {"Rap": "Hip-Hop"}) — a taxonomy judgment call
+    # left to the user rather than a hardcoded opinion. Keys/values matched
+    # case-insensitively; the value is the canonical display label.
+    genre_aliases: dict[str, str] = {}
 
 
 class ArtistDiscoverySettings(BaseModel):

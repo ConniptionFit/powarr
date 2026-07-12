@@ -71,6 +71,51 @@ def _is_blacklisted(artist_name: str, blocked: set[str]) -> bool:
     return bool(blocked) and _norm_artist(artist_name) in blocked
 
 
+def _normalize_genre_key(genre: str) -> str:
+    """Canonical grouping key for a genre label (SP-14) — collapses case and
+    punctuation/whitespace variants ("Hip-Hop" / "Hip Hop" / "hip_hop" all
+    become "hip hop") so they never fragment into separate playlists."""
+    t = (genre or "").strip().lower()
+    t = re.sub(r"[-_/&]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _resolve_genre_alias(genre: str, aliases: dict[str, str] | None) -> str:
+    """Case-insensitive lookup in the user-curated genre_aliases map — resolves
+    e.g. "Rap" → "Hip-Hop" when configured. Labels with no alias pass through
+    unchanged."""
+    if not aliases:
+        return genre
+    key = (genre or "").strip().lower()
+    for alias, canonical in aliases.items():
+        if (alias or "").strip().lower() == key:
+            return canonical
+    return genre
+
+
+def merge_genre_groups(raw_by_genre: dict[str, list[dict]],
+                       aliases: dict[str, str] | None = None) -> dict[str, list[dict]]:
+    """Collapse near-duplicate genre labels into single buckets before playlist
+    candidate generation (SP-14). Pure — no I/O, unit-tested directly.
+
+    The display label for a merged group is whichever raw spelling
+    contributed the most artists (ties broken by first-seen order, stable
+    across runs for a given Qdrant scroll order)."""
+    groups: dict[str, dict[str, Any]] = {}
+    for raw_genre, artists in raw_by_genre.items():
+        resolved = _resolve_genre_alias(raw_genre, aliases)
+        key = _normalize_genre_key(resolved)
+        bucket = groups.setdefault(key, {"artists": [], "counts": {}})
+        bucket["artists"].extend(artists)
+        bucket["counts"][resolved] = bucket["counts"].get(resolved, 0) + len(artists)
+
+    out: dict[str, list[dict]] = {}
+    for bucket in groups.values():
+        label = max(bucket["counts"], key=lambda k: bucket["counts"][k])
+        out[label] = bucket["artists"]
+    return out
+
+
 async def _playlist_title(db, cfg: SmartPlaylistSettings, genre: str,
                           artist_names: list[str]) -> str:
     fallback = f"Powarr · {genre}"
@@ -108,12 +153,21 @@ def _plex_client(db):
 
 async def _artists_by_genre(db, cfg: SmartPlaylistSettings,
                             genre: str | None = None) -> dict[str, list[dict]]:
-    """Scroll Qdrant monitored artists → genre → unique non-blacklisted artists."""
+    """Scroll Qdrant monitored artists → genre → unique non-blacklisted artists.
+    Near-duplicate genre labels are merged before the min_artists threshold
+    (SP-14, see merge_genre_groups)."""
     from app.services import qdrant_config
     client = qdrant_config.client(db)
     if not client:
         return {}
-    excluded = {g.lower() for g in (cfg.excluded_genres or [])}
+    aliases = cfg.genre_aliases or {}
+    # excluded_genres and a requested `genre` both compare against the merged
+    # (alias-resolved, normalized) form so they behave consistently with the
+    # merge step below — otherwise an excluded "Hip-Hop" wouldn't catch an
+    # artist tagged only "Rap" once the two are configured to merge, and
+    # regenerating an existing "Hip-Hop" playlist wouldn't pick up "Rap" artists.
+    excluded_keys = {_normalize_genre_key(g) for g in (cfg.excluded_genres or [])}
+    target_key = _normalize_genre_key(_resolve_genre_alias(genre, aliases)) if genre else None
     blocked = _blacklist_set(cfg)
     by_genre: dict[str, list[dict]] = defaultdict(list)
     offset = None
@@ -131,9 +185,12 @@ async def _artists_by_genre(db, cfg: SmartPlaylistSettings,
                 genres = [genres]
             for g in genres:
                 g = (g or "").strip()
-                if not g or g.lower() in excluded:
+                if not g:
                     continue
-                if genre and g.lower() != genre.lower():
+                norm_g = _normalize_genre_key(_resolve_genre_alias(g, aliases))
+                if norm_g in excluded_keys:
+                    continue
+                if target_key and norm_g != target_key:
                     continue
                 by_genre[g].append({
                     "artist_name": artist,
@@ -142,8 +199,10 @@ async def _artists_by_genre(db, cfg: SmartPlaylistSettings,
         if offset is None:
             break
 
+    merged = merge_genre_groups(dict(by_genre), aliases)
+
     out: dict[str, list[dict]] = {}
-    for g, artists in by_genre.items():
+    for g, artists in merged.items():
         seen: set[str] = set()
         uniq = []
         for a in artists:
