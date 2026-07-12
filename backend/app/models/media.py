@@ -33,6 +33,12 @@ class MediaItem(Base):
     # cleanup.protect_in_progress, refreshed alongside the other protect flags.
     progress_protected = Column(Boolean, default=False)
     pending_delete_at = Column(DateTime, nullable=True)  # soft-delete: when deletion was requested
+    # Chosen Sonarr episode delete policy (LIB-02, v0.56.0 — one of
+    # deleter.EPISODE_DELETE_MODES), persisted across the soft-delete pending
+    # window so the scheduler's later purge honors the mode the user picked
+    # rather than falling back to the series-wide default. Null for every
+    # other media type and for immediate (non-soft) deletes.
+    pending_delete_mode = Column(String, nullable=True)
 
     # Cached LLM deletion rationale. The key hashes the prompt template, model
     # config, and this item's scoring-relevant fields — any of those changing

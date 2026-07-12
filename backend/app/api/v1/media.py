@@ -181,21 +181,29 @@ def deletion_stats(db: Session = Depends(get_db)):
 
 
 @router.post("/preview-delete", response_model=DeletionPreview)
-def preview_delete(ids: list[int] = Body(...), db: Session = Depends(get_db)):
+def preview_delete(ids: list[int] = Body(...), delete_mode: Optional[str] = Query(None),
+                   db: Session = Depends(get_db)):
     """Non-destructive dry-run (LIB-01): projected GB freed, per-item *arr action
     and cascade warnings (deleting one episode/track can unmonitor or delete an
     entire series/artist in Sonarr/Lidarr — this surfaces that before it happens),
     current protection flags, and whether this would soft-delete or delete
     immediately. No writes — POST only because a JSON body of ids is cleaner
-    than a long query string; nothing here mutates state."""
+    than a long query string; nothing here mutates state.
+
+    delete_mode (LIB-02): one of deleter.EPISODE_DELETE_MODES — when given, the
+    preview reflects that specific Sonarr episode policy instead of the
+    extra_config-driven default, so the modal shown before commit matches what
+    will actually happen."""
     from app.services.deletion_preview import build_deletion_preview
     cleanup = _get_setting(db, "cleanup", CleanupSettings)
-    return build_deletion_preview(db, ids, cleanup)
+    return build_deletion_preview(db, ids, cleanup, delete_mode=delete_mode)
 
 
 @router.delete("/batch")
-async def delete_media_batch(ids: list[int] = Body(...), db: Session = Depends(get_db)):
-    """Delete multiple media items by ID. Honors the soft-delete window when configured."""
+async def delete_media_batch(ids: list[int] = Body(...), delete_mode: Optional[str] = Query(None),
+                             db: Session = Depends(get_db)):
+    """Delete multiple media items by ID. Honors the soft-delete window when configured.
+    delete_mode (LIB-02): explicit Sonarr episode policy, see deleter.EPISODE_DELETE_MODES."""
     from app.services import tasks
     task_id = tasks.create_task("deletion", f"Deleting {len(ids)} item(s)", total=len(ids))
     cleanup = _get_setting(db, "cleanup", CleanupSettings)
@@ -207,9 +215,10 @@ async def delete_media_batch(ids: list[int] = Body(...), db: Session = Depends(g
                 continue
             if cleanup.soft_delete_days > 0 and item.pending_delete_at is None:
                 item.pending_delete_at = datetime.utcnow()
+                item.pending_delete_mode = delete_mode
                 pending.append(item_id)
             else:
-                await propagate_and_delete(item, db)
+                await propagate_and_delete(item, db, delete_mode=delete_mode)
                 deleted.append(item_id)
         except Exception:
             pass
@@ -347,20 +356,23 @@ async def explain_media_stream(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{item_id}")
-async def delete_media(item_id: int, db: Session = Depends(get_db)):
+async def delete_media(item_id: int, delete_mode: Optional[str] = Query(None),
+                       db: Session = Depends(get_db)):
+    """delete_mode (LIB-02): explicit Sonarr episode policy, see deleter.EPISODE_DELETE_MODES."""
     item = db.query(MediaItem).filter_by(id=item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Media item not found")
     cleanup = _get_setting(db, "cleanup", CleanupSettings)
     if cleanup.soft_delete_days > 0 and item.pending_delete_at is None:
         item.pending_delete_at = datetime.utcnow()
+        item.pending_delete_mode = delete_mode
         db.commit()
         return {"deleted": None, "pending_delete": item_id,
                 "purge_after_days": cleanup.soft_delete_days}
     from app.services import tasks
     task_id = tasks.create_task("deletion", f"Deleting '{item.title}'")
     try:
-        await propagate_and_delete(item, db)
+        await propagate_and_delete(item, db, delete_mode=delete_mode)
         db.commit()
     except Exception as e:
         tasks.finish_task(task_id, "failed", str(e))

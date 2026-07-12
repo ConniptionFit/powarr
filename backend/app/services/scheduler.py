@@ -40,7 +40,7 @@ async def _purge_due_soft_deletes(db) -> int:
     purged = 0
     for item in due:
         try:
-            await propagate_and_delete(item, db)
+            await propagate_and_delete(item, db, delete_mode=item.pending_delete_mode)
             purged += 1
         except Exception as e:
             logger.error(f"Soft-delete purge failed for '{item.title}': {e}")

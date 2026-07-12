@@ -46,6 +46,7 @@ def _migrate():
             "seeding_protected": "BOOLEAN DEFAULT FALSE",
             "progress_protected": "BOOLEAN DEFAULT FALSE",
             "pending_delete_at": "TIMESTAMP",
+            "pending_delete_mode": "VARCHAR",
             "llm_rationale": "TEXT",
             "llm_rationale_at": "TIMESTAMP",
             "llm_rationale_key": "VARCHAR",

@@ -180,6 +180,46 @@ class SonarrIntegration(BaseIntegration):
         except Exception as e:
             return self._manual_import_error_result(e)
 
+    async def get_episode_files(self, series_id: int) -> list[dict]:
+        """Episode file records for a series (id, path, seasonNumber, ...) — used
+        to resolve a MediaItem episode row to its Sonarr episode file by path
+        for episode-level delete actions (LIB-02). MediaItem has no stored
+        episode-file id, so callers match on `path`."""
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/episodefile", headers=self._headers(),
+                                 params={"seriesId": series_id})
+            r.raise_for_status()
+            return r.json()
+
+    async def delete_episode_file(self, episode_file_id: int) -> bool:
+        """Delete a single episode file from disk + Sonarr's index (LIB-02).
+        Leaves series/episode/season monitoring untouched — pair with
+        set_season_monitored/unmonitor_series as the chosen policy mode requires."""
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            r = await client.delete(f"{self._base()}/episodefile/{episode_file_id}",
+                                    headers=self._headers())
+            return r.status_code in (200, 204)
+
+    async def set_season_monitored(self, series_id: int, season_numbers: set[int],
+                                   monitored: bool) -> bool:
+        """Flip `monitored` on specific season(s) of a series (LIB-02), leaving
+        the series itself and any other season untouched. Returns False if none
+        of the requested season numbers exist on the series (nothing changed)."""
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/series/{series_id}", headers=self._headers())
+            r.raise_for_status()
+            series = r.json()
+            changed = False
+            for season in series.get("seasons", []):
+                if season.get("seasonNumber") in season_numbers:
+                    season["monitored"] = monitored
+                    changed = True
+            if not changed:
+                return False
+            put_r = await client.put(f"{self._base()}/series/{series_id}",
+                                     headers=self._headers(), json=series)
+            return put_r.status_code == 202
+
     async def unmonitor_series(self, series_id: int) -> bool:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             r = await client.get(f"{self._base()}/series/{series_id}", headers=self._headers())

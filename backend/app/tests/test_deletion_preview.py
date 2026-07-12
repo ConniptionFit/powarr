@@ -134,5 +134,80 @@ class BuildDeletionPreviewTests(unittest.TestCase):
         self.assertIsNone(preview.items[0].cascade_warning)
 
 
+class DeleteModePreviewTests(unittest.TestCase):
+    """LIB-02 — the preview reflects whichever explicit episode delete_mode
+    was requested instead of always describing the extra_config default."""
+
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.db = sessionmaker(bind=self.engine)()
+        self.cleanup = CleanupSettings()
+        self.db.add(Integration(name="sonarr", enabled=True, url="http://s"))
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_episode_files_mode_has_no_cascade_warning(self):
+        ep1 = _item(plex_rating_key="e1", media_type="episode", sonarr_id=42)
+        ep2 = _item(plex_rating_key="e2", media_type="episode", sonarr_id=42)
+        self.db.add_all([ep1, ep2])
+        self.db.commit()
+
+        preview = build_deletion_preview(self.db, [ep1.id], self.cleanup, delete_mode="episode_files")
+        self.assertEqual(preview.items[0].arr_action, "delete_episode_file")
+        self.assertIsNone(preview.items[0].cascade_warning)
+
+    def test_unmonitor_season_mode_warns_with_season_caveat(self):
+        ep1 = _item(plex_rating_key="e1", media_type="episode", sonarr_id=42)
+        ep2 = _item(plex_rating_key="e2", media_type="episode", sonarr_id=42)
+        self.db.add_all([ep1, ep2])
+        self.db.commit()
+
+        preview = build_deletion_preview(self.db, [ep1.id], self.cleanup, delete_mode="unmonitor_season")
+        self.assertEqual(preview.items[0].arr_action, "unmonitor_season")
+        self.assertIn("season", preview.items[0].cascade_warning)
+        self.assertIn("1 other item", preview.items[0].cascade_warning)
+
+    def test_unmonitor_series_mode_warns_about_whole_series(self):
+        ep1 = _item(plex_rating_key="e1", media_type="episode", sonarr_id=42)
+        ep2 = _item(plex_rating_key="e2", media_type="episode", sonarr_id=42)
+        self.db.add_all([ep1, ep2])
+        self.db.commit()
+
+        preview = build_deletion_preview(self.db, [ep1.id], self.cleanup, delete_mode="unmonitor_series")
+        self.assertEqual(preview.items[0].arr_action, "unmonitored")
+        self.assertIn("entire series", preview.items[0].cascade_warning)
+
+    def test_remove_from_sonarr_mode_warns_about_removal(self):
+        ep1 = _item(plex_rating_key="e1", media_type="episode", sonarr_id=42)
+        ep2 = _item(plex_rating_key="e2", media_type="episode", sonarr_id=42)
+        self.db.add_all([ep1, ep2])
+        self.db.commit()
+
+        preview = build_deletion_preview(self.db, [ep1.id], self.cleanup, delete_mode="remove_from_sonarr")
+        self.assertEqual(preview.items[0].arr_action, "deleted_from_arr")
+        self.assertIn("remove the entire series", preview.items[0].cascade_warning)
+
+    def test_no_warning_when_no_siblings_left_out(self):
+        ep1 = _item(plex_rating_key="e1", media_type="episode", sonarr_id=42)
+        self.db.add(ep1)
+        self.db.commit()
+
+        preview = build_deletion_preview(self.db, [ep1.id], self.cleanup, delete_mode="unmonitor_series")
+        self.assertIsNone(preview.items[0].cascade_warning)
+
+    def test_movie_ignores_delete_mode(self):
+        """delete_mode is Sonarr-episode-specific — a movie's preview is
+        unaffected even if a delete_mode string is passed."""
+        movie = _item(plex_rating_key="m1", media_type="movie", radarr_id=5)
+        self.db.add(movie)
+        self.db.commit()
+
+        preview = build_deletion_preview(self.db, [movie.id], self.cleanup, delete_mode="unmonitor_series")
+        self.assertEqual(preview.items[0].arr_action, "none")  # no radarr integration configured
+
+
 if __name__ == "__main__":
     unittest.main()

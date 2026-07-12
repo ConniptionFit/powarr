@@ -1,6 +1,37 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ShieldAlert, X } from "lucide-react";
-import { mediaApi, fmtBytes } from "../lib/api";
+import { mediaApi, fmtBytes, type EpisodeDeleteMode } from "../lib/api";
+
+// LIB-02 — explicit Sonarr episode delete policy, shown only when every
+// previewed item is a Sonarr-linked episode. Sonarr has no native per-episode
+// delete/unmonitor distinction, so without this the default action would
+// unmonitor or delete the ENTIRE series for "one episode" (see the cascade
+// warnings below) — this makes the chosen scope unmistakable before commit.
+const MODE_OPTIONS: { value: EpisodeDeleteMode; label: string; description: string }[] = [
+  {
+    value: "episode_files",
+    label: "Episode files only",
+    description: "Delete just the selected episode file(s). Sonarr's monitoring is left unchanged — "
+      + "it may re-search and re-download if the episode is still monitored.",
+  },
+  {
+    value: "unmonitor_season",
+    label: "Unmonitor season",
+    description: "Delete the file(s) and stop Sonarr monitoring the WHOLE SEASON they belong to — "
+      + "including other episodes in that season not selected here.",
+  },
+  {
+    value: "unmonitor_series",
+    label: "Unmonitor series",
+    description: "Delete the file(s) and stop Sonarr monitoring the ENTIRE SERIES.",
+  },
+  {
+    value: "remove_from_sonarr",
+    label: "Remove from Sonarr entirely",
+    description: "Remove the whole series from Sonarr and delete ALL of its files — not just what you selected here.",
+  },
+];
 
 // LIB-01 — non-destructive dry-run shown before any delete (single or batch)
 // commits: projected GB freed, *arr cascade (an episode/track delete can
@@ -15,13 +46,18 @@ export default function DeletionPreviewModal({
 }: {
   ids: number[];
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (deleteMode?: EpisodeDeleteMode) => void;
   confirming: boolean;
 }) {
+  const [mode, setMode] = useState<EpisodeDeleteMode>("episode_files");
+
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["deletion-preview", ids],
-    queryFn: () => mediaApi.previewDelete(ids),
+    queryKey: ["deletion-preview", ids, mode],
+    queryFn: () => mediaApi.previewDelete(ids, mode),
   });
+
+  const isEpisodeSelection = !!data && data.items.length > 0
+    && data.items.every(i => i.media_type === "episode" && i.arr_app === "sonarr");
 
   const cascadeWarnings = data?.items.filter(i => i.cascade_warning) ?? [];
 
@@ -72,13 +108,41 @@ export default function DeletionPreviewModal({
                 )}
               </div>
 
+              {isEpisodeSelection && (
+                <div>
+                  <p className="text-slate-500 text-xs uppercase tracking-wider mb-2">Sonarr delete mode</p>
+                  <div className="space-y-2">
+                    {MODE_OPTIONS.map(opt => (
+                      <label
+                        key={opt.value}
+                        className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                          mode === opt.value ? "border-brand/60 bg-brand/10" : "border-purple-900/20 hover:border-purple-900/40"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="delete_mode"
+                          className="mt-1 accent-purple-500"
+                          checked={mode === opt.value}
+                          onChange={() => setMode(opt.value)}
+                        />
+                        <span>
+                          <span className="block text-sm text-white font-medium">{opt.label}</span>
+                          <span className="block text-xs text-slate-400">{opt.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {data.protected_count > 0 && (
                 <div className="flex items-start gap-2 bg-yellow-950/30 border border-yellow-900/40 rounded-lg px-3 py-2.5">
                   <ShieldAlert size={16} className="text-yellow-400 flex-shrink-0 mt-0.5" />
                   <p className="text-yellow-200 text-xs">
                     {data.protected_count} of the selected item(s) {data.protected_count === 1 ? "is" : "are"} currently
-                    protected (Seerr request, another user's watch, or an actively-seeding torrent). Deleting anyway
-                    overrides that protection.
+                    protected (Seerr request, another user's watch, in-progress watch, or an actively-seeding torrent).
+                    Deleting anyway overrides that protection.
                   </p>
                 </div>
               )}
@@ -108,7 +172,7 @@ export default function DeletionPreviewModal({
             Cancel
           </button>
           <button
-            onClick={onConfirm}
+            onClick={() => onConfirm(isEpisodeSelection ? mode : undefined)}
             disabled={confirming || isLoading || !data}
             className="px-4 py-2 rounded-lg bg-red-700 hover:bg-red-600 text-white text-sm transition-colors disabled:opacity-50"
           >

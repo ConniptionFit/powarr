@@ -82,8 +82,9 @@ export interface DeletionPreviewItem {
   protected: boolean;
   watch_protected: boolean;
   seeding_protected: boolean;
+  progress_protected: boolean;
   arr_app: string | null;
-  arr_action: "delete_from_arr" | "unmonitor" | "none";
+  arr_action: "delete_from_arr" | "unmonitor" | "none" | "delete_episode_file" | "unmonitor_season";
   cascade_warning: string | null;
 }
 
@@ -96,6 +97,10 @@ export interface DeletionPreview {
   would_pend: boolean;
   protected_count: number;
 }
+
+// LIB-02 — explicit Sonarr episode delete policy modes, only meaningful when
+// every previewed item is a Sonarr-linked episode.
+export type EpisodeDeleteMode = "episode_files" | "unmonitor_season" | "unmonitor_series" | "remove_from_sonarr";
 
 function downloadCsv(path: string) {
   // Same-origin cookie auth; open as a navigation so the browser saves the file.
@@ -110,11 +115,16 @@ export const mediaApi = {
   stats: () => req<MediaStats>("/media/stats"),
   ignore: (id: number, ignored: boolean) =>
     req(`/media/${id}/ignore?ignored=${ignored}`, { method: "PATCH" }),
-  delete: (id: number) => req(`/media/${id}`, { method: "DELETE" }),
-  deleteBatch: (ids: number[]) =>
-    req(`/media/batch`, { method: "DELETE", body: JSON.stringify(ids) }),
-  previewDelete: (ids: number[]) =>
-    req<DeletionPreview>(`/media/preview-delete`, { method: "POST", body: JSON.stringify(ids) }),
+  delete: (id: number, deleteMode?: EpisodeDeleteMode) =>
+    req(`/media/${id}${deleteMode ? `?delete_mode=${deleteMode}` : ""}`, { method: "DELETE" }),
+  deleteBatch: (ids: number[], deleteMode?: EpisodeDeleteMode) =>
+    req(`/media/batch${deleteMode ? `?delete_mode=${deleteMode}` : ""}`, {
+      method: "DELETE", body: JSON.stringify(ids),
+    }),
+  previewDelete: (ids: number[], deleteMode?: EpisodeDeleteMode) =>
+    req<DeletionPreview>(`/media/preview-delete${deleteMode ? `?delete_mode=${deleteMode}` : ""}`, {
+      method: "POST", body: JSON.stringify(ids),
+    }),
   libraries: () => req<string[]>("/media/libraries"),
   restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
   explain: (id: number, force = false) =>

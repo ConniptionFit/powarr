@@ -1,7 +1,7 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3 } from "lucide-react";
-import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
+import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem, type EpisodeDeleteMode } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
@@ -162,7 +162,8 @@ export default function DeletionSuggestions() {
   const displayItems = isShowMode ? [] : filteredItems;
 
   const deleteBatchMut = useMutation({
-    mutationFn: (ids: number[]) => mediaApi.deleteBatch(ids),
+    mutationFn: ({ ids, deleteMode }: { ids: number[]; deleteMode?: EpisodeDeleteMode }) =>
+      mediaApi.deleteBatch(ids, deleteMode),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["stats"] }); setPreviewIds(null); setSelected(new Set()); },
   });
 
@@ -611,7 +612,7 @@ export default function DeletionSuggestions() {
         <DeletionPreviewModal
           ids={previewIds}
           onCancel={() => setPreviewIds(null)}
-          onConfirm={() => deleteBatchMut.mutate(previewIds)}
+          onConfirm={deleteMode => deleteBatchMut.mutate({ ids: previewIds, deleteMode })}
           confirming={deleteBatchMut.isPending}
         />
       )}
