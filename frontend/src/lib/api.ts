@@ -425,7 +425,7 @@ export const importsApi = {
 // --- Active processes (tracked background tasks) ---
 export interface TaskProgress {
   id: string;
-  kind: "llm_run" | "scan" | "plex_sync" | "deletion" | "import_batch" | "artist_discovery";
+  kind: "llm_run" | "scan" | "plex_sync" | "deletion" | "import_batch" | "artist_discovery" | "related_search";
   label: string;
   status: "running" | "done" | "failed";
   current: number | null;

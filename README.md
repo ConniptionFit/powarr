@@ -169,6 +169,9 @@ button pages through additional matches (50 at a time) instead of a fixed 15-res
 **v0.49.1**: results also pull from Plex's own **Sonically Similar** analysis and **Similar
 Artists** recommendations (in addition to Last.fm) when the seed artist is in your Plex library,
 with a colored badge per source on each result card so you can see which service(s) surfaced it.
+**v0.50.1**: a search now shows a progress card in the corner notification tray (candidates found
+so far / total) instead of just a static "Searching…" button, since enrichment can take 15+
+seconds for a busy query.
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
 **drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is

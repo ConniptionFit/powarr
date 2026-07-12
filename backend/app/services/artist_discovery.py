@@ -937,7 +937,30 @@ def reject_candidate(db, candidate_id: int) -> dict[str, Any]:
 # as Discovery candidates; adding one goes straight to Lidarr via
 # _add_artist_to_lidarr, bypassing the review queue entirely.
 
-async def search_related_artists(db, artist: str, limit: int = 50) -> dict[str, Any]:
+async def search_related_artists_tracked(db, artist: str, limit: int = 50) -> dict[str, Any]:
+    """Tray-tracked wrapper for a user-triggered Related Artists search — mirrors
+    run_discovery()'s thin-wrapper shape. Enrichment (one Lidarr/MusicBrainz/
+    Wikipedia/Deezer round-trip per candidate) is the slow part of a search —
+    users reported no feedback that it was working, since the page had nothing
+    beyond a static "Searching…" button label. The tray card gives a
+    determinate current/total bar once the Last.fm candidate count is known."""
+    from app.services import tasks
+    task_id = tasks.create_task("related_search", f"Searching for “{artist.strip()}”")
+    try:
+        result = await search_related_artists(db, artist, limit=limit, task_id=task_id)
+        tasks.finish_task(task_id, "done" if result.get("ok") else "failed", result.get("message"))
+        return result
+    except Exception as e:
+        tasks.finish_task(task_id, "failed", str(e))
+        raise
+
+
+async def search_related_artists(db, artist: str, limit: int = 50,
+                                  task_id: str | None = None) -> dict[str, Any]:
+    """task_id is optional so existing callers/tests are unaffected — when
+    supplied (by search_related_artists_tracked()), progress reports to the
+    Active Processes tray via tasks.update_task()."""
+    from app.services import tasks
     artist = (artist or "").strip()
     if not artist:
         return {"ok": False, "message": "Enter an artist name", "results": []}
@@ -945,6 +968,7 @@ async def search_related_artists(db, artist: str, limit: int = 50) -> dict[str, 
     if not lastfm:
         return {"ok": False, "message": "Last.fm integration not configured", "results": []}
 
+    tasks.update_task(task_id, message=f"Searching Last.fm for artists similar to '{artist}'…")
     limit = max(1, min(int(limit or 50), 200))
     try:
         related = await lastfm.get_similar_artists(artist, limit=limit)
@@ -958,10 +982,12 @@ async def search_related_artists(db, artist: str, limit: int = 50) -> dict[str, 
     lidarr_by_mbid, lidarr_by_name = await _lidarr_artist_index(db) or ({}, {})
     plex_names = _plex_artist_names(db)
 
+    tasks.update_task(task_id, current=0, total=len(related), message=f"Enriching {len(related)} candidate(s)…")
     results = []
-    for r in related:
+    for i, r in enumerate(related):
         rname = (r.get("name") or "").strip()
         if not rname:
+            tasks.update_task(task_id, current=i + 1)
             continue
         rmbid = (r.get("mbid") or "").strip() or None
         rname_norm = _norm_artist(rname)
@@ -979,7 +1005,9 @@ async def search_related_artists(db, artist: str, limit: int = 50) -> dict[str, 
             "genres": clean_tags(enrichment.get("genres")), "years_active": enrichment.get("years_active"),
             "similarity_sources": ["lastfm"],
         })
+        tasks.update_task(task_id, current=i + 1, message=f"Enriched '{rname}'")
 
+    tasks.update_task(task_id, message="Checking Plex for additional matches…")
     await _augment_with_plex_similarity(db, artist, results, lidarr_by_name, plex_names)
     return {"ok": True, "message": f"{len(results)} related artist(s) for '{artist}'", "results": results}
 

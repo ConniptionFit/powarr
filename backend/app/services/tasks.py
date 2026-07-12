@@ -37,7 +37,7 @@ def spawn_background(coro) -> "asyncio.Task":
 
 class TaskProgress(BaseModel):
     id: str
-    kind: str  # "llm_run" | "scan" | "plex_sync" | "deletion" | "import_batch"
+    kind: str  # "llm_run" | "scan" | "plex_sync" | "deletion" | "import_batch" | "artist_discovery" | "related_search"
     label: str
     status: str = "running"  # running | done | failed
     current: Optional[int] = None

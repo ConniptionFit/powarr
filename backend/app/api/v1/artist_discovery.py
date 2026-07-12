@@ -204,8 +204,9 @@ async def related(
     db: Session = Depends(get_db),
 ):
     """Ad-hoc "who's similar to X" search — read-only, no Qdrant writes, no
-    DiscoveredArtist rows. Independent of the taste-model pipeline."""
-    return await service.search_related_artists(db, artist, limit=limit)
+    DiscoveredArtist rows. Independent of the taste-model pipeline. Tray-tracked
+    (kind "related_search") so the frontend shows enrichment progress."""
+    return await service.search_related_artists_tracked(db, artist, limit=limit)
 
 
 @router.post("/related/add")

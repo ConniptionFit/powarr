@@ -19,6 +19,7 @@ from app.database import Base
 from app.schemas.settings import ArtistDiscoverySettings
 from app.services.artist_discovery import (
     _add_artist_to_lidarr, add_related_artist, add_to_lidarr, search_related_artists,
+    search_related_artists_tracked,
 )
 
 
@@ -147,6 +148,53 @@ class SearchRelatedArtistsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(owned["already_owned"])
         self.assertFalse(new["already_owned"])
         self.assertAlmostEqual(owned["match_score"], 0.9)
+
+
+class SearchRelatedArtistsTrackedTests(unittest.IsolatedAsyncioTestCase):
+    """search_related_artists_tracked() is the tray-tracked entry point the API
+    route calls -- a "related_search" task should exist with determinate
+    current/total progress once enrichment starts, and finish done/failed to
+    match the underlying search's outcome."""
+
+    def setUp(self):
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+        from app.services import tasks
+        tasks._tasks.clear()  # module-level tray state is process-global, not per-test
+
+    def _only_task(self):
+        from app.services import tasks
+        matches = [t for t in tasks._tasks.values() if t.kind == "related_search"]
+        self.assertEqual(len(matches), 1)
+        return matches[0]
+
+    async def test_successful_search_finishes_task_done_with_full_progress(self):
+        lastfm = AsyncMock()
+        lastfm.get_similar_artists = AsyncMock(return_value=[
+            {"name": "Artist One", "mbid": "mbid-1", "match": "0.9"},
+            {"name": "Artist Two", "mbid": "mbid-2", "match": "0.8"},
+        ])
+        with patch("app.services.artist_discovery._lastfm_client", return_value=lastfm), \
+             patch("app.services.artist_discovery._lidarr_artist_index",
+                   new=AsyncMock(return_value=({}, {}))), \
+             patch("app.services.artist_discovery._enrich_candidate",
+                   new=AsyncMock(return_value={"image_url": None, "bio": None,
+                                               "genres": [], "years_active": None})):
+            result = await search_related_artists_tracked(self.db, "Seed Artist")
+        self.assertTrue(result["ok"])
+        task = self._only_task()
+        self.assertEqual(task.status, "done")
+        self.assertEqual(task.current, 2)
+        self.assertEqual(task.total, 2)
+
+    async def test_failed_search_finishes_task_failed(self):
+        with patch("app.services.artist_discovery._lastfm_client", return_value=None):
+            result = await search_related_artists_tracked(self.db, "Seed Artist")
+        self.assertFalse(result["ok"])
+        task = self._only_task()
+        self.assertEqual(task.status, "failed")
+        self.assertIn("Last.fm", task.message)
 
 
 class _FakePlex:
