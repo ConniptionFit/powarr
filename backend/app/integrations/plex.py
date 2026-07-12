@@ -238,10 +238,9 @@ class PlexIntegration(BaseIntegration):
         """AD-14: artist-level Sonic Analysis neighbors via the same /nearest
         endpoint used for tracks — Plex's own "Sonically Similar" tab on an
         Artist page uses this call scoped to the artist's own ratingKey rather
-        than a track's. Unverified against a live server (no safe way to test
-        without a real Plex token in this environment) — needs a live check
-        after deploy; fails soft to [] on any error or unexpected shape so a
-        wrong assumption here just means zero Plex-sonic badges, nothing breaks."""
+        than a track's. Confirmed live 2026-07-12 (real /related?artist=Radiohead
+        call returned genuine plex_sonic-badged results). Fails soft to [] on
+        any error or unexpected shape regardless."""
         if not rating_key:
             return []
         try:
@@ -262,8 +261,8 @@ class PlexIntegration(BaseIntegration):
         """AD-14: Plex's own "Similar Artists" / Related hub — metadata-agent-driven
         recommendations, distinct from Sonic Analysis. Parses every Hub's Metadata
         entries and keeps artist-type results only (defensive against hub-label
-        variance across Plex Media Server versions). Same unverified-live caveat
-        as sonically_similar_artists above; fails soft to [] on any error."""
+        variance across Plex Media Server versions). Confirmed live 2026-07-12
+        alongside sonically_similar_artists above; fails soft to [] on any error."""
         if not rating_key:
             return []
         try:
