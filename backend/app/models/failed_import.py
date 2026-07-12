@@ -57,3 +57,20 @@ class FailedImport(Base):
             return json.loads(self.raw_metadata or "{}").get("pack")
         except (ValueError, TypeError):
             return None
+
+    @property
+    def root_cause_code(self) -> str:
+        """FI-06 — plain-language root-cause tag, computed fresh from existing
+        scorer/LLM signals (never stored, never a scoring input)."""
+        from app.services.root_cause import classify_root_cause
+        return classify_root_cause(self).code
+
+    @property
+    def root_cause_label(self) -> str:
+        from app.services.root_cause import classify_root_cause
+        return classify_root_cause(self).label
+
+    @property
+    def root_cause_action(self) -> str:
+        from app.services.root_cause import classify_root_cause
+        return classify_root_cause(self).suggested_action

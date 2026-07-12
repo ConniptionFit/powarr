@@ -27,6 +27,9 @@ class FailedImportOut(BaseModel):
     still_in_queue: Optional[bool] = None  # download still present in the *arr queue (v0.35.0)
     verified: Optional[bool] = None
     message: Optional[str] = None
+    root_cause_code: Optional[str] = None  # FI-06 — plain-language root-cause tag
+    root_cause_label: Optional[str] = None
+    root_cause_action: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     resolved_at: Optional[datetime] = None

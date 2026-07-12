@@ -383,6 +383,9 @@ export interface FailedImport {
   still_in_queue: boolean | null; // download still present in the *arr queue (v0.35.0)
   verified: boolean | null;
   message: string | null;
+  root_cause_code: string | null; // FI-06 — plain-language root-cause tag, drives filter chips
+  root_cause_label: string | null;
+  root_cause_action: string | null;
   created_at: string | null;
   updated_at: string | null;
   resolved_at: string | null;

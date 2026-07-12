@@ -475,6 +475,7 @@ export default function MatchReview() {
   const [packFilter, setPackFilter] = usePersistedState<"all" | "packs" | "singles">("powarr.failedImports.packFilter", "all");
   const [search, setSearch] = usePersistedState("powarr.failedImports.search", "");
   const [platformFilter, setPlatformFilter] = usePersistedState<PlatformName | "">("powarr.failedImports.platformFilter", "");
+  const [rootCauseFilter, setRootCauseFilter] = usePersistedState<string>("powarr.failedImports.rootCauseFilter", "");
   const [density, setDensity] = usePersistedState<TableDensity>(DENSITY_STORAGE_KEY, "comfortable");
   const d = DENSITY_CLASSES[density];
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
@@ -560,6 +561,7 @@ export default function MatchReview() {
     if (packFilter === "packs") arr = arr.filter(i => i.pack);
     if (packFilter === "singles") arr = arr.filter(i => !i.pack);
     if (platformFilter) arr = arr.filter(i => i.source_app === platformFilter);
+    if (rootCauseFilter) arr = arr.filter(i => i.root_cause_code === rootCauseFilter);
     const q = search.trim().toLowerCase();
     if (q) {
       arr = arr.filter(i =>
@@ -581,7 +583,25 @@ export default function MatchReview() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return arr;
-  }, [items, sortBy, sortDir, downgradeOnly, suspiciousOnly, packFilter, platformFilter, search]);
+  }, [items, sortBy, sortDir, downgradeOnly, suspiciousOnly, packFilter, platformFilter, rootCauseFilter, search]);
+
+  // FI-06 — root causes actually present in the current result set, with
+  // counts, in a fixed priority order (matches services/root_cause.py).
+  const ROOT_CAUSE_ORDER = ["missing_files", "year_mismatch", "not_an_upgrade", "suspicious_file",
+    "pack_partial", "scene_name_junk", "no_match", "llm_disagrees", "weak_numeric_match",
+    "low_confidence", "unclassified"];
+  const rootCauseCounts = useMemo(() => {
+    const counts = new Map<string, { label: string; count: number }>();
+    for (const i of items) {
+      if (!i.root_cause_code) continue;
+      const entry = counts.get(i.root_cause_code);
+      if (entry) entry.count++;
+      else counts.set(i.root_cause_code, { label: i.root_cause_label || i.root_cause_code, count: 1 });
+    }
+    return [...counts.entries()].sort(
+      (a, b) => ROOT_CAUSE_ORDER.indexOf(a[0]) - ROOT_CAUSE_ORDER.indexOf(b[0])
+    );
+  }, [items]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["imports"] });
@@ -963,6 +983,18 @@ export default function MatchReview() {
                 Suspicious
               </span>
             )}
+            {/* FI-06 — only for causes not already surfaced by a badge above,
+                so this never duplicates Covered/Partial/Suspicious. */}
+            {item.root_cause_code && item.root_cause_label &&
+              !["not_an_upgrade", "suspicious_file", "pack_partial"].includes(item.root_cause_code) &&
+              item.root_cause_code !== "unclassified" && (
+              <span
+                className="block mt-0.5 px-1.5 py-0.5 rounded bg-purple-900/40 text-purple-300 text-[10px] font-bold uppercase tracking-wide w-fit"
+                title={item.root_cause_action ?? undefined}
+              >
+                {item.root_cause_label}
+              </span>
+            )}
           </>
         );
       }
@@ -1132,6 +1164,19 @@ export default function MatchReview() {
             className="pl-8 pr-3 py-1.5 w-56 bg-surface-raised border border-purple-900/40 rounded-lg text-sm text-white placeholder:text-slate-500"
           />
         </div>
+        {rootCauseCounts.length > 0 && (
+          <select
+            value={rootCauseFilter}
+            onChange={e => setRootCauseFilter(e.target.value)}
+            title="Filter by root cause (FI-06) — tagged from the same signals already driving the confidence/badges above"
+            className="px-2.5 py-1.5 bg-surface-raised border border-purple-900/40 rounded-lg text-sm text-slate-300"
+          >
+            <option value="">Root cause: all</option>
+            {rootCauseCounts.map(([code, { label, count }]) => (
+              <option key={code} value={code}>{label} ({count})</option>
+            ))}
+          </select>
+        )}
         {enabledPlatforms.map(p => {
           const meta = PLATFORM_META[p];
           const Icon = meta.Icon;
