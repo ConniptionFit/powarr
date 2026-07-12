@@ -153,6 +153,17 @@ class CleanupSettings(BaseModel):
     # Plex sync; fail-soft — an unreachable download client never clears
     # protection, it just skips that cycle's refresh.
     protect_seeding_torrents: bool = False
+    # LIB-04 (v0.54.0) — hide items that are in-progress (started but not
+    # finished) per Tautulli watch history, so a show/movie someone is midway
+    # through doesn't get suggested for deletion. Off by default (opt-in,
+    # requires Tautulli). min/max bound the "in progress" band — below min is
+    # barely-started (not worth protecting), at/above max is essentially
+    # finished (already scored appropriately by watch history, no separate
+    # protection needed).
+    protect_in_progress: bool = False
+    in_progress_min_percent: float = 5.0
+    in_progress_max_percent: float = 90.0
+    in_progress_lookback_days: int = 30
 
 
 class SyncSettings(BaseModel):

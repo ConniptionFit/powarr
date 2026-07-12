@@ -55,11 +55,13 @@ class TautulliIntegration(BaseIntegration):
             return {"watch_count": 0}
 
     async def get_recent_history(self, days: int = 30, length: int = 5000) -> list[dict]:
-        """Recent play history rows for multi-user protection (v0.29.0).
+        """Recent play history rows for multi-user protection (v0.29.0) and
+        in-progress protection (LIB-04, v0.54.0).
 
         One paginated call instead of per-item get_item_user_stats — returns
-        [{rating_key, user, friendly_name, date}, ...] where date is a unix
-        timestamp (int/str). Fail-soft → [].
+        [{rating_key, user, friendly_name, date, percent_complete}, ...] where
+        date is a unix timestamp (int/str) and percent_complete is Tautulli's
+        own 0-100 watch-session completion (missing/non-numeric → 0). Fail-soft → [].
         """
         after = int((datetime.utcnow() - timedelta(days=max(1, days))).timestamp())
         try:
@@ -83,11 +85,16 @@ class TautulliIntegration(BaseIntegration):
                     rk = row.get("rating_key")
                     if rk is None:
                         continue
+                    try:
+                        percent_complete = float(row.get("percent_complete") or 0)
+                    except (TypeError, ValueError):
+                        percent_complete = 0.0
                     out.append({
                         "rating_key": str(rk),
                         "user": row.get("user") or "",
                         "friendly_name": row.get("friendly_name") or row.get("user") or "",
                         "date": row.get("date"),
+                        "percent_complete": percent_complete,
                     })
                 return out
         except Exception:

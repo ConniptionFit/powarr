@@ -254,6 +254,10 @@ export interface CleanupSettings {
   other_user_watch_days: number;
   primary_tautulli_user: string;
   protect_seeding_torrents: boolean;
+  protect_in_progress: boolean;
+  in_progress_min_percent: number;
+  in_progress_max_percent: number;
+  in_progress_lookback_days: number;
 }
 
 export interface SyncSettings {

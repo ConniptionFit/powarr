@@ -142,6 +142,13 @@ async def run_plex_sync(db) -> dict:
                 seeding_protected = await refresh_seeding_protection(db)
             except Exception as e:
                 logger.warning(f"Seeding protection refresh failed (non-fatal): {e}")
+        progress_protected = 0
+        if cleanup.protect_in_progress:
+            tasks.update_task(task_id, message="Refreshing in-progress protection…")
+            try:
+                progress_protected = await refresh_progress_protection(db)
+            except Exception as e:
+                logger.warning(f"In-progress protection refresh failed (non-fatal): {e}")
 
         tasks.update_task(task_id, message="Linking *arr IDs…")
         try:
@@ -154,7 +161,7 @@ async def run_plex_sync(db) -> dict:
         tasks.finish_task(task_id, "done", f"Synced {upserted} item(s)")
         return {"synced": upserted, "protected": protected,
                 "watch_protected": watch_protected, "seeding_protected": seeding_protected,
-                "linked": linked}
+                "progress_protected": progress_protected, "linked": linked}
     except Exception as e:
         tasks.finish_task(task_id, "failed", str(e))
         raise
@@ -293,4 +300,61 @@ async def refresh_seeding_protection(db) -> int:
     db.commit()
     logger.info(f"Seeding protection: {count} item(s) protected across "
                 f"{len(seeding_paths)} seeding torrent(s)")
+    return count
+
+
+async def refresh_progress_protection(db) -> int:
+    """Mark media items that are in-progress (started but not finished) per
+    Tautulli watch history as progress_protected (LIB-04). No-op (returns 0)
+    when the setting is off or Tautulli isn't configured.
+
+    "In progress" = the highest percent_complete seen for that rating_key
+    within the lookback window falls in [in_progress_min_percent,
+    in_progress_max_percent) — below min is barely-started (not worth
+    protecting), at/above max is essentially finished. Deliberately scoped to
+    the specific in-progress item only, never cascaded to sibling
+    episodes/tracks of the same show/artist — the existing series-aware watch
+    scoring already dampens the never-watched boost for those, and this
+    protection must not widen that beyond what's already there."""
+    cleanup = _get_setting(db, "cleanup", CleanupSettings)
+    if not cleanup.protect_in_progress:
+        return 0
+    row = db.query(Integration).filter_by(name="tautulli", enabled=True).first()
+    if not row or not row.url or not row.api_key:
+        return 0
+
+    from app.integrations.tautulli import TautulliIntegration
+    from app.services.secret_box import decrypt
+    tautulli = TautulliIntegration(row.url, decrypt(row.api_key) or "")
+    history = await tautulli.get_recent_history(days=cleanup.in_progress_lookback_days)
+
+    best_percent: dict[str, float] = {}
+    for h in history:
+        rk = h.get("rating_key")
+        if not rk:
+            continue
+        pct = h.get("percent_complete") or 0.0
+        if pct > best_percent.get(rk, -1.0):
+            best_percent[rk] = pct
+
+    in_progress_keys = {
+        rk for rk, pct in best_percent.items()
+        if cleanup.in_progress_min_percent <= pct < cleanup.in_progress_max_percent
+    }
+
+    db.query(MediaItem).filter(MediaItem.progress_protected.is_(True)).update(
+        {"progress_protected": False}, synchronize_session=False)
+
+    count = 0
+    if in_progress_keys:
+        keys = list(in_progress_keys)
+        for i in range(0, len(keys), 500):
+            chunk = keys[i:i + 500]
+            count += (db.query(MediaItem)
+                      .filter(MediaItem.plex_rating_key.in_(chunk))
+                      .update({"progress_protected": True}, synchronize_session=False))
+    db.commit()
+    logger.info(f"In-progress protection: {count} item(s) protected "
+                f"({cleanup.in_progress_min_percent:.0f}-{cleanup.in_progress_max_percent:.0f}% "
+                f"complete, last {cleanup.in_progress_lookback_days}d)")
     return count

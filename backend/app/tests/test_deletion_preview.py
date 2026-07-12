@@ -57,11 +57,13 @@ class BuildDeletionPreviewTests(unittest.TestCase):
         a = _item(plex_rating_key="a", protected=True)
         b = _item(plex_rating_key="b", watch_protected=True)
         c = _item(plex_rating_key="c", seeding_protected=True)
-        d = _item(plex_rating_key="d")
-        self.db.add_all([a, b, c, d])
+        d = _item(plex_rating_key="d", progress_protected=True)
+        e = _item(plex_rating_key="e")
+        self.db.add_all([a, b, c, d, e])
         self.db.commit()
-        preview = build_deletion_preview(self.db, [a.id, b.id, c.id, d.id], self.cleanup)
-        self.assertEqual(preview.protected_count, 3)
+        preview = build_deletion_preview(self.db, [a.id, b.id, c.id, d.id, e.id], self.cleanup)
+        self.assertEqual(preview.protected_count, 4)
+        self.assertTrue(preview.items[3].progress_protected)
 
     def test_no_arr_action_without_integration(self):
         a = _item(plex_rating_key="a", media_type="movie", radarr_id=5)

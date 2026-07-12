@@ -30,7 +30,8 @@ def build_deletion_preview(db, ids: list[int], cleanup: CleanupSettings) -> Dele
     for item in items:
         total_size += item.file_size or 0
         seeding_protected = bool(getattr(item, "seeding_protected", False))
-        is_protected = bool(item.protected or item.watch_protected or seeding_protected)
+        progress_protected = bool(getattr(item, "progress_protected", False))
+        is_protected = bool(item.protected or item.watch_protected or seeding_protected or progress_protected)
         if is_protected:
             protected_count += 1
 
@@ -72,7 +73,7 @@ def build_deletion_preview(db, ids: list[int], cleanup: CleanupSettings) -> Dele
             id=item.id, title=item.title, media_type=item.media_type,
             library_section=item.library_section, file_size=item.file_size or 0,
             protected=bool(item.protected), watch_protected=bool(item.watch_protected),
-            seeding_protected=seeding_protected,
+            seeding_protected=seeding_protected, progress_protected=progress_protected,
             arr_app=arr_app, arr_action=arr_action, cascade_warning=cascade_warning,
         ))
 

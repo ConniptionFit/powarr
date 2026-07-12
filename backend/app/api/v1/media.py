@@ -46,7 +46,8 @@ def list_media(
         if not include_protected:
             q = q.filter(MediaItem.protected.isnot(True),
                          MediaItem.watch_protected.isnot(True),
-                         MediaItem.seeding_protected.isnot(True))
+                         MediaItem.seeding_protected.isnot(True),
+                         MediaItem.progress_protected.isnot(True))
         cleanup = _get_setting(db, "cleanup", CleanupSettings)
         if cleanup.excluded_libraries:
             q = q.filter(~MediaItem.library_section.in_(cleanup.excluded_libraries))
@@ -77,6 +78,7 @@ def get_stats(db: Session = Depends(get_db)):
         MediaItem.protected.isnot(True),
         MediaItem.watch_protected.isnot(True),
         MediaItem.seeding_protected.isnot(True),
+        MediaItem.progress_protected.isnot(True),
     )
     if cleanup.excluded_libraries:
         candidates_q = candidates_q.filter(~MediaItem.library_section.in_(cleanup.excluded_libraries))
@@ -130,12 +132,13 @@ def export_media_csv(
         i.library_section or "", i.file_size, round(i.score or 0, 2),
         i.watch_count, _dt(i.last_watched_at), i.file_path or "",
         bool(i.protected), bool(getattr(i, "watch_protected", False)),
+        bool(getattr(i, "seeding_protected", False)), bool(getattr(i, "progress_protected", False)),
     ] for i in items]
     return streaming_csv(
         "powarr-deletion-candidates.csv",
         ["id", "title", "parent_title", "year", "media_type", "library",
          "file_size", "score", "watch_count", "last_watched_at", "file_path",
-         "protected", "watch_protected"],
+         "protected", "watch_protected", "seeding_protected", "progress_protected"],
         rows,
     )
 

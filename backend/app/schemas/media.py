@@ -22,6 +22,7 @@ class MediaItemOut(BaseModel):
     protected: Optional[bool] = False
     watch_protected: Optional[bool] = False
     seeding_protected: Optional[bool] = False
+    progress_protected: Optional[bool] = False
     pending_delete_at: Optional[datetime] = None
     llm_rationale: Optional[str] = None
     llm_rationale_at: Optional[datetime] = None
@@ -72,6 +73,7 @@ class DeletionPreviewItem(BaseModel):
     protected: bool = False
     watch_protected: bool = False
     seeding_protected: bool = False
+    progress_protected: bool = False
     arr_app: Optional[str] = None  # sonarr | radarr | lidarr | None (no link)
     arr_action: str = "none"  # delete_from_arr | unmonitor | none
     # Set when this item's *arr action targets a whole series/artist/movie and

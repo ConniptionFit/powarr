@@ -28,6 +28,10 @@ class MediaItem(Base):
     # client (LIB-05, v0.52.0) — opt-in via cleanup.protect_seeding_torrents,
     # refreshed alongside protected/watch_protected during Plex sync.
     seeding_protected = Column(Boolean, default=False)
+    # In-progress (started but not finished) per Tautulli watch history, within
+    # cleanup.in_progress_min_percent/max_percent (LIB-04, v0.54.0) — opt-in via
+    # cleanup.protect_in_progress, refreshed alongside the other protect flags.
+    progress_protected = Column(Boolean, default=False)
     pending_delete_at = Column(DateTime, nullable=True)  # soft-delete: when deletion was requested
 
     # Cached LLM deletion rationale. The key hashes the prompt template, model

@@ -421,6 +421,64 @@ function CleanupSection() {
         />
       </label>
 
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Protect In-Progress Watches</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Hide items you've started but not finished, per Tautulli watch history (refreshed on each Plex sync). Requires Tautulli enabled.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          checked={cfg.protect_in_progress}
+          onChange={e => setCfg(c => c ? { ...c, protect_in_progress: e.target.checked } : c)}
+          className="accent-purple-500 ml-6"
+        />
+      </label>
+      {cfg.protect_in_progress && (
+        <>
+          <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+            <div>
+              <p className="text-white text-sm font-medium">In-Progress Range</p>
+              <p className="text-slate-500 text-xs mt-0.5">
+                Watch completion band that counts as "in progress" — below the minimum is barely started, at or above the maximum is essentially finished
+              </p>
+            </div>
+            <div className="flex items-center gap-2 ml-6">
+              <input
+                type="number" min={0} max={100} step={1}
+                value={cfg.in_progress_min_percent}
+                onChange={e => setCfg(c => c ? { ...c, in_progress_min_percent: Number(e.target.value) } : c)}
+                className="w-20 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white text-right"
+              />
+              <span className="text-slate-500 text-xs">to</span>
+              <input
+                type="number" min={0} max={100} step={1}
+                value={cfg.in_progress_max_percent}
+                onChange={e => setCfg(c => c ? { ...c, in_progress_max_percent: Number(e.target.value) } : c)}
+                className="w-20 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white text-right"
+              />
+              <span className="text-slate-500 text-xs">%</span>
+            </div>
+          </div>
+          <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+            <div>
+              <p className="text-white text-sm font-medium">In-Progress Lookback Window</p>
+              <p className="text-slate-500 text-xs mt-0.5">Days of Tautulli history to check for in-progress watches</p>
+            </div>
+            <div className="flex items-center gap-2 ml-6">
+              <input
+                type="number" min={1} max={365} step={1}
+                value={cfg.in_progress_lookback_days}
+                onChange={e => setCfg(c => c ? { ...c, in_progress_lookback_days: Number(e.target.value) } : c)}
+                className="w-24 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white text-right"
+              />
+              <span className="text-slate-500 text-xs">days</span>
+            </div>
+          </div>
+        </>
+      )}
+
       <div className="py-4">
         <p className="text-white text-sm font-medium mb-1">Excluded Libraries</p>
         <p className="text-slate-500 text-xs mb-3">Items in these Plex libraries are never suggested for deletion</p>
