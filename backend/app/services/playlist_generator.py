@@ -359,6 +359,7 @@ async def approve_playlist(playlist_id: int) -> dict[str, Any]:
             if not pid:
                 return {"ok": False, "message": "Plex playlist create failed"}
             pl.plex_playlist_id = pid
+            pl.plex_created_at = datetime.utcnow()
             db.commit()
 
         by_genre = await _artists_by_genre(db, cfg, pl.genre_tag)
@@ -412,6 +413,7 @@ async def accept_candidate(candidate_id: int, max_tracks_override: int | None = 
             if not pid:
                 return {"ok": False, "message": "Plex playlist create failed"}
             pl.plex_playlist_id = pid
+            pl.plex_created_at = datetime.utcnow()
             db.commit()
         max_tracks = (max_tracks_override or pl.max_tracks_override
                       or cfg.max_tracks_per_playlist)

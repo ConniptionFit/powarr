@@ -12,6 +12,7 @@ class SmartPlaylist(Base):
     genre_tag = Column(String, nullable=False, unique=True, index=True)
     title = Column(String, nullable=False)
     plex_playlist_id = Column(String, nullable=True)  # set only after Powarr creates it
+    plex_created_at = Column(DateTime, nullable=True)  # when plex_playlist_id was first set
     auto_add = Column(Boolean, nullable=True)  # None = use global default
     enabled = Column(Boolean, default=True)
     # Metadata for playlist curation (foundation for mood/era filtering in future)

@@ -79,6 +79,7 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 - **Servarr NullReference 500 fallback (v0.28.2)**: when Sonarr/Lidarr crash on `GET /manualimport?downloadId=…` for downloads whose files are already missing (HTTP 500 *"Object reference not set…"*), Powarr retries with `folder=` alone (never `folder`+`downloadId`, never `seriesId`), treats empty/crash as gone files, and orphans the row instead of surfacing a raw 500 in triage
 - **Automated DB backups (v0.26.0)**: Settings → Automated Backups schedules `pg_dump` (or a plain file copy on the SQLite fallback) to `/config/backups` on an interval, with a configurable retention count and a manual "Run Now" button — on top of the existing manual `docker exec postgres pg_dump ...` flow in [Docker & Deployment]
 - **ntfy click-to-act links (v0.26.0)**: opt-in Accept/Reject buttons on the ntfy notification for each new failed-import suggestion, via signed one-time links (7-day expiry, single-action-scoped, safe to replay — an already-resolved row is a no-op). Needs a reachable **Public Base URL** configured in Settings → Notifications; a scan with more new suggestions than the configured max falls back to the existing aggregate summary notification only
+- **Weekly digest sections (v0.50.0)**: the digest now covers artists added and playlists created in the last 7 days, alongside the existing import/deletion summary — four checkboxes in Settings → Notifications (Imports / Added artists / Created playlists / Files cleaned up, all on by default) pick what to include
 
 ---
 

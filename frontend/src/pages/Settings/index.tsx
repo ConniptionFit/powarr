@@ -1546,27 +1546,47 @@ function NotificationsSection() {
             Weekly digest summary
           </label>
           <p className="text-slate-500 text-xs mt-1 mb-2">
-            One ntfy push per week with open imports, 7-day resolve counts, deletion candidates, and space freed.
+            One ntfy push per week summarizing recent activity — pick which sections to include below.
           </p>
           {cfg.digest_enabled && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Weekday (UTC)</label>
+                  <select value={cfg.digest_weekday}
+                          onChange={e => setCfg(c => c ? { ...c, digest_weekday: Number(e.target.value) } : c)}
+                          className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white">
+                    {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((d, i) => (
+                      <option key={d} value={i}>{d}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Hour (UTC, 0–23)</label>
+                  <input type="number" min={0} max={23} value={cfg.digest_hour_utc}
+                         onChange={e => setCfg(c => c ? { ...c, digest_hour_utc: Number(e.target.value) } : c)}
+                         className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
+                </div>
+              </div>
               <div>
-                <label className="text-xs text-slate-400 mb-1 block">Weekday (UTC)</label>
-                <select value={cfg.digest_weekday}
-                        onChange={e => setCfg(c => c ? { ...c, digest_weekday: Number(e.target.value) } : c)}
-                        className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white">
-                  {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((d, i) => (
-                    <option key={d} value={i}>{d}</option>
+                <label className="text-xs text-slate-400 mb-1.5 block">Include in digest</label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {([
+                    ["digest_include_imports", "Imports"],
+                    ["digest_include_artists", "Added artists"],
+                    ["digest_include_playlists", "Created playlists"],
+                    ["digest_include_cleanup", "Files cleaned up"],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer">
+                      <input type="checkbox" checked={cfg[key]}
+                             onChange={e => setCfg(c => c ? { ...c, [key]: e.target.checked } : c)}
+                             className="accent-purple-500" />
+                      {label}
+                    </label>
                   ))}
-                </select>
+                </div>
               </div>
-              <div>
-                <label className="text-xs text-slate-400 mb-1 block">Hour (UTC, 0–23)</label>
-                <input type="number" min={0} max={23} value={cfg.digest_hour_utc}
-                       onChange={e => setCfg(c => c ? { ...c, digest_hour_utc: Number(e.target.value) } : c)}
-                       className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white" />
-              </div>
-            </div>
+            </>
           )}
         </div>
         <div className="flex gap-2">

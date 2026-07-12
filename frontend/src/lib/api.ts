@@ -243,6 +243,10 @@ export interface NotificationSettings {
   digest_enabled: boolean;
   digest_weekday: number;
   digest_hour_utc: number;
+  digest_include_imports: boolean;
+  digest_include_artists: boolean;
+  digest_include_playlists: boolean;
+  digest_include_cleanup: boolean;
 }
 
 export const settingsApi = {

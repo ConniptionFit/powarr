@@ -20,6 +20,7 @@ import httpx
 
 from app.database import SessionLocal
 from app.models.app_setting import AppSetting
+from app.models.artist_add_log import ArtistAddLog
 from app.models.artist_discovery import ArtistDiscoveryRun, DiscoveredArtist
 from app.models.integration import Integration
 from app.models.media import MediaItem
@@ -861,7 +862,8 @@ async def _add_artist_to_lidarr(lidarr, cfg: ArtistDiscoverySettings,
 
     try:
         added = await lidarr.add_artist(match)
-        return {"ok": True, "message": f"Added '{name}' to Lidarr", "lidarr_artist_id": added.get("id")}
+        return {"ok": True, "message": f"Added '{name}' to Lidarr",
+                "lidarr_artist_id": added.get("id"), "already_existed": False}
     except httpx.HTTPStatusError as e:
         if e.response is not None and e.response.status_code == 400:
             lidarr_artist_id = None
@@ -873,7 +875,8 @@ async def _add_artist_to_lidarr(lidarr, cfg: ArtistDiscoverySettings,
                 lidarr_artist_id = found.get("id") if found else None
             except Exception:
                 lidarr_artist_id = None
-            return {"ok": True, "message": f"Added '{name}' to Lidarr", "lidarr_artist_id": lidarr_artist_id}
+            return {"ok": True, "message": f"Added '{name}' to Lidarr",
+                    "lidarr_artist_id": lidarr_artist_id, "already_existed": True}
         return {"ok": False, "message": f"Lidarr add failed: {e}"}
     except Exception as e:
         return {"ok": False, "message": f"Lidarr add failed: {e}"}
@@ -909,6 +912,9 @@ async def add_to_lidarr(db, candidate_id: int) -> dict[str, Any]:
     cand.status = "accepted"
     cand.lidarr_artist_id = lidarr_artist_id
     cand.resolved_at = datetime.utcnow()
+    if not result.get("already_existed"):
+        db.add(ArtistAddLog(artist_name=cand.artist_name, musicbrainz_id=cand.musicbrainz_id,
+                            source="discovery", lidarr_artist_id=lidarr_artist_id))
     db.commit()
     return {"ok": True, "message": f"Added '{cand.artist_name}' to Lidarr", "lidarr_artist_id": lidarr_artist_id}
 
@@ -1050,7 +1056,12 @@ async def add_related_artist(db, mbid: str | None, name: str) -> dict[str, Any]:
     from app.api.v1.integrations import _get_client
     lidarr = _get_client(lidarr_row)
     cfg = load_settings(db)
-    return await _add_artist_to_lidarr(lidarr, cfg, mbid, name)
+    result = await _add_artist_to_lidarr(lidarr, cfg, mbid, name)
+    if result.get("ok") and not result.get("already_existed"):
+        db.add(ArtistAddLog(artist_name=name, musicbrainz_id=mbid, source="related",
+                            lidarr_artist_id=result.get("lidarr_artist_id")))
+        db.commit()
+    return result
 
 
 # --- Misc -------------------------------------------------------------------------

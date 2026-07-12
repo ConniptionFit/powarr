@@ -65,11 +65,15 @@ def get_stats(db: Session = Depends(get_db)):
 
     total = db.query(MediaItem).count()
     total_size = db.query(func.sum(MediaItem.file_size)).scalar() or 0
-    candidates = db.query(MediaItem).filter(
+    cleanup = _get_setting(db, "cleanup", CleanupSettings)
+    candidates_q = db.query(MediaItem).filter(
         MediaItem.score >= weights.min_score_threshold,
         MediaItem.ignored.is_(False),
         MediaItem.pending_delete_at.is_(None),
-    ).all()
+    )
+    if cleanup.excluded_libraries:
+        candidates_q = candidates_q.filter(~MediaItem.library_section.in_(cleanup.excluded_libraries))
+    candidates = candidates_q.all()
     savings = sum(c.file_size for c in candidates)
 
     last_synced = None

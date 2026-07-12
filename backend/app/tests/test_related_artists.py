@@ -18,7 +18,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.schemas.settings import ArtistDiscoverySettings
 from app.services.artist_discovery import (
-    _add_artist_to_lidarr, add_related_artist, search_related_artists,
+    _add_artist_to_lidarr, add_related_artist, add_to_lidarr, search_related_artists,
 )
 
 
@@ -63,6 +63,7 @@ class AddArtistToLidarrTests(unittest.IsolatedAsyncioTestCase):
         result = await _add_artist_to_lidarr(lidarr, _cfg(), "mbid-1", "Some Artist")
         self.assertTrue(result["ok"])
         self.assertEqual(result["lidarr_artist_id"], 42)
+        self.assertFalse(result["already_existed"])
 
     async def test_no_lookup_results_fails(self):
         lidarr = _FakeLidarr(lookup_results=[])
@@ -91,6 +92,7 @@ class AddArtistToLidarrTests(unittest.IsolatedAsyncioTestCase):
         result = await _add_artist_to_lidarr(lidarr, _cfg(), "mbid-1", "Some Artist")
         self.assertTrue(result["ok"])
         self.assertEqual(result["lidarr_artist_id"], 99)
+        self.assertTrue(result["already_existed"])
 
     async def test_other_http_error_fails(self):
         resp = httpx.Response(500, request=httpx.Request("POST", "http://lidarr/api/v1/artist"))
@@ -228,6 +230,50 @@ class PlexSimilarityAugmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(plex_entry["similarity_sources"]), {"plex_sonic", "plex_similar"})
 
 
+class AddToLidarrDiscoveryFlowTests(unittest.IsolatedAsyncioTestCase):
+    """add_to_lidarr() is the Discovery-queue accept path -- shares
+    _add_artist_to_lidarr() with add_related_artist() above, so it should log
+    the same way (genuine add logged, already-existed not logged)."""
+
+    def setUp(self):
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+    def _make_candidate(self):
+        from app.models.artist_discovery import DiscoveredArtist
+        cand = DiscoveredArtist(musicbrainz_id="mbid-1", artist_name="Some Artist", status="pending")
+        self.db.add(cand)
+        self.db.commit()
+        return cand.id
+
+    async def _accept_with(self, fake_lidarr):
+        from app.models.integration import Integration
+        self.db.add(Integration(name="lidarr", enabled=True, url="http://lidarr"))
+        self.db.commit()
+        cand_id = self._make_candidate()
+        with patch("app.api.v1.integrations._get_client", return_value=fake_lidarr):
+            return await add_to_lidarr(self.db, cand_id)
+
+    async def test_genuine_add_writes_artist_add_log(self):
+        from app.models.artist_add_log import ArtistAddLog
+        result = await self._accept_with(_FakeLidarr())
+        self.assertTrue(result["ok"])
+        logs = self.db.query(ArtistAddLog).all()
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].source, "discovery")
+
+    async def test_already_existed_add_does_not_write_artist_add_log(self):
+        from app.models.artist_add_log import ArtistAddLog
+        resp = httpx.Response(400, request=httpx.Request("POST", "http://lidarr/api/v1/artist"))
+        lidarr = _FakeLidarr(
+            add_raises=httpx.HTTPStatusError("bad request", request=resp.request, response=resp),
+            existing_artists=[{"foreignArtistId": "mbid-1", "artistName": "Some Artist", "id": 99}])
+        result = await self._accept_with(lidarr)
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.db.query(ArtistAddLog).count(), 0)
+
+
 class AddRelatedArtistTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         engine = create_engine("sqlite://")
@@ -241,6 +287,33 @@ class AddRelatedArtistTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_lidarr_configured(self):
         result = await add_related_artist(self.db, "mbid-1", "Some Artist")
         self.assertFalse(result["ok"])
+
+    async def _with_lidarr_configured(self, fake_lidarr):
+        from app.models.integration import Integration
+        self.db.add(Integration(name="lidarr", enabled=True, url="http://lidarr"))
+        self.db.commit()
+        with patch("app.api.v1.integrations._get_client", return_value=fake_lidarr):
+            return await add_related_artist(self.db, "mbid-1", "Some Artist")
+
+    async def test_genuine_add_writes_artist_add_log(self):
+        from app.models.artist_add_log import ArtistAddLog
+        result = await self._with_lidarr_configured(_FakeLidarr())
+        self.assertTrue(result["ok"])
+        logs = self.db.query(ArtistAddLog).all()
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].source, "related")
+        self.assertEqual(logs[0].artist_name, "Some Artist")
+
+    async def test_already_existed_add_does_not_write_artist_add_log(self):
+        from app.models.artist_add_log import ArtistAddLog
+        resp = httpx.Response(400, request=httpx.Request("POST", "http://lidarr/api/v1/artist"))
+        lidarr = _FakeLidarr(
+            add_raises=httpx.HTTPStatusError("bad request", request=resp.request, response=resp),
+            existing_artists=[{"foreignArtistId": "mbid-1", "artistName": "Some Artist", "id": 99}])
+        result = await self._with_lidarr_configured(lidarr)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["already_existed"])
+        self.assertEqual(self.db.query(ArtistAddLog).count(), 0)
         self.assertIn("Lidarr", result["message"])
 
 

@@ -272,6 +272,13 @@ class NotificationSettings(BaseModel):
     digest_enabled: bool = False
     digest_weekday: int = 0  # 0=Monday … 6=Sunday (datetime.weekday())
     digest_hour_utc: int = 9
+    # Per-section toggles (v0.50.0) — all default on so existing digests keep
+    # their current content; new sections (artists/playlists) are included by
+    # default too since the digest itself is already opt-in via digest_enabled.
+    digest_include_imports: bool = True
+    digest_include_artists: bool = True
+    digest_include_playlists: bool = True
+    digest_include_cleanup: bool = True
 
 
 class IntegrationConfig(BaseModel):

@@ -30,6 +30,7 @@ def init_db():
     from app.models import smart_playlist  # noqa: F401
     from app.models import artist_discovery  # noqa: F401
     from app.models import llm_match_log  # noqa: F401
+    from app.models import artist_add_log  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate()
 
@@ -71,6 +72,10 @@ def _migrate():
             "last_run_message": "VARCHAR",
             "auto_add_override": "BOOLEAN",
             "max_tracks_override": "INTEGER",
+            # v0.50.0 — set once when plex_playlist_id is first assigned, distinct
+            # from created_at (draft-definition creation) and updated_at (any edit);
+            # feeds the weekly digest's "playlists created" section.
+            "plex_created_at": "TIMESTAMP",
         },
         "discovered_artists": {
             "image_url": "VARCHAR",
