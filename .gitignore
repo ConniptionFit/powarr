@@ -11,5 +11,10 @@ config/
 *.sqlite
 .DS_Store
 
-# Contains DB password inline - use docker-compose.example.yml as the tracked template
+# Contains DB password inline - use docker-compose.example.yml as the tracked template.
+# Wildcard, not an exact name: a docker-compose.yml.bak-20260708 copy of this exact
+# file was committed 2026-07-09 (8e68042) and leaked the live DB password to the
+# public github remote until rotated + this rule widened, 2026-07-11.
 docker-compose.yml
+docker-compose.yml.*
+docker-compose*.bak*
