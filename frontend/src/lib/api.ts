@@ -73,6 +73,30 @@ export interface MediaStats {
   last_synced: string | null;
 }
 
+export interface DeletionPreviewItem {
+  id: number;
+  title: string;
+  media_type: string;
+  library_section: string | null;
+  file_size: number;
+  protected: boolean;
+  watch_protected: boolean;
+  seeding_protected: boolean;
+  arr_app: string | null;
+  arr_action: "delete_from_arr" | "unmonitor" | "none";
+  cascade_warning: string | null;
+}
+
+export interface DeletionPreview {
+  items: DeletionPreviewItem[];
+  total_items: number;
+  missing_count: number;
+  total_size_bytes: number;
+  soft_delete_days: number;
+  would_pend: boolean;
+  protected_count: number;
+}
+
 function downloadCsv(path: string) {
   // Same-origin cookie auth; open as a navigation so the browser saves the file.
   window.location.assign(`/api/v1${path}`);
@@ -89,6 +113,8 @@ export const mediaApi = {
   delete: (id: number) => req(`/media/${id}`, { method: "DELETE" }),
   deleteBatch: (ids: number[]) =>
     req(`/media/batch`, { method: "DELETE", body: JSON.stringify(ids) }),
+  previewDelete: (ids: number[]) =>
+    req<DeletionPreview>(`/media/preview-delete`, { method: "POST", body: JSON.stringify(ids) }),
   libraries: () => req<string[]>("/media/libraries"),
   restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
   explain: (id: number, force = false) =>

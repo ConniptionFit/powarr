@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.app_setting import AppSetting
 from app.models.deletion_log import DeletionLog
 from app.models.media import MediaItem
-from app.schemas.media import MediaItemOut, MediaStats, DeletionLogOut, DeletionStats
+from app.schemas.media import MediaItemOut, MediaStats, DeletionLogOut, DeletionStats, DeletionPreview
 from app.schemas.settings import ScoringWeights, CleanupSettings
 from app.services.deleter import propagate_and_delete
 
@@ -175,6 +175,19 @@ def deletion_stats(db: Session = Depends(get_db)):
         deleted_30d=count_30d, freed_30d_bytes=int(freed_30d),
         deleted_total=total_count, freed_total_bytes=int(total_freed),
     )
+
+
+@router.post("/preview-delete", response_model=DeletionPreview)
+def preview_delete(ids: list[int] = Body(...), db: Session = Depends(get_db)):
+    """Non-destructive dry-run (LIB-01): projected GB freed, per-item *arr action
+    and cascade warnings (deleting one episode/track can unmonitor or delete an
+    entire series/artist in Sonarr/Lidarr — this surfaces that before it happens),
+    current protection flags, and whether this would soft-delete or delete
+    immediately. No writes — POST only because a JSON body of ids is cleaner
+    than a long query string; nothing here mutates state."""
+    from app.services.deletion_preview import build_deletion_preview
+    cleanup = _get_setting(db, "cleanup", CleanupSettings)
+    return build_deletion_preview(db, ids, cleanup)
 
 
 @router.delete("/batch")

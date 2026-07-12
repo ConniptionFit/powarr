@@ -6,6 +6,7 @@ import { usePersistedState } from "../../lib/usePersistedState";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
+import DeletionPreviewModal from "../../components/DeletionPreviewModal";
 import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 import { SkeletonTable } from "../../components/Skeleton";
 
@@ -97,7 +98,7 @@ export default function DeletionSuggestions() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null); // id or "show:title"
+  const [previewIds, setPreviewIds] = useState<number[] | null>(null); // LIB-01 dry-run preview modal
   const [explainBusy, setExplainBusy] = useState<number | null>(null);
   const [explainMsg, setExplainMsg] = useState<Record<number, string>>({});
   const [streamText, setStreamText] = useState<Record<number, string>>({});
@@ -160,14 +161,9 @@ export default function DeletionSuggestions() {
 
   const displayItems = isShowMode ? [] : filteredItems;
 
-  const deleteMut = useMutation({
-    mutationFn: (id: number) => mediaApi.delete(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["stats"] }); setConfirmDelete(null); setSelected(new Set()); },
-  });
-
   const deleteBatchMut = useMutation({
     mutationFn: (ids: number[]) => mediaApi.deleteBatch(ids),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["stats"] }); setConfirmDelete(null); setSelected(new Set()); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["stats"] }); setPreviewIds(null); setSelected(new Set()); },
   });
 
   const ignoreMut = useMutation({
@@ -435,8 +431,7 @@ export default function DeletionSuggestions() {
         <div className="flex items-center gap-3 mb-4 px-4 py-2.5 bg-brand/10 border border-brand/30 rounded-lg">
           <span className="text-sm text-brand-light">{selected.size} selected</span>
           <button
-            onClick={() => deleteBatchMut.mutate([...selected])}
-            disabled={deleteBatchMut.isPending}
+            onClick={() => setPreviewIds([...selected])}
             className="px-3 py-1 bg-red-700 hover:bg-red-600 text-white rounded text-xs disabled:opacity-50"
           >
             Delete Selected
@@ -486,7 +481,6 @@ export default function DeletionSuggestions() {
             <tbody className="divide-y divide-purple-900/20">
               {isShowMode
                 ? showGroups.map(group => {
-                    const key = `show:${group.parent_title}`;
                     const groupSelected = group.ids.length > 0 && group.ids.every(id => selected.has(id));
                     const groupPartial = !groupSelected && group.ids.some(id => selected.has(id));
                     return (
@@ -517,23 +511,15 @@ export default function DeletionSuggestions() {
                         <td className="px-4 py-3 text-slate-400">{fmtDate(group.last_watched_at)}</td>
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center gap-2 justify-end">
-                            {confirmDelete === key ? (
-                              <div className="flex gap-1">
-                                <button onClick={() => deleteBatchMut.mutate(group.ids)} className="px-2 py-1 bg-red-700 hover:bg-red-600 text-white rounded text-xs">Confirm</button>
-                                <button onClick={() => setConfirmDelete(null)} className="px-2 py-1 bg-surface-overlay hover:bg-white/10 text-slate-300 rounded text-xs">Cancel</button>
-                              </div>
-                            ) : (
-                              <button onClick={() => setConfirmDelete(key)} title="Delete all episodes" className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors">
-                                <Trash2 size={15} />
-                              </button>
-                            )}
+                            <button onClick={() => setPreviewIds(group.ids)} title="Delete all episodes" className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors">
+                              <Trash2 size={15} />
+                            </button>
                           </div>
                         </td>
                       </tr>
                     );
                   })
                 : displayItems.map((item: MediaItem) => {
-                    const key = String(item.id);
                     return (
                       <Fragment key={item.id}>
                       <tr
@@ -576,16 +562,9 @@ export default function DeletionSuggestions() {
                             <button onClick={() => ignoreMut.mutate({ id: item.id, ignored: !item.ignored })} title={item.ignored ? "Un-ignore" : "Ignore"} className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
                               {item.ignored ? <Eye size={15} /> : <EyeOff size={15} />}
                             </button>
-                            {confirmDelete === key ? (
-                              <div className="flex gap-1">
-                                <button onClick={() => deleteMut.mutate(item.id)} className="px-2 py-1 bg-red-700 hover:bg-red-600 text-white rounded text-xs">Confirm</button>
-                                <button onClick={() => setConfirmDelete(null)} className="px-2 py-1 bg-surface-overlay hover:bg-white/10 text-slate-300 rounded text-xs">Cancel</button>
-                              </div>
-                            ) : (
-                              <button onClick={() => setConfirmDelete(key)} title="Delete" className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors">
-                                <Trash2 size={15} />
-                              </button>
-                            )}
+                            <button onClick={() => setPreviewIds([item.id])} title="Delete" className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors">
+                              <Trash2 size={15} />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -626,6 +605,15 @@ export default function DeletionSuggestions() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {previewIds && (
+        <DeletionPreviewModal
+          ids={previewIds}
+          onCancel={() => setPreviewIds(null)}
+          onConfirm={() => deleteBatchMut.mutate(previewIds)}
+          confirming={deleteBatchMut.isPending}
+        />
       )}
     </div>
   );
