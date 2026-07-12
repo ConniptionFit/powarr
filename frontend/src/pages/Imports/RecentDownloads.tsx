@@ -1,9 +1,67 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, RotateCcw } from "lucide-react";
+import { Search, RotateCcw, AlertTriangle, X } from "lucide-react";
 import { importsApi, fmtDate } from "../../lib/api";
 import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 import { SkeletonTable } from "../../components/Skeleton";
+
+// FI-10 — flags from the nightly malformed-import audit (settled Sonarr
+// packs whose current on-disk coverage looks incomplete). Notify-and-triage
+// only; re-import reuses the same forceReimport action as the table below.
+function MalformedAuditPanel({ onReimport }: {
+  onReimport: (sourceApp: string, downloadId: string, matchedId: number) => void;
+}) {
+  const qc = useQueryClient();
+  const { data: flags = [] } = useQuery({
+    queryKey: ["malformed-audit"],
+    queryFn: () => importsApi.malformedAudit(),
+  });
+  const dismissMut = useMutation({
+    mutationFn: (id: number) => importsApi.malformedAuditDismiss(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["malformed-audit"] }),
+  });
+
+  if (flags.length === 0) return null;
+
+  return (
+    <div className="mb-5 rounded-lg border border-orange-900/50 bg-orange-950/20 p-4">
+      <div className="flex items-center gap-2 mb-3 text-orange-300 text-sm font-medium">
+        <AlertTriangle size={15} />
+        {flags.length} possibly-malformed import{flags.length === 1 ? "" : "s"} — coverage looks incomplete
+      </div>
+      <div className="space-y-1.5">
+        {flags.map(f => (
+          <div key={f.id} className="flex items-center gap-3 px-3 py-2 rounded-md bg-surface text-sm">
+            <span className="text-slate-300 flex-1 truncate" title={f.source_title}>
+              {f.matched_title ?? f.source_title}
+            </span>
+            {f.pack_label && <span className="text-slate-500 text-xs">{f.pack_label}</span>}
+            <span className="text-orange-300 text-xs">
+              {f.mapped_episodes}/{f.total_episodes} episodes
+              {f.coverage_ratio != null && ` (${Math.round(f.coverage_ratio * 100)}%)`}
+            </span>
+            {f.matched_id != null && (
+              <button
+                onClick={() => onReimport(f.source_app, f.download_id, f.matched_id!)}
+                title="Force a re-import of this download"
+                className="flex items-center gap-1 px-2 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-xs transition-colors"
+              >
+                <RotateCcw size={11} /> Re-import
+              </button>
+            )}
+            <button
+              onClick={() => dismissMut.mutate(f.id)}
+              title="Dismiss"
+              className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // FI-09 — browse/search recently grabbed downloads across all enabled *arr
 // apps and force a one-shot re-import, independent of stuck-import
@@ -44,6 +102,11 @@ export default function RecentDownloads() {
         Browse recent grabs from every enabled *arr app and force a re-import — distinct from Scan Now,
         which only surfaces items already flagged as stuck.
       </p>
+
+      <MalformedAuditPanel
+        onReimport={(sourceApp, downloadId, matchedId) =>
+          reimportMut.mutate({ sourceApp, downloadId, matchedId })}
+      />
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <div className="relative">

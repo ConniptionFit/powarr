@@ -495,6 +495,37 @@ def score_pack_match(title_sim: float, target_seasons: set | None, complete: boo
     return round(score, 3), True, parts, label
 
 
+def _aired(e: dict) -> bool:
+    ad = e.get("airDateUtc")
+    if not ad:
+        return False
+    try:
+        return datetime.fromisoformat(str(ad).replace("Z", "+00:00")).replace(tzinfo=None) <= datetime.utcnow()
+    except ValueError:
+        return False
+
+
+def pack_scope_episodes(eps: list[dict], target_seasons: set | None,
+                        absolute_range: tuple[int, int] | None = None) -> list[dict]:
+    """Aired episodes a pack release claims to cover — shared by _pack_coverage
+    (live scan) and the FI-10 nightly malformed-import audit (re-checking
+    already-imported packs), so both agree on what "in scope" means.
+
+    absolute_range (FI-08, opt-in): scopes to episodes whose
+    absoluteEpisodeNumber falls in the range instead of season number — for
+    an anime batch pack with no season marker at all ("001-100"), season-
+    based scoping would instead count against the WHOLE aired show. Episodes
+    with no populated absoluteEpisodeNumber are excluded rather than guessed
+    at."""
+    if absolute_range:
+        lo, hi = absolute_range
+        return [e for e in eps if _aired(e) and e.get("absoluteEpisodeNumber") is not None
+               and lo <= e["absoluteEpisodeNumber"] <= hi]
+    return [e for e in eps if _aired(e) and (
+        e.get("seasonNumber") in target_seasons if target_seasons
+        else (e.get("seasonNumber") or 0) > 0)]
+
+
 async def _pack_coverage(client, download_id: str | None, series_id: int,
                          target_seasons: set | None,
                          folder: str | None = None,
@@ -503,38 +534,15 @@ async def _pack_coverage(client, download_id: str | None, series_id: int,
     total = aired episodes in the target seasons (whole show minus specials when
     complete); mapped = distinct in-scope episodes the manual-import preview maps
     the download's files to (the "all episodes present in the dir" check).
-
-    absolute_range (FI-08, opt-in): when given, scopes total/mapped to episodes
-    whose absoluteEpisodeNumber falls in the range instead of season number —
-    for an anime batch pack with no season marker at all ("001-100"), season-
-    based scoping would instead count against the WHOLE aired show, diluting a
-    genuinely complete pack down to a tiny fraction. Episodes with no populated
-    absoluteEpisodeNumber (Sonarr hasn't backfilled it yet) are excluded from
-    scope rather than guessed at."""
+    See pack_scope_episodes() for what "in scope" means and the absolute_range
+    (FI-08) opt-in."""
     try:
         eps = await client.get_episodes(series_id)
     except Exception as e:
         logger.info(f"Pack coverage: episode fetch failed (non-fatal): {e}")
         return None, None
-    now = datetime.utcnow()
 
-    def _aired(e: dict) -> bool:
-        ad = e.get("airDateUtc")
-        if not ad:
-            return False
-        try:
-            return datetime.fromisoformat(str(ad).replace("Z", "+00:00")).replace(tzinfo=None) <= now
-        except ValueError:
-            return False
-
-    if absolute_range:
-        lo, hi = absolute_range
-        in_scope = [e for e in eps if _aired(e) and e.get("absoluteEpisodeNumber") is not None
-                   and lo <= e["absoluteEpisodeNumber"] <= hi]
-    else:
-        in_scope = [e for e in eps if _aired(e) and (
-            e.get("seasonNumber") in target_seasons if target_seasons
-            else (e.get("seasonNumber") or 0) > 0)]
+    in_scope = pack_scope_episodes(eps, target_seasons, absolute_range)
     total = len(in_scope) or None
     scope_ids = {e.get("id") for e in in_scope}
 

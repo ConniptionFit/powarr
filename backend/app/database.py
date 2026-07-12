@@ -31,6 +31,7 @@ def init_db():
     from app.models import artist_discovery  # noqa: F401
     from app.models import llm_match_log  # noqa: F401
     from app.models import artist_add_log  # noqa: F401
+    from app.models import malformed_import_flag  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate()
 

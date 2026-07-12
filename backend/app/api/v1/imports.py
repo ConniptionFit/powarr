@@ -9,7 +9,10 @@ from typing import Optional
 from app.database import get_db, SessionLocal
 from app.models.failed_import import FailedImport
 from app.models.integration import Integration
-from app.schemas.failed_import import FailedImportOut, ImportStats, AutoEligibleOut, RecentDownloadOut
+from app.models.malformed_import_flag import MalformedImportFlag
+from app.schemas.failed_import import (
+    FailedImportOut, ImportStats, AutoEligibleOut, RecentDownloadOut, MalformedImportFlagOut,
+)
 from app.services import import_matcher
 from app.services.import_matcher import scan_once, _get_client
 from app.services.auto_eligible import (
@@ -134,6 +137,38 @@ async def force_reimport(payload: dict = Body(...), db: Session = Depends(get_db
     client = _get_client(source_app, row)
     result = await client.push_import_command(download_id, matched_id)
     return result
+
+
+@router.get("/malformed-audit", response_model=list[MalformedImportFlagOut])
+def malformed_audit_list(db: Session = Depends(get_db), include_dismissed: bool = Query(False)):
+    """FI-10 — flags from the nightly malformed-import audit (see
+    services/malformed_audit.py). Notify-and-triage only; re-import a flagged
+    row via /recent-downloads/reimport with its download_id/matched_id."""
+    q = db.query(MalformedImportFlag)
+    if not include_dismissed:
+        q = q.filter_by(dismissed=False)
+    return q.order_by(MalformedImportFlag.flagged_at.desc()).all()
+
+
+@router.post("/malformed-audit/{flag_id}/dismiss")
+def malformed_audit_dismiss(flag_id: int, db: Session = Depends(get_db)):
+    flag = db.query(MalformedImportFlag).filter_by(id=flag_id).first()
+    if not flag:
+        raise HTTPException(status_code=404, detail="Flag not found")
+    flag.dismissed = True
+    db.commit()
+    return {"id": flag_id, "dismissed": True}
+
+
+@router.post("/malformed-audit/run")
+async def malformed_audit_run_now(db: Session = Depends(get_db)):
+    """On-demand trigger (Settings/manual use) — same logic the nightly
+    scheduler runs, without waiting for the interval gate."""
+    from app.services.malformed_audit import run_malformed_import_audit
+    cfg = load_import_matching(db)
+    result = await run_malformed_import_audit(
+        db, cfg.malformed_audit_lookback_days, cfg.malformed_audit_threshold)
+    return {"checked": result["checked"], "flagged": result["flagged"]}
 
 
 @router.get("/stats", response_model=ImportStats)

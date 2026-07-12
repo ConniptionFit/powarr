@@ -11,6 +11,7 @@ from app.models.media import MediaItem
 from app.schemas.settings import (
     CleanupSettings, SyncSettings, LlmScheduleSettings, BackupSettings,
     NotificationSettings, SmartPlaylistSettings, ArtistDiscoverySettings,
+    ImportMatchingSettings,
 )
 
 logger = logging.getLogger("powarr")
@@ -130,6 +131,43 @@ async def _scheduled_backup(db) -> None:
     logger.info(f"Scheduled backup: {result['message']}" + (f", pruned {pruned} old backup(s)" if pruned else ""))
 
 
+async def _scheduled_malformed_audit(db) -> None:
+    """FI-10 — nightly re-check of already-imported Sonarr packs for
+    incomplete coverage that went unnoticed once the download left triage.
+    Notify-only; never rewrites the library. Off by default (see the setting's
+    own comment for why)."""
+    cfg = _get_setting(db, "import_matching", ImportMatchingSettings)
+    if not cfg.malformed_audit_enabled or cfg.malformed_audit_interval_hours <= 0:
+        return
+    row = db.query(AppSetting).filter_by(key="last_malformed_audit").first()
+    if row and row.value:
+        try:
+            last = datetime.fromisoformat(row.value)
+            if datetime.utcnow() - last < timedelta(hours=cfg.malformed_audit_interval_hours):
+                return
+        except ValueError:
+            pass
+    from app.services.malformed_audit import run_malformed_import_audit
+    result = await run_malformed_import_audit(
+        db, cfg.malformed_audit_lookback_days, cfg.malformed_audit_threshold)
+    if not row:
+        row = AppSetting(key="last_malformed_audit")
+        db.add(row)
+    row.value = datetime.utcnow().isoformat()
+    db.commit()
+    logger.info(f"Malformed-import audit: checked {result['checked']} pack(s), "
+               f"flagged {result['flagged']}")
+    if result["flagged"]:
+        from app.services import notifier
+        titles = ", ".join(f.matched_title or f.source_title for f in result["new_flags"][:5])
+        more = f" (+{result['flagged'] - 5} more)" if result["flagged"] > 5 else ""
+        await notifier.notify(
+            db, f"Powarr: {result['flagged']} possibly-malformed import(s) found",
+            f"Coverage looks incomplete for: {titles}{more}. Review in Imports → Recent Downloads.",
+            tags="warning,powarr",
+        )
+
+
 async def _scheduled_weekly_digest(db) -> None:
     """One ntfy summary per week when digest_enabled (Approved Queue #15)."""
     cfg = _get_setting(db, "notifications", NotificationSettings)
@@ -229,6 +267,7 @@ async def maintenance_loop():
                 await _scheduled_llm_run(db)
                 await _scheduled_backup(db)
                 await _scheduled_weekly_digest(db)
+                await _scheduled_malformed_audit(db)
                 # SP-06 — artist DB refresh before playlist auto-updates so
                 # generation sees fresh Qdrant taste/connection state.
                 await _scheduled_artist_discovery(db)

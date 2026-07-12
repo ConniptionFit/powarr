@@ -72,3 +72,22 @@ class RecentDownloadOut(BaseModel):
     matched_title: Optional[str] = None
     event_date: Optional[str] = None
     still_in_queue: bool = False
+
+
+class MalformedImportFlagOut(BaseModel):
+    """FI-10 — a pack whose download already left the queue but whose current
+    on-disk coverage looks incomplete when re-checked."""
+    id: int
+    source_app: str
+    matched_id: Optional[int] = None
+    matched_title: Optional[str] = None
+    download_id: str
+    source_title: str
+    pack_label: Optional[str] = None
+    mapped_episodes: Optional[int] = None
+    total_episodes: Optional[int] = None
+    coverage_ratio: Optional[float] = None
+    flagged_at: Optional[datetime] = None
+    dismissed: bool = False
+
+    model_config = {"from_attributes": True}

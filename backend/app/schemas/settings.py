@@ -61,6 +61,17 @@ class ImportMatchingSettings(BaseModel):
     # of the whole aired show, so a genuinely complete absolute-numbered pack
     # doesn't read stuck at a tiny fraction forever.
     anime_absolute_pack_coverage: bool = False
+    # FI-10, opt-in/off by default — a new proactive notification channel the
+    # user hasn't asked for by default, even though it never writes to the
+    # library. Nightly (self-gated in scheduler.py) re-check of Sonarr pack
+    # grabs whose download already left the queue: flags ones whose current
+    # on-disk coverage (same scope logic as FI-02/FI-08's pack_scope_episodes)
+    # looks incomplete, so a double-segment pack that quietly only imported
+    # half doesn't go unnoticed once it's no longer in active triage.
+    malformed_audit_enabled: bool = False
+    malformed_audit_interval_hours: int = 24
+    malformed_audit_lookback_days: int = 7
+    malformed_audit_threshold: float = 0.9  # below this coverage ratio → flagged
     # Orphan handling (v0.6.1) — confirmed-missing rows prompt for confirmation by default;
     # this skips the prompt and marks them orphaned immediately (same positive-confirmation gate)
     orphan_auto_purge: bool = False

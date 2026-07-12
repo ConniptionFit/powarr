@@ -205,6 +205,10 @@ export interface ImportMatchingSettings {
   title_only_cap: number;
   anime_absolute_numbering: boolean;
   anime_absolute_pack_coverage: boolean; // FI-08, opt-in — see Settings toggle for the auto-resolve-impact caveat
+  malformed_audit_enabled: boolean; // FI-10, opt-in — nightly re-check of settled Sonarr packs for incomplete coverage
+  malformed_audit_interval_hours: number;
+  malformed_audit_lookback_days: number;
+  malformed_audit_threshold: number;
   orphan_auto_purge: boolean;
   llm_blend_weight: number; // LLM share of the confidence blend (0-1)
   quality_downgrade_auto_reject: boolean;
@@ -515,6 +519,13 @@ export const importsApi = {
         method: "POST",
         body: JSON.stringify({ source_app: sourceApp, download_id: downloadId, matched_id: matchedId }),
       }),
+  // FI-10 — nightly malformed-import audit flags.
+  malformedAudit: (includeDismissed = false) =>
+    req<MalformedImportFlag[]>(`/imports/malformed-audit${includeDismissed ? "?include_dismissed=true" : ""}`),
+  malformedAuditDismiss: (id: number) =>
+    req<{ id: number; dismissed: boolean }>(`/imports/malformed-audit/${id}/dismiss`, { method: "POST" }),
+  malformedAuditRunNow: () =>
+    req<{ checked: number; flagged: number }>("/imports/malformed-audit/run", { method: "POST" }),
 };
 
 export interface RecentDownload {
@@ -525,6 +536,21 @@ export interface RecentDownload {
   matched_title: string | null;
   event_date: string | null;
   still_in_queue: boolean;
+}
+
+export interface MalformedImportFlag {
+  id: number;
+  source_app: string;
+  matched_id: number | null;
+  matched_title: string | null;
+  download_id: string;
+  source_title: string;
+  pack_label: string | null;
+  mapped_episodes: number | null;
+  total_episodes: number | null;
+  coverage_ratio: number | null;
+  flagged_at: string | null;
+  dismissed: boolean;
 }
 
 // --- Active processes (tracked background tasks) ---
