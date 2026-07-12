@@ -294,10 +294,9 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
 
 # --- Centroid similarity search --------------------------------------------------
 
-async def compute_taste_centroid(db) -> list[float] | None:
-    qdrant = _qdrant(db)
-    if not qdrant:
-        return None
+async def _discovered_points(qdrant) -> list[dict]:
+    """All is_discovered=True Qdrant points with vectors — shared by both
+    discovery lanes so they always average over the exact same source set."""
     points: list[dict] = []
     offset = None
     pages = 0
@@ -309,23 +308,71 @@ async def compute_taste_centroid(db) -> list[float] | None:
         pages += 1
         if offset is None:
             break
-    if not points:
-        return None
-    points.sort(key=lambda p: (p.get("payload") or {}).get("total_plays_global", 0), reverse=True)
-    vectors = [p["vector"] for p in points[:15] if p.get("vector")]
+    return points
+
+
+def _average_vector(vectors: list[list[float]]) -> list[float] | None:
     if not vectors:
         return None
     dim = len(vectors[0])
     return [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
 
 
-async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
-    centroid = await compute_taste_centroid(db)
-    if not centroid:
-        return {"ok": True, "message": "No taste centroid yet (no discovered artists)", "candidates": 0}
+async def compute_taste_centroid(db) -> list[float] | None:
+    """All-time taste centroid — average of the top-15 most-played (by
+    total_plays_global) discovered artists. See compute_recent_taste_centroid()
+    (AD-17) for the recently-listened counterpart lane."""
     qdrant = _qdrant(db)
     if not qdrant:
-        return {"ok": False, "message": "Qdrant not configured (Settings → Integrations)", "candidates": 0}
+        return None
+    points = await _discovered_points(qdrant)
+    if not points:
+        return None
+    points.sort(key=lambda p: (p.get("payload") or {}).get("total_plays_global", 0), reverse=True)
+    vectors = [p["vector"] for p in points[:15] if p.get("vector")]
+    return _average_vector(vectors)
+
+
+async def compute_recent_taste_centroid(db, lookback_days: int) -> list[float] | None:
+    """AD-17 — second discovery lane seeded from artists actually listened to
+    within the recent window, distinct from compute_taste_centroid()'s
+    all-time most-played average. A single blended centroid tends to produce
+    samey recommendations that drift toward old favorites; this lane lets a
+    genuine recent shift in taste surface its own candidates. Reuses the same
+    recently-listened key resolution AD-07 already established (mbid/name/
+    normalized-name match against Last.fm's recent tracks), so "recent" means
+    the same thing in both places. Returns None (fail-soft) when Last.fm
+    isn't configured or nothing recently listened-to is in the taste space
+    yet — callers should fall back to the all-time lane only."""
+    qdrant = _qdrant(db)
+    lastfm = _lastfm_client(db)
+    if not qdrant or not lastfm:
+        return None
+    recent_keys = await _recently_listened_keys(lastfm, lookback_days)
+    if not recent_keys:
+        return None
+    points = await _discovered_points(qdrant)
+    recent_points = []
+    for p in points:
+        payload = p.get("payload") or {}
+        mbid = payload.get("musicbrainz_id")
+        name = (payload.get("artist_name") or "").strip()
+        if (mbid and mbid in recent_keys) or (
+                name and (name in recent_keys or _norm_artist(name) in recent_keys)):
+            recent_points.append(p)
+    vectors = [p["vector"] for p in recent_points if p.get("vector")]
+    return _average_vector(vectors)
+
+
+async def _run_centroid_lane(db, qdrant, centroid: list[float], cfg: ArtistDiscoverySettings,
+                             source_label: str) -> int:
+    """One discovery-lane search + candidate-creation pass. Shared by the
+    all-time (AD original) and recently-listened (AD-17) lanes so both create
+    candidates identically — only the seed centroid and the resulting
+    `source` tag differ. Relies on SQLAlchemy's autoflush so a candidate the
+    all-time lane just added (uncommitted) is still visible to the recent
+    lane's _candidate_exists() check within the same run — no duplicate rows
+    when both lanes surface the same artist."""
     hits = await qdrant.search(
         centroid, limit=cfg.max_candidates_per_run, score_threshold=cfg.similarity_threshold,
         must=[{"key": "is_discovered", "match": {"value": False}}],
@@ -346,14 +393,42 @@ async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, 
             musicbrainz_id=mbid, artist_name=name,
             genres=json.dumps(genres_list),
             mood_tags=json.dumps(clean_tags(payload.get("mood_tags"))),
-            era=clean_era(payload.get("era")), source="centroid",
+            era=clean_era(payload.get("era")), source=source_label,
             similarity_score=h.get("score"), status="pending",
             image_url=enrichment["image_url"], bio=enrichment["bio"],
             years_active=enrichment["years_active"],
         ))
         created += 1
+    return created
+
+
+async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
+    qdrant = _qdrant(db)
+    if not qdrant:
+        return {"ok": False, "message": "Qdrant not configured (Settings → Integrations)", "candidates": 0}
+
+    centroid = await compute_taste_centroid(db)
+    if not centroid:
+        return {"ok": True, "message": "No taste centroid yet (no discovered artists)", "candidates": 0}
+
+    created = await _run_centroid_lane(db, qdrant, centroid, cfg, "centroid")
+
+    # AD-17 — second lane from recently-listened artists, distinct from the
+    # all-time-most-played centroid above. Purely additive: fail-soft to
+    # "nothing extra" whenever Last.fm isn't configured or nothing recent
+    # is in the taste space yet, never blocks the all-time lane's results.
+    recent_created = 0
+    if cfg.recent_taste_lane_enabled:
+        recent_centroid = await compute_recent_taste_centroid(db, cfg.scrobble_lookback_days)
+        if recent_centroid:
+            recent_created = await _run_centroid_lane(db, qdrant, recent_centroid, cfg, "centroid_recent")
+
     db.commit()
-    return {"ok": True, "message": f"{created} new candidate(s)", "candidates": created}
+    total = created + recent_created
+    message = f"{total} new candidate(s)"
+    if recent_created:
+        message += f" ({created} all-time, {recent_created} recent-taste)"
+    return {"ok": True, "message": message, "candidates": total}
 
 
 # --- Related-artist graph sync ---------------------------------------------------

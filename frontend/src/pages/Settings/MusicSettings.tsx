@@ -17,6 +17,7 @@ interface ADSettings {
   scrobble_lookback_days: number;
   auto_promote: boolean;
   thumbnail_retention_days: number;
+  recent_taste_lane_enabled: boolean;
   root_folder_path: string;
   quality_profile_id: number;
   metadata_profile_id: number;
@@ -114,6 +115,15 @@ function ArtistDiscoverySettingsCard() {
           title="Ollama model that turns an artist's name + tags into the taste vector stored in Qdrant (default all-minilm). Changing this after artists are already tracked can mismatch vector dimensions against existing points — best set once, before first use.">
           Embedding model
           <input className={inputCls} value={form.embed_model || ""} onChange={e => set("embed_model", e.target.value)} />
+        </label>
+      </div>
+
+      <div className="border-t border-purple-900/20 pt-4">
+        <label className="flex items-center gap-2 text-sm text-slate-300"
+          title="AD-17 — adds a second discovery lane seeded from artists you've actually listened to recently (same Scrobble lookback window below), alongside the existing all-time most-played centroid. Purely additive — finds more candidates, never removes any.">
+          <input type="checkbox" checked={form.recent_taste_lane_enabled ?? true}
+            onChange={e => set("recent_taste_lane_enabled", e.target.checked)} />
+          Recent-taste discovery lane
         </label>
       </div>
 

@@ -298,6 +298,13 @@ class ArtistDiscoverySettings(BaseModel):
     sync_interval_hours: int = 1  # differential sync: Lidarr/Last.fm stats -> Qdrant
     # AD-08 — purge image_url on accepted rows after this many days (0 = never).
     thumbnail_retention_days: int = 30
+    # AD-17 — second discovery lane seeded from recently-listened artists
+    # (reuses scrobble_lookback_days, the same "recent" window AD-07 already
+    # established) alongside the existing all-time most-played centroid, so
+    # results aren't dominated by one blended average. Purely additive (finds
+    # more candidates, never removes any) — default on, unlike scoring/
+    # auto-resolve-affecting toggles elsewhere in the app.
+    recent_taste_lane_enabled: bool = True
 
 
 class NotificationSettings(BaseModel):

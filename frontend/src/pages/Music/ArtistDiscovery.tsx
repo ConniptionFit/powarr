@@ -12,7 +12,7 @@ interface Candidate {
   genres: string[];
   mood_tags: string[];
   era: string | null;
-  source: "centroid" | "graph";
+  source: "centroid" | "centroid_recent" | "graph";
   similarity_score: number | null;
   associated_seed_mbids: string[];
   seed_artist_name: string | null;
@@ -57,9 +57,13 @@ const api = {
 };
 
 function whySuggested(c: Candidate): string {
-  if (c.source === "centroid") {
+  if (c.source === "centroid" || c.source === "centroid_recent") {
     const pct = c.similarity_score != null ? `${Math.round(c.similarity_score * 100)}% match to` : "Close match to";
-    return `${pct} your overall taste profile, built from your most-played artists`;
+    // AD-17 — a second discovery lane seeded from what you've actually been
+    // listening to lately, distinct from the all-time most-played centroid.
+    const profile = c.source === "centroid_recent"
+      ? "your recent listening" : "your overall taste profile, built from your most-played artists";
+    return `${pct} ${profile}`;
   }
   const names = c.seed_artist_names.length > 0
     ? c.seed_artist_names
