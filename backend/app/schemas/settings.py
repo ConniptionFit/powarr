@@ -99,6 +99,14 @@ class ImportMatchingSettings(BaseModel):
     # delete API. Only meaningful when suspicious_extension_auto_reject is on;
     # user-confirmed 2026-07-07 that whole-download deletion is acceptable here.
     suspicious_extension_delete_from_disk: bool = False
+    # LLM-09 (v0.69.0) — user-authored regex strip rules applied to the raw
+    # release title before the built-in strip_release_junk() and any
+    # heuristic/LLM matching sees it. Structured-config-first, not a freeform
+    # prompt override: each rule is {"name": str, "pattern": str, "enabled":
+    # bool}, applied in list order via apply_custom_junk_rules(). Empty by
+    # default. Patterns are validated (must compile) at save time; a rule that
+    # somehow still errors at match time is skipped, never crashes matching.
+    junk_strip_rules: list[dict] = []
 
 
 class OllamaSettings(BaseModel):

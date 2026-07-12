@@ -167,6 +167,43 @@ def strip_release_junk(title: str, *, music: bool = False) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def apply_custom_junk_rules(title: str, rules: list[dict] | None) -> tuple[str, list[str]]:
+    """LLM-09 — user-authored, versioned regex strip rules, applied to the raw
+    release title before the built-in strip_release_junk() and any
+    heuristic/LLM matching sees it. Each rule: {"name", "pattern", "enabled"}.
+
+    Fail-soft per rule: user-authored patterns are less trusted than the
+    built-in regexes above, so an individual bad pattern is skipped (logged)
+    rather than aborting the whole match — patterns are already validated at
+    settings-save time, but a rule saved under an older, looser validation (or
+    edited directly in the DB) must not be able to crash matching.
+
+    Returns (cleaned_title, [names of rules that actually changed the text]) —
+    the applied-names list is folded into the deterministic match rationale so
+    which rule fired on which release is auditable, not a silent transform.
+    """
+    if not rules or not title:
+        return title, []
+    t = title
+    applied: list[str] = []
+    for rule in rules:
+        if not rule.get("enabled", True):
+            continue
+        pattern = (rule.get("pattern") or "").strip()
+        if not pattern:
+            continue
+        name = rule.get("name") or pattern
+        try:
+            new_t = re.sub(pattern, " ", t)
+        except re.error as e:
+            logger.warning(f"Junk strip rule '{name}' has invalid regex, skipped: {e}")
+            continue
+        if new_t != t:
+            applied.append(name)
+        t = new_t
+    return re.sub(r"\s+", " ", t).strip(), applied
+
+
 def _normalize(title: str, *, is_release: bool = False, music: bool = False) -> str:
     t = title or ""
     if is_release:
@@ -808,7 +845,8 @@ def _apply_music_checks(app_name: str, raw_title: str, matched_title: str,
 
 
 def _lidarr_readarr_match(app_name: str, rec: dict, history: list[dict],
-                          library: list[dict]) -> tuple[int | None, str | None, float, list[str]]:
+                          library: list[dict],
+                          junk_rules: list[dict] | None = None) -> tuple[int | None, str | None, float, list[str]]:
     """Album/book-aware identity match for Lidarr/Readarr (v0.34.0).
 
     Queue often has artistId/authorId but not albumId/bookId; history usually has
@@ -817,11 +855,14 @@ def _lidarr_readarr_match(app_name: str, rec: dict, history: list[dict],
     (_apply_music_checks) on every match path.
     """
     raw_title = rec.get("title") or ""
+    parts: list[str] = []
+    raw_title, applied_rules = apply_custom_junk_rules(raw_title, junk_rules)
+    if applied_rules:
+        parts.append(f"junk rules applied: {', '.join(applied_rules)}")
     id_key = "albumId" if app_name == "lidarr" else "bookId"
     parent_key = "artistId" if app_name == "lidarr" else "authorId"
     display = _album_display_title if app_name == "lidarr" else _book_display_title
     lib_by_id = {item["id"]: item for item in library}
-    parts: list[str] = []
 
     download_id = rec.get("downloadId")
     hist = next((h for h in history if download_id and h.get("downloadId") == download_id), None)
@@ -895,10 +936,18 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     matched_title = None
     confidence = 0.0
     parts: list[str] = []
+    # LLM-09 — only affects this function's local matching variable, never the
+    # stored FailedImport.raw_title (populated separately from `rec` at
+    # row-creation time, further down the scan pipeline). Harmless no-op for
+    # the lidarr/readarr branch below, which re-extracts from `rec` itself and
+    # applies the same rules internally rather than reading this variable.
+    raw_title, applied_rules = apply_custom_junk_rules(raw_title, cfg.junk_strip_rules)
+    if applied_rules:
+        parts.append(f"junk rules applied: {', '.join(applied_rules)}")
 
     if app_name in ("lidarr", "readarr"):
         matched_id, matched_title, confidence, parts = _lidarr_readarr_match(
-            app_name, rec, history, library)
+            app_name, rec, history, library, cfg.junk_strip_rules)
         if not matched_id:
             parts.append("no library match found")
     elif rec.get(id_key) and rec[id_key] in lib_by_id:
@@ -1992,7 +2041,8 @@ async def llm_rescore(ids: list[int] | None = None, limit: int = 50,
 
 
 async def rematch_music_row(db, row: FailedImport, lib_cache: dict[str, list],
-                            hist_cache: dict[str, list]) -> bool:
+                            hist_cache: dict[str, list],
+                            junk_rules: list[dict] | None = None) -> bool:
     """Re-run the album/book matcher for one Lidarr/Readarr row against a fresh
     (per-call-cached) library + history fetch. Updates the row's match, heuristic
     confidence, and stored rationale in place; returns True when a match was
@@ -2026,7 +2076,7 @@ async def rematch_music_row(db, row: FailedImport, lib_cache: dict[str, list],
         rec["authorId"] = meta["authorId"]
     mid, title, conf, parts = _lidarr_readarr_match(
         row.source_app, rec, hist_cache.get(row.source_app) or [],
-        lib_cache.get(row.source_app) or [])
+        lib_cache.get(row.source_app) or [], junk_rules)
     if not (mid and title):
         return False
     row.matched_id = mid
@@ -2098,7 +2148,7 @@ async def rescore_music(ids: list[int] | None = None, limit: int = 500) -> dict:
         hist_cache: dict[str, list] = {}
         for row in rows:
             try:
-                updated = await rematch_music_row(db, row, lib_cache, hist_cache)
+                updated = await rematch_music_row(db, row, lib_cache, hist_cache, cfg.junk_strip_rules)
             except Exception as e:
                 logger.info(f"Rescore skipped for {row.id}: {e}")
                 skipped += 1
@@ -2158,7 +2208,7 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
         for i, row in enumerate(rows, 1):
             cur = base_current + i
             try:
-                await rematch_music_row(db, row, _lib_cache, _hist_cache)
+                await rematch_music_row(db, row, _lib_cache, _hist_cache, cfg.junk_strip_rules)
             except Exception as e:
                 logger.info(f"LLM rematch skipped for {row.id}: {e}")
             if not row.matched_title:

@@ -75,12 +75,14 @@ function ImportMatchingSection() {
   const [cfg, setCfg] = useState<ImportMatchingSettings | null>(null);
   const [saved, setSaved] = useState(false);
   const [newExt, setNewExt] = useState("");
+  const [junkRuleError, setJunkRuleError] = useState<string | null>(null);
 
   useEffect(() => { if (data) setCfg(data); }, [data]);
 
   const mut = useMutation({
     mutationFn: (c: ImportMatchingSettings) => settingsApi.updateImportMatching(c),
-    onSuccess: () => { setSaved(true); setTimeout(() => setSaved(false), 2000); },
+    onSuccess: () => { setSaved(true); setJunkRuleError(null); setTimeout(() => setSaved(false), 2000); },
+    onError: (e: unknown) => setJunkRuleError(e instanceof Error ? e.message : String(e)),
   });
 
   if (!cfg) return null;
@@ -158,6 +160,13 @@ function ImportMatchingSection() {
 
   const removeExtension = (ext: string) =>
     set("suspicious_extensions", cfg.suspicious_extensions.filter(e => e !== ext));
+
+  const addJunkRule = () =>
+    set("junk_strip_rules", [...cfg.junk_strip_rules, { name: "", pattern: "", enabled: true }]);
+  const updateJunkRule = (i: number, rule: ImportMatchingSettings["junk_strip_rules"][number]) =>
+    set("junk_strip_rules", cfg.junk_strip_rules.map((r, j) => (j === i ? rule : r)));
+  const removeJunkRule = (i: number) =>
+    set("junk_strip_rules", cfg.junk_strip_rules.filter((_, j) => j !== i));
 
   return (
     <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
@@ -258,6 +267,56 @@ function ImportMatchingSection() {
 
       {toggleRow("Auto-Reject Suspicious File Types", "Skip triage entirely for downloads containing a file matching the list above. Off by default; the Suspicious badge and filter always show these regardless of this setting.", "suspicious_extension_auto_reject")}
       {toggleRow("Also Delete From Disk", "When auto-rejecting a suspicious download, also delete it via the download client (deletes every file in the download, not just the flagged one — no per-file delete is available). Only takes effect when Auto-Reject Suspicious File Types is also on.", "suspicious_extension_delete_from_disk", true)}
+
+      <div className="py-4 border-b border-purple-900/20">
+        <p className="text-white text-sm font-medium">Junk Strip Rules</p>
+        <p className="text-slate-500 text-xs mt-0.5">
+          LLM-09 — user-authored regex rules applied to the raw release title before the built-in cleanup and
+          any heuristic/LLM matching sees it. Applied in order, top to bottom. Empty by default. Each rule's
+          matches are replaced with a space; validated (must compile) on save.
+        </p>
+        {junkRuleError && <p className="text-xs text-red-400 mt-2">{junkRuleError}</p>}
+        <div className="mt-3 space-y-2">
+          {cfg.junk_strip_rules.map((rule, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={rule.enabled !== false}
+                onChange={e => updateJunkRule(i, { ...rule, enabled: e.target.checked })}
+                className="accent-purple-500 flex-shrink-0"
+                title="Enabled"
+              />
+              <input
+                type="text"
+                value={rule.name || ""}
+                onChange={e => updateJunkRule(i, { ...rule, name: e.target.value })}
+                placeholder="name"
+                className="w-32 bg-surface border border-purple-900/40 rounded px-2 py-1 text-xs text-white placeholder:text-slate-600"
+              />
+              <input
+                type="text"
+                value={rule.pattern || ""}
+                onChange={e => updateJunkRule(i, { ...rule, pattern: e.target.value })}
+                placeholder="regex pattern"
+                className="flex-1 bg-surface border border-purple-900/40 rounded px-2 py-1 text-xs text-white font-mono placeholder:text-slate-600"
+              />
+              <button
+                onClick={() => removeJunkRule(i)}
+                className="text-red-400 hover:text-white px-1.5 flex-shrink-0"
+                title="Remove rule"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={addJunkRule}
+          className="mt-3 px-3 py-1 rounded bg-surface-overlay hover:bg-white/10 text-slate-300 text-xs transition-colors"
+        >
+          Add Rule
+        </button>
+      </div>
 
       <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
         <div>

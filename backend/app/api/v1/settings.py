@@ -74,6 +74,19 @@ def get_import_matching(db: Session = Depends(get_db)):
 
 @router.put("/import-matching", response_model=ImportMatchingSettings)
 def update_import_matching(body: ImportMatchingSettings, db: Session = Depends(get_db)):
+    # LLM-09 — validate user-authored regex at save time (fail loud here) so a
+    # typo'd pattern is caught immediately rather than silently skipped on
+    # every match at runtime (apply_custom_junk_rules() is fail-soft there —
+    # this is the earlier, louder check for the common case).
+    import re as _re
+    for rule in body.junk_strip_rules:
+        pattern = (rule.get("pattern") or "").strip() if isinstance(rule, dict) else ""
+        if not pattern:
+            raise HTTPException(status_code=400, detail=f"Junk strip rule '{rule.get('name', '(unnamed)')}' has no pattern")
+        try:
+            _re.compile(pattern)
+        except _re.error as e:
+            raise HTTPException(status_code=400, detail=f"Junk strip rule '{rule.get('name', pattern)}' has invalid regex: {e}")
     _put_json_setting(db, "import_matching", body)
     return body
 

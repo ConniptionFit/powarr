@@ -225,6 +225,10 @@ export interface ImportMatchingSettings {
   suspicious_extensions: string[];
   suspicious_extension_auto_reject: boolean;
   suspicious_extension_delete_from_disk: boolean;
+  // LLM-09 (v0.69.0) — user-authored regex strip rules, applied in order to the
+  // raw release title before built-in cleanup + heuristic/LLM matching. Empty
+  // by default. `enabled` defaults true when omitted.
+  junk_strip_rules: { name?: string; pattern?: string; enabled?: boolean }[];
 }
 
 export interface OllamaSettings {
