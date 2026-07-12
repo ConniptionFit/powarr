@@ -273,6 +273,12 @@ class SmartPlaylistSettings(BaseModel):
     # values — so template playlists get whatever sonic bias that existing
     # setting already provides, same as any other playlist.
     playlist_templates: dict[str, list[str]] = {}
+    # SP-13 — playlists were add-only before this: a track never leaves once
+    # added, even if its artist gets blacklisted later or the track itself
+    # leaves Plex (deleted, moved libraries). Opt-in/off by default — unlike
+    # SP-12/AD-17 above, this *removes* content from a playlist the user
+    # curated, so it needs an explicit opt-in rather than defaulting on.
+    prune_stale_tracks_enabled: bool = False
 
 
 class ArtistDiscoverySettings(BaseModel):

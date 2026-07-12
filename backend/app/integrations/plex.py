@@ -180,6 +180,34 @@ class PlexIntegration(BaseIntegration):
             # 404 = already removed on Plex — treat as success so Powarr can clean up
             return r.status_code in (200, 201, 204, 404)
 
+    async def get_playlist_items(self, playlist_rating_key: str) -> list[dict]:
+        """SP-13 — current items of a playlist, each carrying both `ratingKey`
+        (the track) and `playlistItemID` (this item's id WITHIN the playlist —
+        a distinct value remove_from_playlist() needs; Plex has no per-track
+        removal by the track's own ratingKey)."""
+        if not playlist_rating_key:
+            return []
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+            r = await client.get(
+                f"{self.url}/playlists/{playlist_rating_key}/items", headers=headers)
+            if r.status_code != 200:
+                return []
+            return (r.json().get("MediaContainer") or {}).get("Metadata") or []
+
+    async def remove_from_playlist(self, playlist_rating_key: str, playlist_item_id: int | str) -> bool:
+        """SP-13 — remove a single item from a Powarr-owned playlist by its
+        playlistItemID (from get_playlist_items(), not the track's ratingKey).
+        404 = already gone — treated as success so the ledger can still clean up."""
+        if not playlist_rating_key or playlist_item_id is None:
+            return False
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+            r = await client.delete(
+                f"{self.url}/playlists/{playlist_rating_key}/items/{playlist_item_id}",
+                headers=headers)
+            return r.status_code in (200, 201, 204, 404)
+
     async def sonically_similar_keys(self, rating_key: str, *, limit: int = 50,
                                      max_distance: float = 0.25) -> list[str]:
         """SP-02: ratingKeys of tracks sonically close to `rating_key`, via Plex's

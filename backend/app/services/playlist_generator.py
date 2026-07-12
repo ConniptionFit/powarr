@@ -312,6 +312,49 @@ async def _sync_tracks_to_plex(db, plex, pl: SmartPlaylist, artists: list[dict],
     return total_added
 
 
+async def prune_stale_tracks(db, plex, pl: SmartPlaylist, cfg: SmartPlaylistSettings) -> int:
+    """SP-13 — playlists were add-only before this: a track never left the
+    ledger (or the real Plex playlist) once added, even after its artist got
+    blacklisted or the track itself left Plex (deleted, moved libraries).
+    Opt-in via cfg.prune_stale_tracks_enabled. Two concrete, checkable prune
+    conditions:
+      1. the ledger row's artist is now blacklisted;
+      2. the ledger row's plex_key no longer resolves to a MediaItem — the
+         track has left the synced Plex library.
+    Removes from the real Plex playlist first (via playlistItemID, not the
+    track's own ratingKey — Plex has no removal-by-track-key), then drops the
+    ledger row and decrements track_count. Fails soft: a Plex removal call
+    that fails for one track doesn't stop the rest, and a track already gone
+    from Plex's playlist (404) still gets its stale ledger row cleaned up."""
+    if not pl.plex_playlist_id or not plex:
+        return 0
+    tracks = db.query(SmartPlaylistTrack).filter_by(playlist_id=pl.id).all()
+    if not tracks:
+        return 0
+    blocked = _blacklist_set(cfg)
+    stale = [t for t in tracks if _is_blacklisted(t.artist_name, blocked)
+            or not db.query(MediaItem).filter_by(plex_rating_key=t.plex_key).first()]
+    if not stale:
+        return 0
+
+    items = await plex.get_playlist_items(pl.plex_playlist_id)
+    item_id_by_key = {str(i.get("ratingKey")): i.get("playlistItemID") for i in items}
+
+    removed = 0
+    for t in stale:
+        playlist_item_id = item_id_by_key.get(t.plex_key)
+        ok = True
+        if playlist_item_id is not None:
+            ok = await plex.remove_from_playlist(pl.plex_playlist_id, playlist_item_id)
+        if ok:
+            db.delete(t)
+            removed += 1
+    if removed:
+        pl.track_count = max(0, (pl.track_count or 0) - removed)
+        pl.updated_at = datetime.utcnow()
+    return removed
+
+
 def _mark_artist_included(db, pl: SmartPlaylist, artist: dict) -> None:
     """Bookkeeping row — accepted means included (no pending queue)."""
     name = artist["artist_name"]
@@ -353,10 +396,11 @@ def _artists_for_template(by_genre: dict[str, list[dict]], genres: list[str],
 
 
 async def _upsert_playlist_group(db, cfg: SmartPlaylistSettings, plex, group_key: str,
-                                 artists: list[dict], *, is_template: bool = False) -> tuple[bool, int, bool]:
+                                 artists: list[dict], *, is_template: bool = False
+                                 ) -> tuple[bool, int, bool, int]:
     """Create-or-sync one genre/template playlist group. Shared by the
     per-genre loop and the SP-12 per-template loop below — only the source of
-    `artists` differs. Returns (created, tracks_added, synced)."""
+    `artists` differs. Returns (created, tracks_added, synced, pruned)."""
     pl = db.query(SmartPlaylist).filter_by(genre_tag=group_key).first()
     if not pl:
         title = await _playlist_title(db, cfg, group_key, [a["artist_name"] for a in artists])
@@ -364,7 +408,7 @@ async def _upsert_playlist_group(db, cfg: SmartPlaylistSettings, plex, group_key
         db.add(pl)
         db.flush()
         pl.last_run_message = f"Suggested — {len(artists)} artist(s), awaiting Approve"
-        return True, 0, False
+        return True, 0, False, 0
 
     # Managed (on Plex): auto-include all non-blacklisted artists
     if pl.plex_playlist_id and pl.enabled:
@@ -374,16 +418,22 @@ async def _upsert_playlist_group(db, cfg: SmartPlaylistSettings, plex, group_key
         if should_update:
             if not plex:
                 pl.last_run_message = "Plex not enabled — cannot sync"
-                return False, 0, False
+                return False, 0, False, 0
+            pruned = 0
+            if cfg.prune_stale_tracks_enabled:
+                pruned = await prune_stale_tracks(db, plex, pl, cfg)
             added = await _sync_tracks_to_plex(db, plex, pl, artists, cfg)
-            pl.last_run_message = f"Synced {len(artists)} artist(s), +{added} track(s)"
-            return False, added, True
+            msg = f"Synced {len(artists)} artist(s), +{added} track(s)"
+            if pruned:
+                msg += f", -{pruned} stale"
+            pl.last_run_message = msg
+            return False, added, True, pruned
         pl.last_run_message = "Auto-update off for this playlist"
-        return False, 0, False
+        return False, 0, False, 0
 
     # Suggested draft — refresh artist count message only
     pl.last_run_message = f"Suggested — {len(artists)} artist(s), awaiting Approve"
-    return False, 0, False
+    return False, 0, False, 0
 
 
 async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
@@ -406,13 +456,15 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
         created_playlists = 0
         tracks_added = 0
         synced = 0
+        pruned_total = 0
         plex = _plex_client(db)
 
         for g, artists in by_genre.items():
-            created, added, did_sync = await _upsert_playlist_group(db, cfg, plex, g, artists)
+            created, added, did_sync, pruned = await _upsert_playlist_group(db, cfg, plex, g, artists)
             created_playlists += int(created)
             tracks_added += added
             synced += int(did_sync)
+            pruned_total += pruned
 
         # SP-12 — named intent templates, each a playlist generated from the
         # UNION of several genres. Only on a full pass (genre is None) — a
@@ -425,11 +477,12 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                 artists = _artists_for_template(by_genre, genres, cfg.genre_aliases)
                 if len(artists) < cfg.min_artists_per_genre:
                     continue
-                created, added, did_sync = await _upsert_playlist_group(
+                created, added, did_sync, pruned = await _upsert_playlist_group(
                     db, cfg, plex, template_name, artists, is_template=True)
                 created_playlists += int(created)
                 tracks_added += added
                 synced += int(did_sync)
+                pruned_total += pruned
 
         db.commit()
         return {
@@ -440,6 +493,7 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
             "candidates": 0,
             "tracks_added": tracks_added,
             "playlists_synced": synced,
+            "tracks_pruned": pruned_total,
         }
     except Exception as e:
         logger.warning(f"Smart playlist generate failed: {e}")

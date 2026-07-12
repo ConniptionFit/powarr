@@ -42,6 +42,7 @@ interface SPSettings {
   sonic_similarity_enabled: boolean;
   genre_aliases: Record<string, string>;
   playlist_templates: Record<string, string[]>;
+  prune_stale_tracks_enabled: boolean;
 }
 
 interface LidarrProfiles {
@@ -405,6 +406,18 @@ function PlaylistsSettingsCard() {
           Sonic similarity track bias
           <span className="block text-xs text-slate-500">
             Off by default. Requires Plex Sonic Analysis (Plex Pass) to have run on your library.
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-2 text-sm text-slate-300"
+        title="SP-13 — playlists were add-only before this: a track never left the playlist once added, even if its artist got blacklisted later or the track itself left Plex (deleted, moved libraries). When on, each generation cycle removes tracks matching either condition from both the real Plex playlist and Powarr's own ledger. Off by default since this removes content from a playlist you curated.">
+        <input type="checkbox" className="mt-0.5" checked={!!form.prune_stale_tracks_enabled}
+          onChange={e => set("prune_stale_tracks_enabled", e.target.checked)} />
+        <span>
+          Prune stale tracks
+          <span className="block text-xs text-slate-500">
+            Off by default. Removes tracks whose artist is now blacklisted or that have left Plex.
           </span>
         </span>
       </label>
