@@ -395,6 +395,70 @@ def _artists_for_template(by_genre: dict[str, list[dict]], genres: list[str],
     return out
 
 
+async def _all_monitored_artists(db, cfg: SmartPlaylistSettings) -> dict[str, dict]:
+    """All monitored, non-blacklisted artists keyed by normalized name —
+    deliberately NOT _artists_by_genre()'s by_genre map, which drops any
+    genre bucket below min_artists_per_genre (and therefore every artist in
+    it) before returning. SP-09's related-seed lookup needs the seed and its
+    similar artists to be findable even when one happens to be the only
+    monitored artist tagged with their genre."""
+    from app.services import qdrant_config
+    client = qdrant_config.client(db)
+    if not client:
+        return {}
+    blocked = _blacklist_set(cfg)
+    out: dict[str, dict] = {}
+    offset = None
+    pages = 0
+    while pages < 40:
+        points, offset = await client.scroll_monitored_artists(limit=256, offset=offset)
+        pages += 1
+        for p in points:
+            payload = p.get("payload") or {}
+            artist = (payload.get("artist_name") or "").strip()
+            if not artist or _is_blacklisted(artist, blocked):
+                continue
+            out.setdefault(_norm_artist(artist), {
+                "artist_name": artist, "musicbrainz_id": payload.get("musicbrainz_id"),
+            })
+        if offset is None:
+            break
+    return out
+
+
+async def _artists_for_related_seed(db, cfg: SmartPlaylistSettings, seed_artist: str) -> list[dict]:
+    """SP-09 — related-artist generation axis: the seed artist itself plus
+    whichever of its Last.fm-similar artists are also monitored. Fails soft
+    to [] when Last.fm isn't configured or the lookup errors — an empty
+    result means the caller's min_artists_per_genre gate naturally skips
+    creating the playlist rather than half-creating one."""
+    if not seed_artist:
+        return []
+    from app.services.artist_discovery import _lastfm_client
+    lastfm = _lastfm_client(db)
+    if not lastfm:
+        return []
+
+    monitored = await _all_monitored_artists(db, cfg)
+
+    result: list[dict] = []
+    seed_key = _norm_artist(seed_artist)
+    if seed_key in monitored:
+        result.append(monitored[seed_key])
+
+    try:
+        similar = await lastfm.get_similar_artists(seed_artist)
+    except Exception as e:
+        logger.info(f"SP-09 related-seed lookup failed for '{seed_artist}' (non-fatal): {e}")
+        similar = []
+    for s in similar:
+        name = (s.get("name") or "").strip() if isinstance(s, dict) else ""
+        key = _norm_artist(name)
+        if key and key != seed_key and key in monitored:
+            result.append(monitored[key])
+    return result
+
+
 async def _upsert_playlist_group(db, cfg: SmartPlaylistSettings, plex, group_key: str,
                                  artists: list[dict], *, is_template: bool = False
                                  ) -> tuple[bool, int, bool, int]:
@@ -479,6 +543,23 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                     continue
                 created, added, did_sync, pruned = await _upsert_playlist_group(
                     db, cfg, plex, template_name, artists, is_template=True)
+                created_playlists += int(created)
+                tracks_added += added
+                synced += int(did_sync)
+                pruned_total += pruned
+
+        # SP-09 — related-artist generation axis: a playlist seeded from one
+        # owned artist plus its Last.fm-similar artists that are also
+        # monitored. Only on a full pass, same reasoning as templates above.
+        if genre is None:
+            for playlist_name, seed_artist in (cfg.related_artist_seeds or {}).items():
+                if not playlist_name or not seed_artist:
+                    continue
+                artists = await _artists_for_related_seed(db, cfg, seed_artist)
+                if len(artists) < cfg.min_artists_per_genre:
+                    continue
+                created, added, did_sync, pruned = await _upsert_playlist_group(
+                    db, cfg, plex, playlist_name, artists, is_template=True)
                 created_playlists += int(created)
                 tracks_added += added
                 synced += int(did_sync)

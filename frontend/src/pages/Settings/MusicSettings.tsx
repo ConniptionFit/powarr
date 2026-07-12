@@ -43,6 +43,7 @@ interface SPSettings {
   genre_aliases: Record<string, string>;
   playlist_templates: Record<string, string[]>;
   prune_stale_tracks_enabled: boolean;
+  related_artist_seeds: Record<string, string>;
 }
 
 interface LidarrProfiles {
@@ -296,11 +297,12 @@ function PlaylistsSettingsCard() {
   // round-trip through textToAliases/aliasesToText on every keystroke.
   const [aliasText, setAliasText] = useState<string | null>(null);
   const [templateText, setTemplateText] = useState<string | null>(null);
+  const [seedText, setSeedText] = useState<string | null>(null);
   const form = draft ?? settings ?? null;
 
   const saveMut = useMutation({
     mutationFn: () => req<SPSettings>("/smart-playlists/settings", { method: "PUT", body: JSON.stringify(form || {}) }),
-    onSuccess: () => { setDraft(null); setAliasText(null); setTemplateText(null); setMsg("Saved"); qc.invalidateQueries({ queryKey: ["sp-settings"] }); },
+    onSuccess: () => { setDraft(null); setAliasText(null); setTemplateText(null); setSeedText(null); setMsg("Saved"); qc.invalidateQueries({ queryKey: ["sp-settings"] }); },
     onError: (e: Error) => setMsg(e.message),
   });
 
@@ -352,6 +354,16 @@ function PlaylistsSettingsCard() {
             onChange={e => { setTemplateText(e.target.value); set("playlist_templates", textToTemplates(e.target.value)); }} />
           <span className="block text-slate-600 mt-1">
             Each template becomes its own playlist from the combined artist pool of its listed genres.
+          </span>
+        </label>
+        <label className={`${labelCls} sm:col-span-2`}
+          title="SP-09 — a playlist seeded from one owned artist plus whichever of its Last.fm-similar artists are also monitored. Requires the Last.fm integration.">
+          Related-artist seed playlists <span className="text-slate-600">(one per line, "Playlist Name = Seed Artist")</span>
+          <textarea className={`${inputCls} font-mono`} rows={2} placeholder={"Radiohead Adjacent = Radiohead"}
+            value={seedText ?? aliasesToText(form.related_artist_seeds)}
+            onChange={e => { setSeedText(e.target.value); set("related_artist_seeds", textToAliases(e.target.value)); }} />
+          <span className="block text-slate-600 mt-1">
+            The playlist includes the seed artist plus its Last.fm-similar artists that are also in your library.
           </span>
         </label>
       </div>

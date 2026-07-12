@@ -279,6 +279,15 @@ class SmartPlaylistSettings(BaseModel):
     # SP-12/AD-17 above, this *removes* content from a playlist the user
     # curated, so it needs an explicit opt-in rather than defaulting on.
     prune_stale_tracks_enabled: bool = False
+    # SP-09 — related-artist axis: a playlist seeded from one owned artist plus
+    # whichever of its Last.fm-similar artists are also monitored. Map of
+    # playlist name -> seed artist name, empty by default (same "taxonomy left
+    # to the user" precedent as genre_aliases/playlist_templates). The item's
+    # other two named axes (mood, era) aren't implemented — see the note in
+    # [[Smart Playlists]]: the Qdrant payload has mood_tags/era fields, but
+    # nothing in the current pipeline ever populates them with real data, so
+    # there's nothing to generate from yet without a new tagging pipeline.
+    related_artist_seeds: dict[str, str] = {}
 
 
 class ArtistDiscoverySettings(BaseModel):
