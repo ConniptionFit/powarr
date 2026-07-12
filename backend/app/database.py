@@ -43,6 +43,7 @@ def _migrate():
             "parent_title": "VARCHAR",
             "protected": "BOOLEAN DEFAULT FALSE",
             "watch_protected": "BOOLEAN DEFAULT FALSE",
+            "seeding_protected": "BOOLEAN DEFAULT FALSE",
             "pending_delete_at": "TIMESTAMP",
             "llm_rationale": "TEXT",
             "llm_rationale_at": "TIMESTAMP",

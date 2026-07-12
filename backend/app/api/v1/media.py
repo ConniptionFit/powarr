@@ -45,7 +45,8 @@ def list_media(
             q = q.filter(MediaItem.ignored == ignored)
         if not include_protected:
             q = q.filter(MediaItem.protected.isnot(True),
-                         MediaItem.watch_protected.isnot(True))
+                         MediaItem.watch_protected.isnot(True),
+                         MediaItem.seeding_protected.isnot(True))
         cleanup = _get_setting(db, "cleanup", CleanupSettings)
         if cleanup.excluded_libraries:
             q = q.filter(~MediaItem.library_section.in_(cleanup.excluded_libraries))
@@ -70,6 +71,12 @@ def get_stats(db: Session = Depends(get_db)):
         MediaItem.score >= weights.min_score_threshold,
         MediaItem.ignored.is_(False),
         MediaItem.pending_delete_at.is_(None),
+        # Same protect filters list_media applies (unless include_protected) —
+        # otherwise this count drifts from what Deletion Suggestions actually
+        # renders, the exact bug fixed for excluded_libraries in v0.50.0.
+        MediaItem.protected.isnot(True),
+        MediaItem.watch_protected.isnot(True),
+        MediaItem.seeding_protected.isnot(True),
     )
     if cleanup.excluded_libraries:
         candidates_q = candidates_q.filter(~MediaItem.library_section.in_(cleanup.excluded_libraries))

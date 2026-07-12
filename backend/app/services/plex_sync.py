@@ -135,6 +135,13 @@ async def run_plex_sync(db) -> dict:
                 watch_protected = await refresh_tautulli_watch_protection(db)
             except Exception as e:
                 logger.warning(f"Tautulli watch protection refresh failed (non-fatal): {e}")
+        seeding_protected = 0
+        if cleanup.protect_seeding_torrents:
+            tasks.update_task(task_id, message="Refreshing seeding-torrent protection…")
+            try:
+                seeding_protected = await refresh_seeding_protection(db)
+            except Exception as e:
+                logger.warning(f"Seeding protection refresh failed (non-fatal): {e}")
 
         tasks.update_task(task_id, message="Linking *arr IDs…")
         try:
@@ -146,7 +153,8 @@ async def run_plex_sync(db) -> dict:
 
         tasks.finish_task(task_id, "done", f"Synced {upserted} item(s)")
         return {"synced": upserted, "protected": protected,
-                "watch_protected": watch_protected, "linked": linked}
+                "watch_protected": watch_protected, "seeding_protected": seeding_protected,
+                "linked": linked}
     except Exception as e:
         tasks.finish_task(task_id, "failed", str(e))
         raise
@@ -224,4 +232,65 @@ async def refresh_tautulli_watch_protection(db) -> int:
     logger.info(f"Tautulli watch protection: {count} item(s) protected "
                 f"from {len(protect_keys)} rating key(s) in history "
                 f"(last {cleanup.other_user_watch_days}d)")
+    return count
+
+
+def _is_seeding_path(file_path: str, seeding_paths: set[str]) -> bool:
+    """A MediaItem's file is inside a seeding torrent if its path exactly matches
+    a torrent's content path (single-file torrent) or lives under one (a torrent
+    directory containing the file). Pure, unit-tested."""
+    for p in seeding_paths:
+        if file_path == p or file_path.startswith(p.rstrip("/") + "/"):
+            return True
+    return False
+
+
+async def refresh_seeding_protection(db) -> int:
+    """Mark media items whose file lives inside an actively-seeding torrent as
+    seeding_protected (LIB-05). No-op (returns 0) when the setting is off or no
+    download client is enabled.
+
+    Fail-soft: a positive answer is required from EVERY enabled download client
+    this cycle — if any is unreachable, the whole refresh is aborted (prior
+    flags are left untouched) rather than clearing protection based on
+    incomplete data, mirroring the orphan-cleanup fail-soft rule."""
+    cleanup = _get_setting(db, "cleanup", CleanupSettings)
+    if not cleanup.protect_seeding_torrents:
+        return 0
+
+    from app.api.v1.integrations import DOWNLOAD_CLIENT_NAMES
+    from app.api.v1.integrations import _get_client as _download_client
+    rows = (db.query(Integration)
+            .filter(Integration.name.in_(DOWNLOAD_CLIENT_NAMES), Integration.enabled.is_(True))
+            .all())
+    if not rows:
+        return 0
+
+    seeding_paths: set[str] = set()
+    for row in rows:
+        client = _download_client(row)
+        paths = await client.get_seeding_paths()
+        if paths is None:
+            logger.warning(f"Seeding protection refresh aborted — {row.name} unreachable "
+                           f"(fail-soft: leaving prior protection flags untouched)")
+            return 0
+        seeding_paths |= paths
+
+    db.query(MediaItem).filter(MediaItem.seeding_protected.is_(True)).update(
+        {"seeding_protected": False}, synchronize_session=False)
+
+    count = 0
+    if seeding_paths:
+        items = (db.query(MediaItem)
+                 .filter(MediaItem.file_path.isnot(None))
+                 .all())
+        matched_ids = [item.id for item in items if _is_seeding_path(item.file_path, seeding_paths)]
+        for i in range(0, len(matched_ids), 500):
+            chunk = matched_ids[i:i + 500]
+            count += (db.query(MediaItem)
+                      .filter(MediaItem.id.in_(chunk))
+                      .update({"seeding_protected": True}, synchronize_session=False))
+    db.commit()
+    logger.info(f"Seeding protection: {count} item(s) protected across "
+                f"{len(seeding_paths)} seeding torrent(s)")
     return count

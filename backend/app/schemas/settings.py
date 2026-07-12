@@ -147,6 +147,12 @@ class CleanupSettings(BaseModel):
     protect_other_users: bool = False
     other_user_watch_days: int = 30
     primary_tautulli_user: str = ""  # friendly_name whose watches do NOT protect (your own)
+    # LIB-05 (v0.52.0) — hide items whose file lives inside a torrent actively
+    # seeding in a configured download client (qBittorrent/Transmission). Off by
+    # default (opt-in, same pattern as protect_other_users). Refreshed during
+    # Plex sync; fail-soft — an unreachable download client never clears
+    # protection, it just skips that cycle's refresh.
+    protect_seeding_torrents: bool = False
 
 
 class SyncSettings(BaseModel):

@@ -56,6 +56,34 @@ class TransmissionIntegration(BaseIntegration):
         except Exception:
             return None
 
+    # TR_STATUS_SEED_WAIT (5) / TR_STATUS_SEED (6) — fully downloaded and either
+    # actively seeding or queued to seed, as opposed to still downloading/checking.
+    _SEEDING_STATUSES = {5, 6}
+
+    async def get_seeding_paths(self) -> set[str] | None:
+        """downloadDir/name of every torrent currently seeding or seed-ready
+        (LIB-05, protects the underlying files from deletion suggestions).
+        None = client didn't answer — the caller must NOT assume safe to delete."""
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                r = await self._rpc(client, {"method": "torrent-get",
+                                             "arguments": {"fields": ["downloadDir", "name", "status"]}})
+                r.raise_for_status()
+                data = r.json()
+                if data.get("result") != "success":
+                    return None
+                paths: set[str] = set()
+                for t in data.get("arguments", {}).get("torrents", []):
+                    if t.get("status") not in self._SEEDING_STATUSES:
+                        continue
+                    dl_dir = (t.get("downloadDir") or "").rstrip("/")
+                    name = t.get("name") or ""
+                    if dl_dir and name:
+                        paths.add(f"{dl_dir}/{name}")
+                return paths
+        except Exception:
+            return None
+
     async def delete_download(self, torrent_hash: str, delete_files: bool = True) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:

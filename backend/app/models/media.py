@@ -24,6 +24,10 @@ class MediaItem(Base):
     # Watched by another Tautulli user within the protect window (v0.29.0) —
     # separate from Seerr `protected` so Seerr refresh can't wipe it.
     watch_protected = Column(Boolean, default=False)
+    # File lives inside a torrent actively seeding in a configured download
+    # client (LIB-05, v0.52.0) — opt-in via cleanup.protect_seeding_torrents,
+    # refreshed alongside protected/watch_protected during Plex sync.
+    seeding_protected = Column(Boolean, default=False)
     pending_delete_at = Column(DateTime, nullable=True)  # soft-delete: when deletion was requested
 
     # Cached LLM deletion rationale. The key hashes the prompt template, model

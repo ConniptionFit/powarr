@@ -227,6 +227,7 @@ export interface CleanupSettings {
   protect_other_users: boolean;
   other_user_watch_days: number;
   primary_tautulli_user: string;
+  protect_seeding_torrents: boolean;
 }
 
 export interface SyncSettings {

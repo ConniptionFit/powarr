@@ -111,3 +111,21 @@ class QbittorrentIntegration(BaseIntegration):
         except Exception:
             return None
         return found
+
+    # Upload-family states — torrent is fully downloaded and available to seed
+    # (actively uploading, paused, or waiting its turn), as opposed to still
+    # downloading/erroring/missing files.
+    _SEEDING_STATES = {"uploading", "stalledUP", "queuedUP", "forcedUP", "checkingUP", "pausedUP"}
+
+    async def get_seeding_paths(self) -> set[str] | None:
+        """Content paths of every torrent currently seeding or seed-ready
+        (LIB-05, protects the underlying files from deletion suggestions).
+        None = client didn't answer — the caller must NOT assume safe to delete."""
+        try:
+            async with self._client() as client:
+                r = await self._request(client, "GET", "/api/v2/torrents/info")
+                r.raise_for_status()
+                return {t["content_path"] for t in r.json()
+                        if t.get("state") in self._SEEDING_STATES and t.get("content_path")}
+        except Exception:
+            return None

@@ -406,6 +406,21 @@ function CleanupSection() {
         </>
       )}
 
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Protect Actively-Seeding Torrents</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Hide items whose file lives inside a torrent still seeding in qBittorrent/Transmission (refreshed on each Plex sync). Requires a download client enabled.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          checked={cfg.protect_seeding_torrents}
+          onChange={e => setCfg(c => c ? { ...c, protect_seeding_torrents: e.target.checked } : c)}
+          className="accent-purple-500 ml-6"
+        />
+      </label>
+
       <div className="py-4">
         <p className="text-white text-sm font-medium mb-1">Excluded Libraries</p>
         <p className="text-slate-500 text-xs mb-3">Items in these Plex libraries are never suggested for deletion</p>
