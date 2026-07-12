@@ -100,3 +100,67 @@ def is_auto_eligible(item: FailedImport, cfg: ImportMatchingSettings) -> bool:
     heuristic = item.heuristic_confidence if item.heuristic_confidence is not None \
         else item.confidence
     return passes_auto_thresholds(heuristic, item.llm_confidence, cfg)
+
+
+def describe_auto_gate(item: FailedImport, cfg: ImportMatchingSettings) -> dict:
+    """Human-readable breakdown of the dual-signal auto-import gate for one row
+    (FI-07 — "why not auto?" inspector). Pure, unit-tested; mirrors
+    is_auto_eligible/passes_auto_thresholds exactly so the inspector can never
+    disagree with what the scanner actually does."""
+    heuristic = item.heuristic_confidence if item.heuristic_confidence is not None \
+        else item.confidence
+    llm = item.llm_confidence
+    mode = (cfg.auto_import_mode or "either").lower()
+    algo_pass = heuristic is not None and float(heuristic) >= cfg.high_confidence_threshold
+    llm_pass = llm is not None and float(llm) >= cfg.llm_auto_threshold
+    status_eligible = item.status in AUTO_ELIGIBLE_STATUSES
+    has_match = item.matched_id is not None
+    would_auto_import = (
+        cfg.auto_resolve_enabled and status_eligible and has_match
+        and passes_auto_thresholds(heuristic, llm, cfg)
+    )
+
+    algo_desc = f"{heuristic:.2f}" if heuristic is not None else "no score"
+    llm_desc = f"{llm:.2f}" if llm is not None else "no score"
+    reasons: list[str] = []
+    if not cfg.auto_resolve_enabled:
+        reasons.append("Auto-resolve is turned off in Settings.")
+    if not status_eligible:
+        reasons.append(f"Status '{item.status}' isn't eligible for auto-import "
+                        "(must be suggested or resolve_failed).")
+    if not has_match:
+        reasons.append("No matched library item on this row yet.")
+    if cfg.auto_resolve_enabled and status_eligible and has_match:
+        if mode == "algorithm" and not algo_pass:
+            reasons.append(f"Algorithm confidence ({algo_desc}) is below the "
+                            f"{cfg.high_confidence_threshold:.2f} threshold.")
+        elif mode == "llm" and not llm_pass:
+            reasons.append(f"LLM confidence ({llm_desc}) is below the "
+                            f"{cfg.llm_auto_threshold:.2f} threshold.")
+        elif mode == "both" and not (algo_pass and llm_pass):
+            if not algo_pass:
+                reasons.append(f"Algorithm confidence ({algo_desc}) is below the "
+                                f"{cfg.high_confidence_threshold:.2f} threshold — mode 'both' requires it.")
+            if not llm_pass:
+                reasons.append(f"LLM confidence ({llm_desc}) is below the "
+                                f"{cfg.llm_auto_threshold:.2f} threshold — mode 'both' requires it.")
+        elif mode not in ("algorithm", "llm", "both") and not (algo_pass or llm_pass):
+            reasons.append(
+                f"Neither leg passed — algorithm {algo_desc} < {cfg.high_confidence_threshold:.2f} "
+                f"and LLM {llm_desc} < {cfg.llm_auto_threshold:.2f} — mode 'either' needs at least one."
+            )
+
+    return {
+        "mode": mode,
+        "auto_resolve_enabled": cfg.auto_resolve_enabled,
+        "would_auto_import": would_auto_import,
+        "status_eligible": status_eligible,
+        "has_match": has_match,
+        "algorithm": {
+            "value": heuristic, "threshold": cfg.high_confidence_threshold, "passes": algo_pass,
+        },
+        "llm": {
+            "value": llm, "threshold": cfg.llm_auto_threshold, "passes": llm_pass,
+        },
+        "reasons": reasons,
+    }

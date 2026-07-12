@@ -12,7 +12,9 @@ from app.models.integration import Integration
 from app.schemas.failed_import import FailedImportOut, ImportStats, AutoEligibleOut
 from app.services import import_matcher
 from app.services.import_matcher import scan_once, _get_client
-from app.services.auto_eligible import load_import_matching, list_auto_eligible_ids, auto_eligible_query
+from app.services.auto_eligible import (
+    load_import_matching, list_auto_eligible_ids, auto_eligible_query, describe_auto_gate,
+)
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -622,6 +624,19 @@ async def import_files(item_id: int, db: Session = Depends(get_db)):
             "import_status": "covered" if covered else ("ok" if not rejections else "blocked"),
         })
     return {"files": files, "message": None}
+
+
+@router.get("/{item_id}/auto-gate")
+def auto_gate_status(item_id: int, db: Session = Depends(get_db)):
+    """Read-only breakdown of the dual-signal auto-import gate for this row (FI-07)
+    — which leg(s) passed/failed against the configured thresholds and, when it
+    isn't auto-importing, exactly why not. Inspects existing signals only, never
+    triggers a rescore or LLM call."""
+    item = db.query(FailedImport).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Failed import not found")
+    cfg = load_import_matching(db)
+    return describe_auto_gate(item, cfg)
 
 
 @router.get("/{item_id}/episode-options")

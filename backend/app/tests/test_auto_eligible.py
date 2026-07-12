@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from app.schemas.settings import ImportMatchingSettings
-from app.services.auto_eligible import is_auto_eligible, passes_auto_thresholds
+from app.services.auto_eligible import is_auto_eligible, passes_auto_thresholds, describe_auto_gate
 
 
 def _item(**kwargs):
@@ -109,6 +109,80 @@ class TestPassesAutoThresholds(unittest.TestCase):
     def test_default_mode_is_either(self):
         self.assertEqual(ImportMatchingSettings().auto_import_mode, "either")
         self.assertAlmostEqual(ImportMatchingSettings().llm_auto_threshold, 0.80)
+
+
+class TestDescribeAutoGate(unittest.TestCase):
+    """FI-07 — "why not auto?" inspector. Must never disagree with is_auto_eligible."""
+
+    def test_would_auto_import_when_eligible(self):
+        cfg = _cfg()
+        gate = describe_auto_gate(_item(heuristic_confidence=0.95), cfg)
+        self.assertTrue(gate["would_auto_import"])
+        self.assertEqual(gate["reasons"], [])
+        self.assertTrue(gate["algorithm"]["passes"])
+
+    def test_auto_resolve_disabled_reason(self):
+        cfg = _cfg(auto_resolve_enabled=False)
+        gate = describe_auto_gate(_item(heuristic_confidence=0.95), cfg)
+        self.assertFalse(gate["would_auto_import"])
+        self.assertIn("Auto-resolve is turned off", gate["reasons"][0])
+
+    def test_wrong_status_reason(self):
+        cfg = _cfg()
+        gate = describe_auto_gate(_item(status="accepted", heuristic_confidence=0.95), cfg)
+        self.assertFalse(gate["would_auto_import"])
+        self.assertTrue(any("Status 'accepted'" in r for r in gate["reasons"]))
+
+    def test_no_match_reason(self):
+        cfg = _cfg()
+        gate = describe_auto_gate(_item(matched_id=None, heuristic_confidence=0.95), cfg)
+        self.assertFalse(gate["would_auto_import"])
+        self.assertTrue(any("No matched library item" in r for r in gate["reasons"]))
+
+    def test_algorithm_mode_below_threshold_reason(self):
+        cfg = _cfg(auto_import_mode="algorithm")
+        gate = describe_auto_gate(_item(heuristic_confidence=0.7), cfg)
+        self.assertFalse(gate["would_auto_import"])
+        self.assertFalse(gate["algorithm"]["passes"])
+        self.assertTrue(any("Algorithm confidence (0.70)" in r for r in gate["reasons"]))
+
+    def test_both_mode_reports_each_failing_leg(self):
+        cfg = _cfg(auto_import_mode="both")
+        gate = describe_auto_gate(_item(heuristic_confidence=0.95, llm_confidence=0.5), cfg)
+        self.assertFalse(gate["would_auto_import"])
+        self.assertTrue(gate["algorithm"]["passes"])
+        self.assertFalse(gate["llm"]["passes"])
+        self.assertEqual(len(gate["reasons"]), 1)
+        self.assertIn("LLM confidence (0.50)", gate["reasons"][0])
+
+    def test_either_mode_neither_leg_passes(self):
+        cfg = _cfg(auto_import_mode="either")
+        gate = describe_auto_gate(_item(heuristic_confidence=0.5, llm_confidence=0.5), cfg)
+        self.assertFalse(gate["would_auto_import"])
+        self.assertIn("Neither leg passed", gate["reasons"][0])
+
+    def test_missing_llm_score_worded_as_no_score(self):
+        cfg = _cfg(auto_import_mode="llm")
+        gate = describe_auto_gate(_item(heuristic_confidence=0.95, llm_confidence=None), cfg)
+        self.assertFalse(gate["would_auto_import"])
+        self.assertIn("no score", gate["reasons"][0])
+
+    def test_agrees_with_is_auto_eligible(self):
+        cases = [
+            _item(heuristic_confidence=0.95),
+            _item(status="rejected", heuristic_confidence=0.95),
+            _item(matched_id=None, heuristic_confidence=0.95),
+            _item(heuristic_confidence=0.5, llm_confidence=0.5),
+            _item(heuristic_confidence=0.95, llm_confidence=0.95),
+        ]
+        for cfg in (_cfg(), _cfg(auto_import_mode="both"), _cfg(auto_import_mode="llm"),
+                    _cfg(auto_resolve_enabled=False)):
+            for item in cases:
+                self.assertEqual(
+                    is_auto_eligible(item, cfg),
+                    describe_auto_gate(item, cfg)["would_auto_import"],
+                    msg=f"mismatch for mode={cfg.auto_import_mode} item={item}",
+                )
 
 
 if __name__ == "__main__":

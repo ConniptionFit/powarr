@@ -346,6 +346,17 @@ export interface AutoEligible {
   ids: number[];
 }
 
+export interface AutoGateStatus {
+  mode: "llm" | "algorithm" | "either" | "both" | string;
+  auto_resolve_enabled: boolean;
+  would_auto_import: boolean;
+  status_eligible: boolean;
+  has_match: boolean;
+  algorithm: { value: number | null; threshold: number; passes: boolean };
+  llm: { value: number | null; threshold: number; passes: boolean };
+  reasons: string[];
+}
+
 export interface ImportFileDetail {
   path: string | null;
   raw_path: string | null; // stable identifier (Sonarr's own absolute path) — used for mapping overrides
@@ -395,6 +406,7 @@ export const importsApi = {
     req<{ id: number; status: string }>(`/imports/${id}/keep`, { method: "POST" }),
   files: (id: number) =>
     req<{ files: ImportFileDetail[]; message: string | null }>(`/imports/${id}/files`),
+  autoGate: (id: number) => req<AutoGateStatus>(`/imports/${id}/auto-gate`),
   candidates: (id: number, query?: string) =>
     req<{ candidates: Array<{ id: number; title: string; score: number }> }>(
       `/imports/${id}/candidates${query ? `?query=${encodeURIComponent(query)}` : ""}`),
