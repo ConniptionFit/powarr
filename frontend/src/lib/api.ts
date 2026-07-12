@@ -42,6 +42,9 @@ export interface MediaItem {
   pending_delete_at: string | null;
   llm_rationale: string | null;
   llm_rationale_at: string | null;
+  llm_second_opinion: string | null;
+  llm_second_opinion_at: string | null;
+  risky_delete: boolean | null;
   sonarr_id: number | null;
   radarr_id: number | null;
   lidarr_id: number | null;
@@ -158,6 +161,13 @@ export const mediaApi = {
     req<{ started: number; total_eligible: number; message: string }>("/media/llm-run", {
       method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
     }),
+  secondOpinion: (id: number, force = false) =>
+    req<{ verdict: string | null; message: string | null; cached: boolean }>(
+      `/media/${id}/second-opinion${force ? "?force=true" : ""}`, { method: "POST" }),
+  secondOpinionRun: (ids?: number[]) =>
+    req<{ started: number; total_eligible: number; message: string }>("/media/second-opinion-run", {
+      method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
+    }),
   deletionLog: () => req<DeletionLogEntry[]>("/media/deletion-log"),
   deletionStats: () => req<DeletionStats>("/media/deletion-stats"),
   exportCsv: (params?: Record<string, string | number | boolean>) => {
@@ -236,6 +246,9 @@ export interface OllamaSettings {
   explain_enabled: boolean;
   match_model: string;
   explain_model: string;
+  // LLM-07 (v0.67.0) — "risky delete" second opinion on deletion candidates
+  second_opinion_enabled: boolean;
+  second_opinion_model: string;
   // Circuit breaker (v0.27.0) — 0 threshold disables
   breaker_threshold: number;
   breaker_cooldown_minutes: number;

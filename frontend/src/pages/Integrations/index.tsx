@@ -264,6 +264,7 @@ function OllamaCard() {
     reply_format: "markdown", confidence_style: "numeric", batch_delay_ms: 0,
     match_prompt: "", explain_prompt: "", pack_prompt: "",
     match_enabled: true, explain_enabled: true, match_model: "", explain_model: "",
+    second_opinion_enabled: false, second_opinion_model: "",
     breaker_threshold: 5, breaker_cooldown_minutes: 10,
     temperature: 0, max_tokens: 0, timeout_seconds: 0,
     forbid_thinking: true, compact_det_summary: true,

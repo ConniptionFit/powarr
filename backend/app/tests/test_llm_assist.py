@@ -541,6 +541,10 @@ class TestRationaleKey(unittest.TestCase):
             self.last_watched_at = kw.get("last_watched_at")
             self.file_size = kw.get("file_size", 10 ** 9)
             self.library_section = kw.get("library_section", "Movies")
+            self.protected = kw.get("protected", False)
+            self.watch_protected = kw.get("watch_protected", False)
+            self.seeding_protected = kw.get("seeding_protected", False)
+            self.progress_protected = kw.get("progress_protected", False)
 
     def _key(self, item=None, **ollama_overrides):
         from app.schemas.settings import OllamaSettings
@@ -715,6 +719,10 @@ class TestPerTaskLlmSettings(unittest.TestCase):
             watch_count = 0
             last_watched_at = None
             file_size = 1024
+            protected = False
+            watch_protected = False
+            seeding_protected = False
+            progress_protected = False
 
         base = self._cfg()
         self.assertEqual(rationale_key(base, _Item()),

@@ -924,6 +924,39 @@ function LLMAssistSection() {
         </div>
       ))}
 
+      {/* LLM-07 (v0.67.0) — independent "risky delete" second opinion, own task
+          toggle since it's judgment-affecting and off by default (unlike match/
+          explain above, which default on). */}
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between gap-4">
+        <div>
+          <p className="text-white text-sm font-medium">Second Opinion Task</p>
+          <p className="text-slate-500 text-xs mt-0.5">
+            Independent "risky delete" check on Cleanup deletion candidates — flags a KEEP verdict
+            that conflicts with a high deletion score (e.g. active watch-progress, seeding) for a
+            second look. Advisory only; never blocks or auto-resolves a deletion.
+            {" "}Model field empty = use the shared model from the Integrations page. Off by default.
+          </p>
+        </div>
+        <div className="flex items-center gap-3 ml-6 flex-shrink-0">
+          <input
+            type="text"
+            placeholder={cfg.model || "shared model"}
+            value={cfg.second_opinion_model}
+            onChange={e => setCfg(c => c ? { ...c, second_opinion_model: e.target.value } : c)}
+            className="w-44 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white placeholder:text-slate-600"
+          />
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400">
+            <input
+              type="checkbox"
+              checked={cfg.second_opinion_enabled}
+              onChange={e => setCfg(c => c ? { ...c, second_opinion_enabled: e.target.checked } : c)}
+              className="accent-purple-500"
+            />
+            enabled
+          </label>
+        </div>
+      </div>
+
       <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
         <div>
           <p className="text-white text-sm font-medium">Circuit Breaker</p>

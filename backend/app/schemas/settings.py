@@ -133,6 +133,15 @@ class OllamaSettings(BaseModel):
     explain_enabled: bool = True  # deletion-candidate rationales
     match_model: str = ""    # "" = use `model`
     explain_model: str = ""  # "" = use `model`
+    # LLM-07 (v0.67.0) — independent "risky delete" second opinion on deletion
+    # candidates: same model call as explain (minimal verbosity KEEP/DELETE), run
+    # against a summary that now names protection flags/watch-progress by name, so
+    # a KEEP verdict on an item the scorer flagged for deletion is a real conflict
+    # signal, not a coin flip. Advisory only — never blocks or auto-resolves a
+    # deletion. Off by default: a new proactive judgment-affecting signal, opt-in
+    # like every other feature in this category this session.
+    second_opinion_enabled: bool = False
+    second_opinion_model: str = ""  # "" = use `model`
     # Circuit breaker (v0.27.0, Approved Queue #7) — after this many consecutive
     # call failures the assist auto-pauses (every call fails soft to None
     # immediately) for the cooldown, then retries normally. 0 disables the breaker.
@@ -145,15 +154,18 @@ class OllamaSettings(BaseModel):
     timeout_seconds: int = 0
 
     def model_for(self, task: str) -> str:
-        override = self.match_model if task == "match" else self.explain_model
+        override = {"match": self.match_model, "explain": self.explain_model,
+                    "second_opinion": self.second_opinion_model}.get(task, "")
         return (override or "").strip() or self.model
 
     def task_enabled(self, task: str) -> bool:
-        """Effective on/off for one consumer ("match" | "explain"): the master
-        switch AND the per-task toggle AND a usable host/model."""
+        """Effective on/off for one consumer ("match" | "explain" |
+        "second_opinion"): the master switch AND the per-task toggle AND a
+        usable host/model."""
         if not (self.enabled and self.host and self.model_for(task)):
             return False
-        return self.match_enabled if task == "match" else self.explain_enabled
+        return {"match": self.match_enabled, "explain": self.explain_enabled,
+                "second_opinion": self.second_opinion_enabled}.get(task, False)
 
 
 class CleanupSettings(BaseModel):

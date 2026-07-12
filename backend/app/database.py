@@ -51,6 +51,9 @@ def _migrate():
             "llm_rationale": "TEXT",
             "llm_rationale_at": "TIMESTAMP",
             "llm_rationale_key": "VARCHAR",
+            "llm_second_opinion": "VARCHAR",
+            "llm_second_opinion_at": "TIMESTAMP",
+            "llm_second_opinion_key": "VARCHAR",
         },
         "failed_imports": {
             "verified": "BOOLEAN",

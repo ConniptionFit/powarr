@@ -1,6 +1,6 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3 } from "lucide-react";
+import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3, ShieldAlert } from "lucide-react";
 import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem, type EpisodeDeleteMode } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
@@ -256,7 +256,8 @@ export default function DeletionSuggestions() {
     es.onmessage = ev => {
       try {
         const data = JSON.parse(ev.data);
-        if (data.type === "media_llm_run") qc.invalidateQueries({ queryKey: ["media"] });
+        if (data.type === "media_llm_run" || data.type === "media_llm_second_opinion_run")
+          qc.invalidateQueries({ queryKey: ["media"] });
       } catch { /* keepalive */ }
     };
     return () => es.close();
@@ -273,6 +274,18 @@ export default function DeletionSuggestions() {
       setBatchMsg(r.message);
     } catch (e: unknown) {
       setBatchMsg(`LLM run failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  // LLM-07 — same batch shape as explainVisible, own SSE event + endpoint. Fails
+  // soft server-side (400 message) when the second_opinion task isn't enabled.
+  const secondOpinionVisible = async () => {
+    setBatchMsg(null);
+    try {
+      const r = await mediaApi.secondOpinionRun(displayItems.map(i => i.id));
+      setBatchMsg(r.message);
+    } catch (e: unknown) {
+      setBatchMsg(`Second opinion run failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -337,6 +350,16 @@ export default function DeletionSuggestions() {
             >
               <Bot size={15} />
               Explain Visible ({displayItems.length})
+            </button>
+          )}
+          {!isShowMode && displayItems.length > 0 && (
+            <button
+              onClick={secondOpinionVisible}
+              title="Independent 'risky delete' second opinion for every listed item (cached ones are skipped) — runs in the background. Off by default; enable in Settings → LLM Assist."
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-800 hover:bg-amber-700 text-white text-sm transition-colors"
+            >
+              <ShieldAlert size={15} />
+              Second Opinion ({displayItems.length})
             </button>
           )}
           <button
@@ -544,7 +567,19 @@ export default function DeletionSuggestions() {
                           {item.year && <span className="text-slate-500 ml-1">({item.year})</span>}
                         </td>
                         <td className="px-4 py-3 text-slate-400 capitalize">{item.media_type}</td>
-                        <td className="px-4 py-3"><ScoreBadge score={item.score} /></td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <ScoreBadge score={item.score} />
+                            {item.risky_delete && (
+                              <span
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-900/60 text-amber-300"
+                                title="Second opinion: the LLM's independent verdict is KEEP despite this item's deletion score — a conflict worth a second look. Advisory only, not a block."
+                              >
+                                <ShieldAlert size={11} /> RISKY
+                              </span>
+                            )}
+                          </div>
+                        </td>
                         <td className="px-4 py-3 text-slate-300">{fmtBytes(item.file_size)}</td>
                         <td className="px-4 py-3 text-slate-300">{item.watch_count}</td>
                         <td className="px-4 py-3 text-slate-400">{fmtDate(item.last_watched_at)}</td>

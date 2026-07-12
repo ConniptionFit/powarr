@@ -47,7 +47,21 @@ class MediaItem(Base):
     llm_rationale_at = Column(DateTime, nullable=True)
     llm_rationale_key = Column(String, nullable=True)
 
+    # LLM-07 (v0.67.0) — independent "risky delete" second opinion, cached the
+    # same way as llm_rationale. Bare "KEEP"/"DELETE" verdict; "risky" is derived
+    # at read time (KEEP on a scorer-flagged deletion candidate = conflict).
+    llm_second_opinion = Column(String, nullable=True)
+    llm_second_opinion_at = Column(DateTime, nullable=True)
+    llm_second_opinion_key = Column(String, nullable=True)
+
     # *arr app link IDs (set after matching)
     sonarr_id = Column(Integer, nullable=True)
     radarr_id = Column(Integer, nullable=True)
     lidarr_id = Column(Integer, nullable=True)
+
+    @property
+    def risky_delete(self) -> bool:
+        """LLM-07 — the second opinion disagreed with a deletion candidacy the
+        scorer already flagged (score >= threshold to be in this list at all).
+        Advisory only; never blocks or auto-resolves a deletion."""
+        return self.llm_second_opinion == "KEEP"

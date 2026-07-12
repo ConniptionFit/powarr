@@ -26,6 +26,9 @@ class MediaItemOut(BaseModel):
     pending_delete_at: Optional[datetime] = None
     llm_rationale: Optional[str] = None
     llm_rationale_at: Optional[datetime] = None
+    llm_second_opinion: Optional[str] = None
+    llm_second_opinion_at: Optional[datetime] = None
+    risky_delete: Optional[bool] = False
     sonarr_id: Optional[int]
     radarr_id: Optional[int]
     lidarr_id: Optional[int]

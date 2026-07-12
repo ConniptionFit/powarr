@@ -282,6 +282,26 @@ async def media_llm_run(payload: dict = Body(default={}), db: Session = Depends(
             "message": f"LLM run started on {count} candidate(s) — results stream in live"}
 
 
+@router.post("/second-opinion-run")
+async def media_second_opinion_run(payload: dict = Body(default={}), db: Session = Depends(get_db)):
+    """LLM-07 — on-demand batch "risky delete" second opinions. {"ids": [...]}
+    for specific items; omit to process candidates lacking a current cached
+    verdict. Runs in the background — an SSE "media_llm_second_opinion_run"
+    event fires when it finishes."""
+    from app.schemas.settings import OllamaSettings
+    from app.services import llm_assist, media_llm, tasks
+    ids = payload.get("ids") or None
+    if llm_assist.slot_active():
+        raise HTTPException(status_code=409, detail="An LLM run is already in progress")
+    ollama = _get_setting(db, "ollama", OllamaSettings)
+    if not ollama.task_enabled("second_opinion"):
+        raise HTTPException(status_code=400, detail="LLM second opinion is not enabled — check Settings → LLM Assist")
+    count = len(media_llm.eligible_second_opinion_candidates(db, ollama, ids))
+    tasks.spawn_background(media_llm.llm_second_opinion_run(ids))
+    return {"started": count, "total_eligible": count,
+            "message": f"Second-opinion run started on {count} candidate(s) — results stream in live"}
+
+
 @router.post("/{item_id}/explain")
 async def explain_media(item_id: int, force: bool = Query(False), db: Session = Depends(get_db)):
     """Optional LLM one-liner on whether this is a good deletion candidate. Fails
@@ -309,6 +329,33 @@ async def explain_media(item_id: int, force: bool = Query(False), db: Session = 
         llm_assist.release_slot()
     return {"rationale": rationale, "message": None if rationale else "No response from LLM",
             "cached": False, "generated_at": item.llm_rationale_at}
+
+
+@router.post("/{item_id}/second-opinion")
+async def second_opinion_media(item_id: int, force: bool = Query(False), db: Session = Depends(get_db)):
+    """LLM-07 — one bare KEEP/DELETE "risky delete" second opinion for one item.
+    Fails soft. Served from the cached verdict when its key still matches the
+    current model/score; force=true regenerates regardless."""
+    item = db.query(MediaItem).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Media item not found")
+    from app.schemas.settings import OllamaSettings
+    ollama = _get_setting(db, "ollama", OllamaSettings)
+    if not ollama.task_enabled("second_opinion"):
+        return {"verdict": None, "message": "LLM second opinion not configured/enabled", "cached": False}
+    from app.services import llm_assist, media_llm
+    if (not force and item.llm_second_opinion
+            and item.llm_second_opinion_key == media_llm.second_opinion_key(ollama, item)):
+        return {"verdict": item.llm_second_opinion, "message": None, "cached": True,
+                "generated_at": item.llm_second_opinion_at}
+    if not llm_assist.acquire_slot():
+        raise HTTPException(status_code=409, detail="Another LLM task is already running")
+    try:
+        verdict = await media_llm.generate_and_store_second_opinion(item, ollama, db)
+    finally:
+        llm_assist.release_slot()
+    return {"verdict": verdict, "message": None if verdict else "No response from LLM",
+            "cached": False, "generated_at": item.llm_second_opinion_at}
 
 
 @router.get("/{item_id}/explain/stream")
