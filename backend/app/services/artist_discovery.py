@@ -923,7 +923,7 @@ def reject_candidate(db, candidate_id: int) -> dict[str, Any]:
 # as Discovery candidates; adding one goes straight to Lidarr via
 # _add_artist_to_lidarr, bypassing the review queue entirely.
 
-async def search_related_artists(db, artist: str) -> dict[str, Any]:
+async def search_related_artists(db, artist: str, limit: int = 50) -> dict[str, Any]:
     artist = (artist or "").strip()
     if not artist:
         return {"ok": False, "message": "Enter an artist name", "results": []}
@@ -931,8 +931,9 @@ async def search_related_artists(db, artist: str) -> dict[str, Any]:
     if not lastfm:
         return {"ok": False, "message": "Last.fm integration not configured", "results": []}
 
+    limit = max(1, min(int(limit or 50), 200))
     try:
-        related = await lastfm.get_similar_artists(artist, limit=15)
+        related = await lastfm.get_similar_artists(artist, limit=limit)
     except Exception as e:
         return {"ok": False, "message": f"Last.fm lookup failed: {e}", "results": []}
     if not related:

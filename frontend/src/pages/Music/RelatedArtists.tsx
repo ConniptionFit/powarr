@@ -21,9 +21,11 @@ interface SearchResult {
   results: RelatedArtist[];
 }
 
+const PAGE_SIZE = 50;
+
 const api = {
-  search: (artist: string) =>
-    req<SearchResult>(`/artist-discovery/related?artist=${encodeURIComponent(artist)}`),
+  search: (artist: string, limit: number) =>
+    req<SearchResult>(`/artist-discovery/related?artist=${encodeURIComponent(artist)}&limit=${limit}`),
   add: (mbid: string | null, artist_name: string) =>
     req<{ ok: boolean; message: string }>("/artist-discovery/related/add", {
       method: "POST",
@@ -68,9 +70,11 @@ export default function RelatedArtists() {
   const [msg, setMsg] = useState<string | null>(null);
   const [addingKey, setAddingKey] = useState<string | null>(null);
   const [addedKeys, setAddedKeys] = useState<Set<string>>(new Set());
+  const [hideOwned, setHideOwned] = useState(true);
+  const [limit, setLimit] = useState(PAGE_SIZE);
 
   const searchMut = useMutation({
-    mutationFn: () => api.search(query.trim()),
+    mutationFn: (nextLimit: number) => api.search(query.trim(), nextLimit),
     onSuccess: (r) => {
       setMsg(r.message);
       setResults(r.results);
@@ -91,8 +95,18 @@ export default function RelatedArtists() {
   const submit = () => {
     if (!query.trim()) return;
     setMsg(null);
-    searchMut.mutate();
+    setLimit(PAGE_SIZE);
+    searchMut.mutate(PAGE_SIZE);
   };
+
+  const loadMore = () => {
+    const nextLimit = limit + PAGE_SIZE;
+    setLimit(nextLimit);
+    searchMut.mutate(nextLimit);
+  };
+
+  const visible = (results || []).filter(a => !hideOwned || !a.already_owned);
+  const canLoadMore = (results?.length ?? 0) >= limit;
 
   return (
     <div className="p-4 sm:p-8 max-w-4xl">
@@ -123,23 +137,51 @@ export default function RelatedArtists() {
       {msg && <p className="text-sm text-slate-400 mb-4">{msg}</p>}
 
       {results && results.length > 0 && (
-        <div className="grid gap-2">
-          {results.map(a => {
-            const key = a.musicbrainz_id || a.artist_name;
-            return (
-              <RelatedArtistCard
-                key={key}
-                a={a}
-                adding={addingKey === key}
-                added={addedKeys.has(key)}
-                onAdd={() => {
-                  setAddingKey(key);
-                  addMut.mutate({ mbid: a.musicbrainz_id, name: a.artist_name });
-                }}
-              />
-            );
-          })}
-        </div>
+        <>
+          <label className="flex items-center gap-2 mb-4 text-sm text-slate-400 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={hideOwned}
+              onChange={e => setHideOwned(e.target.checked)}
+              className="rounded border-purple-900/40 bg-surface-raised"
+            />
+            Hide artists already in your library
+          </label>
+
+          <div className="grid gap-2">
+            {visible.map(a => {
+              const key = a.musicbrainz_id || a.artist_name;
+              return (
+                <RelatedArtistCard
+                  key={key}
+                  a={a}
+                  adding={addingKey === key}
+                  added={addedKeys.has(key)}
+                  onAdd={() => {
+                    setAddingKey(key);
+                    addMut.mutate({ mbid: a.musicbrainz_id, name: a.artist_name });
+                  }}
+                />
+              );
+            })}
+          </div>
+
+          {visible.length === 0 && (
+            <p className="text-sm text-slate-500 mt-2">
+              All results are already in your library — uncheck the toggle above to see them.
+            </p>
+          )}
+
+          {canLoadMore && (
+            <button
+              onClick={loadMore}
+              disabled={searchMut.isPending}
+              className="mt-4 w-full py-2 rounded-lg border border-purple-900/40 text-sm text-slate-400 hover:text-brand-light hover:border-brand-light disabled:opacity-50"
+            >
+              {searchMut.isPending ? "Loading…" : "Load more"}
+            </button>
+          )}
+        </>
       )}
     </div>
   );

@@ -197,10 +197,14 @@ class RelatedSearchOut(BaseModel):
 
 
 @router.get("/related", response_model=RelatedSearchOut)
-async def related(artist: str = Query(..., min_length=1), db: Session = Depends(get_db)):
+async def related(
+    artist: str = Query(..., min_length=1),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
     """Ad-hoc "who's similar to X" search — read-only, no Qdrant writes, no
     DiscoveredArtist rows. Independent of the taste-model pipeline."""
-    return await service.search_related_artists(db, artist)
+    return await service.search_related_artists(db, artist, limit=limit)
 
 
 @router.post("/related/add")

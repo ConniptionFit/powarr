@@ -109,19 +109,20 @@ Then open `http://<host>:7979`:
 
 1. **Settings → Integrations** → configure Plex (required) and any of Tautulli, Sonarr, Radarr, Lidarr, Readarr, Seerr, qBittorrent, Transmission, Qdrant, Last.fm, Ollama
 2. Run **Sync Library** (Overview page)
-3. **Library** → review deletion suggestions and history; **Imports** → Import Queue (detection) and Match Review (confidence scoring/triage)
+3. **Library** → review deletion suggestions and history; **Imports** → Match Review (detection, confidence scoring, and triage in one unified view since v0.43.0)
 4. **Settings** → categorized Matching & Scoring, Automation, LLM Assist, Notifications, Security, Music
 
-### Navigation (v0.38.0)
+### Navigation (v0.38.0; Imports consolidated v0.43.0)
 A left icon rail replaces the old always-expanded sidebar. Rail areas: **Overview**, **Library**
-(Deletion Suggestions / Deletion History), **Imports** (Import Queue / Match Review — split from
-the old combined Failed Imports table), **Music** (Artist Discovery / Playlists), and
-**Settings** (category grid: Integrations, Matching & Scoring, Automation, LLM Assist,
-Notifications, Security, Music — replaces the separate top-level Integrations page). Logs sits
-below a divider as a utility item. Match Review defaults to a card-per-item layout with a
-table-view toggle for the old dense table.
+(Deletion Suggestions / Deletion History), **Imports** (a single **Match Review** view — detection,
+confidence scoring, and triage together; the v0.38.0 split into separate Import Queue and Match
+Review tabs was consolidated back into one screen in v0.43.0), **Music** (Artist Discovery /
+Related Artists / Playlists), and **Settings** (category grid: Integrations, Matching & Scoring,
+Automation, LLM Assist, Notifications, Security, Music — replaces the separate top-level
+Integrations page). Logs sits below a divider as a utility item. Match Review defaults to a
+card-per-item layout with a table-view toggle for the old dense table.
 
-### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0; UX cleanup + tray + Related Artists v0.48.0)
+### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0; UX cleanup + tray + Related Artists v0.48.0; Related Artists filters v0.49.0)
 Native port of an external n8n taste-mapping pipeline: **Last.fm** scrobble history is embedded
 via a standalone **Ollama** connection (`all-minilm`, independent of the separate LLM Assist
 Ollama connection), mapped into the shared Qdrant `music_affinity_space` collection (configured
@@ -161,7 +162,9 @@ taste-vector collection, not just your own artists — it also updates live now,
 scheduled (not just manual) run. New **Related Artists** page (`Music → Related Artists`): search
 any artist by name and see who Last.fm considers related, independent of the Discovery queue —
 already-owned artists are flagged rather than hidden, and anything new can be added straight to
-Lidarr with one click, no review-queue step.
+Lidarr with one click, no review-queue step. **v0.49.0**: a **hide already-owned artists** toggle
+(checked by default) declutters the results down to net-new candidates, and a **Load more**
+button pages through additional matches (50 at a time) instead of a fixed 15-result cap.
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
 **drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is
