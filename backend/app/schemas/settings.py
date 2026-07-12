@@ -53,6 +53,14 @@ class ImportMatchingSettings(BaseModel):
     number_weight: float = 0.4  # season/episode (or anime absolute) numeric corroboration
     title_only_cap: float = 0.85  # ceiling when no numeric corroboration exists — keeps title-only below auto-resolve
     anime_absolute_numbering: bool = True  # seriesType=anime → absoluteEpisodeNumber is the primary numeric signal
+    # FI-08, opt-in/off by default (confirmation-gated: this can raise pack
+    # confidence for anime batch releases enough to newly qualify for
+    # auto-resolve, per the Non-negotiable Principles' scoring-change rule).
+    # When on, a seriesType=anime pack with no season marker at all ("001-100")
+    # scopes its coverage denominator to that absolute-episode range instead
+    # of the whole aired show, so a genuinely complete absolute-numbered pack
+    # doesn't read stuck at a tiny fraction forever.
+    anime_absolute_pack_coverage: bool = False
     # Orphan handling (v0.6.1) — confirmed-missing rows prompt for confirmation by default;
     # this skips the prompt and marks them orphaned immediately (same positive-confirmation gate)
     orphan_auto_purge: bool = False

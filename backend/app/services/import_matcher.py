@@ -32,6 +32,12 @@ OPEN_STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "orphan_p
 _SEASON_EP_RE = re.compile(r"[sS](\d{1,2})[eE](\d{1,3})")
 _SEASON_RANGE_RE = re.compile(r"\b[sS](\d{1,2})\s*-\s*[sS]?(\d{1,2})\b")
 _SEASON_ONLY_RE = re.compile(r"\b(?:[sS]|[sS]eason[ ._-])(\d{1,2})\b")
+# FI-08 — plain numeric range with no S/E marker, the common anime batch-release
+# style ("[Group] Show - 001-100 [1080p]"). Only tried when no season pattern
+# matched (see _parse_release_numbers) and only ever consumed when the matched
+# library series is seriesType=anime and the opt-in setting is on — never
+# affects season-based shows, which always have an S/E or season marker instead.
+_ABSOLUTE_RANGE_RE = re.compile(r"\b(\d{2,4})\s*-\s*(\d{2,4})\b")
 _COMPLETE_RE = re.compile(r"\b(complete|collection|full[ ._-]?series)\b", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 _JUNK_RE = re.compile(
@@ -227,12 +233,14 @@ def format_alternate_titles(lib_item: dict | None, *, limit: int = 8) -> str:
 
 def _parse_release_numbers(title: str) -> dict:
     """Best-effort numeric extraction from a release name.
-    Returns {"season", "episode", "absolute", "pack_seasons", "complete"}.
+    Returns {"season", "episode", "absolute", "pack_seasons", "complete", "absolute_range"}.
     The absolute candidate is the last standalone 2-4 digit number once S/E markers,
     years and quality junk are stripped — the common anime style ("Show - 1047 [Group]").
     A release with a season marker but no episode (S03, Season 3, S01-S03) or a
     complete-series marker is a pack: pack_seasons holds the covered seasons
-    (None + complete=True = whole show)."""
+    (None + complete=True = whole show). absolute_range (FI-08) is an anime
+    batch-pack range like "001-100" with no S/E marker at all — only set when
+    no season pattern matched."""
     t = title or ""
     season = episode = None
     pack_seasons = None
@@ -250,6 +258,20 @@ def _parse_release_numbers(title: str) -> dict:
             ms = _SEASON_ONLY_RE.search(t)
             if ms:
                 pack_seasons = {int(ms.group(1))}
+    # FI-08 — absolute episode-number pack range (anime batch releases with no
+    # S/E marker at all, e.g. "001-100"). Only tried once every season-based
+    # pattern above has failed, so it can never misfire on a normal S/E or
+    # season-pack title. Guards against a year range ("2011-2015") and against
+    # implausible spans (a >2000-episode "pack" is almost certainly two
+    # unrelated numbers, not a real absolute range).
+    absolute_range = None
+    if season is None and pack_seasons is None and not complete:
+        ar = _ABSOLUTE_RANGE_RE.search(t)
+        if ar:
+            lo, hi = sorted((int(ar.group(1)), int(ar.group(2))))
+            is_year_pair = 1900 <= lo <= 2100 and 1900 <= hi <= 2100
+            if not is_year_pair and hi > lo and (hi - lo) <= 2000:
+                absolute_range = (lo, hi)
     cleaned = re.sub(r"[._\-\[\]()+]", " ", t)
     cleaned = _SEASON_EP_RE.sub(" ", cleaned)
     cleaned = _JUNK_RE.sub(" ", cleaned)
@@ -258,7 +280,7 @@ def _parse_release_numbers(title: str) -> dict:
     nums = re.findall(r"\b(\d{2,4})\b", cleaned)
     absolute = int(nums[-1]) if nums else None
     return {"season": season, "episode": episode, "absolute": absolute,
-            "pack_seasons": pack_seasons, "complete": complete}
+            "pack_seasons": pack_seasons, "complete": complete, "absolute_range": absolute_range}
 
 
 def _se_label(season, episode) -> str:
@@ -397,21 +419,35 @@ def _numeric_se_score(parsed: dict, cand_season, cand_ep) -> tuple[float | None,
 def score_pack_match(title_sim: float, target_seasons: set | None, complete: bool,
                      sibling_seasons: list[int], mapped_episodes: int | None,
                      total_episodes: int | None,
-                     cfg: ImportMatchingSettings) -> tuple[float, bool, list[str], str]:
+                     cfg: ImportMatchingSettings,
+                     absolute_range: tuple[int, int] | None = None) -> tuple[float, bool, list[str], str]:
     """Pack-level score for a season/complete-series download (Sonarr).
 
     Numeric corroboration comes from the sibling queue records sharing the
     downloadId (season consistency) and, when available, file/episode coverage
     (manual-import preview vs the season's aired episode list). Full coverage
     earns full numeric credit and the rationale suggests an entire-season
-    (or entire-series) import. Returns (score, has_numeric, parts, pack_label)."""
-    if target_seasons:
+    (or entire-series) import. Returns (score, has_numeric, parts, pack_label).
+
+    absolute_range (FI-08, opt-in via cfg.anime_absolute_pack_coverage): an
+    anime batch pack ("001-100") with no season marker — mapped/total_episodes
+    are then absolute-number-scoped (see _pack_coverage), not season-scoped,
+    so the label/suggestion/near-half caveat below are worded for that case
+    instead of a season pack."""
+    if absolute_range:
+        lo, hi = absolute_range
+        label = f"{lo}-{hi} (absolute)"
+    elif target_seasons:
         lo, hi = min(target_seasons), max(target_seasons)
         label = f"S{lo:02d}" if lo == hi else f"S{lo:02d}-S{hi:02d}"
     else:
         label = "complete series"
-    suggestion = "entire-series import" if (complete and not target_seasons) else "entire-season import"
-    parts = [f"season pack detected ({label})"]
+    if absolute_range:
+        suggestion = "full absolute-range import"
+    else:
+        suggestion = "entire-series import" if (complete and not target_seasons) else "entire-season import"
+    parts = [f"absolute-numbered pack detected ({label})"] if absolute_range \
+        else [f"season pack detected ({label})"]
 
     numeric: float | None = None
     if sibling_seasons and target_seasons and any(s not in target_seasons for s in sibling_seasons):
@@ -428,7 +464,10 @@ def score_pack_match(title_sim: float, target_seasons: set | None, complete: boo
         # season (both land at the same ratio) without risking false full-confidence
         # on a truly partial pack, so this stays a rationale caveat, not a score
         # change — triage-only, matches the item's own "harmless today" scope.
-        near_half = mapped_episodes >= 2 and 0.4 <= ratio <= 0.6
+        # FI-08: doesn't apply to an absolute_range pack — that's exactly the
+        # case this feature already re-scopes the denominator to fix, so the
+        # near-50% ambiguity this caveat warns about isn't present here.
+        near_half = (not absolute_range) and mapped_episodes >= 2 and 0.4 <= ratio <= 0.6
         if ratio >= 0.9:
             numeric = 1.0
             parts.append(f"{mapped_episodes}/{total_episodes} episodes of {label} present in the "
@@ -458,11 +497,20 @@ def score_pack_match(title_sim: float, target_seasons: set | None, complete: boo
 
 async def _pack_coverage(client, download_id: str | None, series_id: int,
                          target_seasons: set | None,
-                         folder: str | None = None) -> tuple[int | None, int | None]:
+                         folder: str | None = None,
+                         absolute_range: tuple[int, int] | None = None) -> tuple[int | None, int | None]:
     """(mapped_episodes, total_episodes) for a pack — every step fails soft.
     total = aired episodes in the target seasons (whole show minus specials when
     complete); mapped = distinct in-scope episodes the manual-import preview maps
-    the download's files to (the "all episodes present in the dir" check)."""
+    the download's files to (the "all episodes present in the dir" check).
+
+    absolute_range (FI-08, opt-in): when given, scopes total/mapped to episodes
+    whose absoluteEpisodeNumber falls in the range instead of season number —
+    for an anime batch pack with no season marker at all ("001-100"), season-
+    based scoping would instead count against the WHOLE aired show, diluting a
+    genuinely complete pack down to a tiny fraction. Episodes with no populated
+    absoluteEpisodeNumber (Sonarr hasn't backfilled it yet) are excluded from
+    scope rather than guessed at."""
     try:
         eps = await client.get_episodes(series_id)
     except Exception as e:
@@ -479,9 +527,14 @@ async def _pack_coverage(client, download_id: str | None, series_id: int,
         except ValueError:
             return False
 
-    in_scope = [e for e in eps if _aired(e) and (
-        e.get("seasonNumber") in target_seasons if target_seasons
-        else (e.get("seasonNumber") or 0) > 0)]
+    if absolute_range:
+        lo, hi = absolute_range
+        in_scope = [e for e in eps if _aired(e) and e.get("absoluteEpisodeNumber") is not None
+                   and lo <= e["absoluteEpisodeNumber"] <= hi]
+    else:
+        in_scope = [e for e in eps if _aired(e) and (
+            e.get("seasonNumber") in target_seasons if target_seasons
+            else (e.get("seasonNumber") or 0) > 0)]
     total = len(in_scope) or None
     scope_ids = {e.get("id") for e in in_scope}
 
@@ -870,8 +923,14 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
     # Episode/pack-level refinement — Sonarr only
     pack_label = None
     parsed = _parse_release_numbers(raw_title)
+    series_type = (lib_by_id.get(matched_id) or rec.get("series") or {}).get("seriesType") or ""
+    # FI-08 — an anime batch pack with no season marker ("001-100") only counts
+    # as a pack at all when absolute-pack coverage is opted in; otherwise it's
+    # left to the single-episode branch below same as before this feature.
+    use_absolute_pack = (parsed["absolute_range"] is not None and series_type == "anime"
+                         and cfg.anime_absolute_pack_coverage)
     is_pack = (app_name == "sonarr" and matched_id and parsed["episode"] is None
-               and (parsed["pack_seasons"] or parsed["complete"]))
+               and (parsed["pack_seasons"] or parsed["complete"] or use_absolute_pack))
     if not year_mismatch and is_pack:
         # Season/complete pack: corroborate via sibling queue records sharing the
         # downloadId (free) and file/episode coverage (one-time API calls per new row)
@@ -885,14 +944,20 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             mapped, total = await _pack_coverage(
                 client, download_id, matched_id, parsed["pack_seasons"],
                 folder=extract_output_path(rec),
+                absolute_range=parsed["absolute_range"] if use_absolute_pack else None,
             )
-        if mapped is None and total and sibling_seasons:
+        # Sibling-season fallback only makes sense for season-scoped packs — an
+        # absolute-range pack's siblings are still season numbers, not absolute
+        # numbers, so counting them here would silently mix the two scopes.
+        if mapped is None and total and sibling_seasons and not use_absolute_pack:
             mapped = len([s for s in sibling_seasons
                           if not parsed["pack_seasons"] or s in parsed["pack_seasons"]])
         title_sim = title_similarity(raw_title, matched_title, source_app=app_name)
         pack_score, has_numeric, pack_parts, pack_label = score_pack_match(
             title_sim, parsed["pack_seasons"], parsed["complete"],
-            sibling_seasons, mapped, total, cfg)
+            sibling_seasons, mapped, total, cfg,
+            absolute_range=parsed["absolute_range"] if use_absolute_pack else None,
+        )
         parts.extend(pack_parts)
         confidence = 0.5 * confidence + 0.5 * pack_score
         if not has_numeric and confidence > cfg.title_only_cap:

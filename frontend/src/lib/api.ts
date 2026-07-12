@@ -204,6 +204,7 @@ export interface ImportMatchingSettings {
   number_weight: number;
   title_only_cap: number;
   anime_absolute_numbering: boolean;
+  anime_absolute_pack_coverage: boolean; // FI-08, opt-in — see Settings toggle for the auto-resolve-impact caveat
   orphan_auto_purge: boolean;
   llm_blend_weight: number; // LLM share of the confidence blend (0-1)
   quality_downgrade_auto_reject: boolean;
