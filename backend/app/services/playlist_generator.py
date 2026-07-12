@@ -157,15 +157,42 @@ async def _artists_by_genre(db, cfg: SmartPlaylistSettings,
     return out
 
 
-def _add_artist_tracks_to_db(db, pl: SmartPlaylist, artist_name: str,
-                             max_tracks: int) -> list[MediaItem]:
-    """Collect MediaItem tracks for artist not yet in the playlist ledger."""
+async def _sonic_bias(db, plex, pl: SmartPlaylist, candidates: list[MediaItem]) -> list[MediaItem]:
+    """SP-02: reorder candidates so tracks sonically close (Plex's own Sonic
+    Analysis, /nearest) to the playlist's most-recently-added track sort first.
+    Pure re-ranking, never filters — Qdrant genre/artist eligibility is untouched.
+    Fails soft to the original order on any error or when analysis isn't available."""
+    seed = db.query(SmartPlaylistTrack).filter_by(playlist_id=pl.id).order_by(
+        SmartPlaylistTrack.added_at.desc()).first()
+    if not seed:
+        return candidates
+    near = set(await plex.sonically_similar_keys(seed.plex_key))
+    if not near:
+        return candidates
+    preferred = [t for t in candidates if t.plex_rating_key in near]
+    rest = [t for t in candidates if t.plex_rating_key not in near]
+    return preferred + rest
+
+
+async def _add_artist_tracks_to_db(db, pl: SmartPlaylist, artist_name: str,
+                             max_tracks: int, *, plex=None,
+                             cfg: SmartPlaylistSettings | None = None) -> list[MediaItem]:
+    """Collect MediaItem tracks for artist not yet in the playlist ledger.
+    SP-02: when cfg.sonic_similarity_enabled, candidates are sonic-biased before
+    the max_tracks cut (see _sonic_bias).
+
+    Bug fix 2026-07-11: this filtered on `MediaItem.is_monitored_lidarr`, a field
+    that only ever existed on Qdrant payloads (see integrations/qdrant.py) — the
+    MediaItem model has no such column. Introduced in v0.42.1 (450fc7f), every
+    call raised AttributeError, meaning Smart Playlists has never actually been
+    able to add a track to Plex since that version — silently swallowed by the
+    broad except in every caller (generate/approve/accept all reported success
+    with misleadingly-zero tracks added). Monitored-artist eligibility is already
+    fully established upstream by _artists_by_genre's Qdrant scroll before this
+    function is ever called — no second gate is needed here."""
     target = _norm_artist(artist_name)
-    tracks = db.query(MediaItem).filter(
-        MediaItem.media_type == "track",
-        MediaItem.is_monitored_lidarr == True,  # type: ignore
-    ).all()
-    added: list[MediaItem] = []
+    tracks = db.query(MediaItem).filter(MediaItem.media_type == "track").all()
+    candidates: list[MediaItem] = []
     for t in tracks:
         if _norm_artist(t.parent_title or "") != target:
             continue
@@ -173,10 +200,10 @@ def _add_artist_tracks_to_db(db, pl: SmartPlaylist, artist_name: str,
             playlist_id=pl.id, plex_key=t.plex_rating_key).first()
         if exists:
             continue
-        added.append(t)
-        if len(added) >= max_tracks:
-            break
-    return added
+        candidates.append(t)
+    if candidates and plex and cfg and cfg.sonic_similarity_enabled:
+        candidates = await _sonic_bias(db, plex, pl, candidates)
+    return candidates[:max_tracks]
 
 
 async def _sync_tracks_to_plex(db, plex, pl: SmartPlaylist, artists: list[dict],
@@ -194,7 +221,8 @@ async def _sync_tracks_to_plex(db, plex, pl: SmartPlaylist, artists: list[dict],
         name = a["artist_name"]
         if _is_blacklisted(name, _blacklist_set(cfg)):
             continue
-        batch = _add_artist_tracks_to_db(db, pl, name, max(1, remaining or max_tracks))
+        batch = await _add_artist_tracks_to_db(db, pl, name, max(1, remaining or max_tracks),
+                                               plex=plex, cfg=cfg)
         if not batch:
             # Record artist as included even with no local tracks
             _mark_artist_included(db, pl, a)
@@ -387,7 +415,8 @@ async def accept_candidate(candidate_id: int, max_tracks_override: int | None = 
             db.commit()
         max_tracks = (max_tracks_override or pl.max_tracks_override
                       or cfg.max_tracks_per_playlist)
-        batch = _add_artist_tracks_to_db(db, pl, cand.artist_name, max_tracks)
+        batch = await _add_artist_tracks_to_db(db, pl, cand.artist_name, max_tracks,
+                                               plex=plex, cfg=cfg)
         if not batch:
             cand.status = "accepted"
             cand.resolved_at = datetime.utcnow()

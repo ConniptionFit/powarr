@@ -179,3 +179,26 @@ class PlexIntegration(BaseIntegration):
                 f"{self.url}/playlists/{playlist_rating_key}", headers=headers)
             # 404 = already removed on Plex — treat as success so Powarr can clean up
             return r.status_code in (200, 201, 204, 404)
+
+    async def sonically_similar_keys(self, rating_key: str, *, limit: int = 50,
+                                     max_distance: float = 0.25) -> list[str]:
+        """SP-02: ratingKeys of tracks sonically close to `rating_key`, via Plex's
+        own Sonic Analysis (/nearest — the same data backing "Sonically Similar"
+        under a track's Related tab in the Plex UI). Requires Plex Pass + analysis
+        having actually been run on the library section; fails soft to [] on any
+        error (including a plain 200 with no Metadata) so callers always have a
+        working non-sonic fallback."""
+        if not rating_key:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+                r = await client.get(
+                    f"{self.url}/library/metadata/{rating_key}/nearest",
+                    headers=headers, params={"limit": limit, "maxDistance": max_distance})
+                if r.status_code != 200:
+                    return []
+                meta = (r.json().get("MediaContainer") or {}).get("Metadata") or []
+                return [str(m["ratingKey"]) for m in meta if m.get("ratingKey")]
+        except Exception:
+            return []

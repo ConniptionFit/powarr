@@ -38,6 +38,7 @@ interface SPSettings {
   schedule_enabled: boolean;
   schedule_interval_hours: number;
   llm_playlist_names: boolean;
+  sonic_similarity_enabled: boolean;
 }
 
 interface LidarrProfiles {
@@ -322,6 +323,18 @@ function PlaylistsSettingsCard() {
           <span className="block text-xs text-slate-500">
             Uses Local LLM Assist for Spotify-style names at create time. You can also
             regenerate on demand from the Playlists page. Falls back to "Powarr · genre".
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-2 text-sm text-slate-300"
+        title="Uses Plex's own Sonic Analysis (the same data behind a track's 'Sonically Similar' Related tab) to prefer tracks close to the playlist's most recently added track when trimming an artist's candidates to Max tracks per playlist. Pure re-ranking on top of genre/artist eligibility — never changes which artists are included. Requires Plex Pass and analysis having actually been run on your Music library; silently falls back to the prior arbitrary pick when analysis data isn't available for a track.">
+        <input type="checkbox" className="mt-0.5" checked={!!form.sonic_similarity_enabled}
+          onChange={e => set("sonic_similarity_enabled", e.target.checked)} />
+        <span>
+          Sonic similarity track bias
+          <span className="block text-xs text-slate-500">
+            Off by default. Requires Plex Sonic Analysis (Plex Pass) to have run on your library.
           </span>
         </span>
       </label>

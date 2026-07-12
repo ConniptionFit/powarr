@@ -211,6 +211,13 @@ class SmartPlaylistSettings(BaseModel):
     # SP-04 / SP-08 — LLM names at create time and on-demand rename. Fails soft
     # to "Powarr · {genre}" when the LLM is disabled/unreachable.
     llm_playlist_names: bool = False
+    # SP-02 — bias per-artist track selection toward tracks sonically close to the
+    # playlist's most recently added track, via Plex's own Sonic Analysis
+    # (PlexIntegration.sonically_similar_keys). Pure re-ranking on top of the
+    # existing Qdrant genre/artist eligibility, never a filter. Off by default:
+    # requires Plex Pass + sonic analysis having been run on the library; fails
+    # soft to the prior insertion-order pick whenever analysis data is missing.
+    sonic_similarity_enabled: bool = False
 
 
 class ArtistDiscoverySettings(BaseModel):

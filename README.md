@@ -153,10 +153,14 @@ reachable as a **Full Sync** button directly on the Qdrant connection card under
 **Settings → Integrations** (v0.45.0) — useful if you just want to refresh the shared collection
 without opening Artist Discovery. Strictly manual; it's never triggered by a schedule.
 
-**Smart Playlists (v0.42.0):** new Plex playlists stay as **drafts** until Approve (auto-create
-off by default); **auto-update** of approved playlists is on by default and runs **after** the
-artist DB refresh. All artists are eligible unless **blacklisted**. LLM playlist names are
-Spotify-style and regenerable on demand (sparkle button).
+**Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
+**drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is
+on by default and runs **after** the artist DB refresh. All artists are eligible unless
+**blacklisted**. LLM playlist names are Spotify-style and regenerable on demand (sparkle button).
+Optional **sonic similarity track bias** (off by default, requires Plex Pass + Sonic Analysis
+having run on your Music library) prefers tracks close to the playlist's most recently added
+track — via Plex's own "Sonically Similar" analysis — when trimming an artist's tracks down to
+the playlist's max size; never changes which artists are included, only which of their tracks.
 
 ## Configuration Notes
 
