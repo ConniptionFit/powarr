@@ -121,7 +121,7 @@ Notifications, Security, Music — replaces the separate top-level Integrations 
 below a divider as a utility item. Match Review defaults to a card-per-item layout with a
 table-view toggle for the old dense table.
 
-### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0)
+### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0; UX cleanup + tray + Related Artists v0.48.0)
 Native port of an external n8n taste-mapping pipeline: **Last.fm** scrobble history is embedded
 via a standalone **Ollama** connection (`all-minilm`, independent of the separate LLM Assist
 Ollama connection), mapped into the shared Qdrant `music_affinity_space` collection (configured
@@ -152,6 +152,16 @@ queue-only — all configuration lives at **Settings → Music**. The same on-de
 reachable as a **Full Sync** button directly on the Qdrant connection card under
 **Settings → Integrations** (v0.45.0) — useful if you just want to refresh the shared collection
 without opening Artist Discovery. Strictly manual; it's never triggered by a schedule.
+
+**v0.48.0:** the page now has just one button — **Run Discovery Now** — the separate Sync Now and
+icon Refresh were redundant with it and have been removed. Running discovery shows a live progress
+card in the corner notification tray instead of running silently. The stat previously labeled
+"Tracked artists" is now **"Taste model size"** with a tooltip explaining it's the whole shared
+taste-vector collection, not just your own artists — it also updates live now, including after a
+scheduled (not just manual) run. New **Related Artists** page (`Music → Related Artists`): search
+any artist by name and see who Last.fm considers related, independent of the Discovery queue —
+already-owned artists are flagged rather than hidden, and anything new can be added straight to
+Lidarr with one click, no review-queue step.
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
 **drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is

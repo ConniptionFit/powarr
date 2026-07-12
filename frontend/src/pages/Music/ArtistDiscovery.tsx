@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Compass, Play, RefreshCw, Check, X, Sparkles, Settings, Music2, ChevronDown, ChevronUp, History } from "lucide-react";
+import { Compass, Play, Check, X, Sparkles, Settings, ChevronDown, ChevronUp, History } from "lucide-react";
 import { Link } from "react-router-dom";
 import { req, fmtRelative, parseApiDate } from "../../lib/api";
+import ArtistCard from "../../components/ArtistCard";
 
 interface Candidate {
   id: number;
@@ -48,32 +49,12 @@ const api = {
   candidates: (status = "pending") =>
     req<Candidate[]>(`/artist-discovery/candidates?status=${status}`),
   run: () => req<{ ok: boolean; message: string }>("/artist-discovery/run", { method: "POST" }),
-  sync: () => req<{ ok: boolean; message: string }>("/artist-discovery/sync", { method: "POST" }),
   runs: () => req<DiscoveryRun[]>("/artist-discovery/runs?limit=10"),
   accept: (id: number) =>
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/accept`, { method: "POST" }),
   reject: (id: number) =>
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/reject`, { method: "POST" }),
 };
-
-function ArtistAvatar({ url, name }: { url: string | null; name: string }) {
-  const [failed, setFailed] = useState(false);
-  if (url && !failed) {
-    return (
-      <img
-        src={url}
-        alt={name}
-        onError={() => setFailed(true)}
-        className="w-16 h-16 rounded-lg object-cover shrink-0 bg-surface border border-purple-900/30"
-      />
-    );
-  }
-  return (
-    <div className="w-16 h-16 rounded-lg shrink-0 bg-surface border border-purple-900/30 flex items-center justify-center">
-      <Music2 size={22} className="text-slate-600" />
-    </div>
-  );
-}
 
 function whySuggested(c: Candidate): string {
   if (c.source === "centroid") {
@@ -97,58 +78,28 @@ function CandidateCard({ c, onAccept, onReject, pending }: {
   onReject: () => void;
   pending: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const bio = c.bio || "";
-  const isLong = bio.length > 180;
-
   return (
-    <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-4 flex gap-3">
-      <ArtistAvatar url={c.image_url} name={c.artist_name} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-white text-sm font-medium truncate">
-              {c.artist_name}
-              {c.years_active && <span className="text-slate-500 font-normal"> · {c.years_active}</span>}
-            </p>
-            <p className="text-xs text-slate-500">{whySuggested(c)}</p>
-          </div>
-          <div className="flex gap-1 shrink-0">
-            <button onClick={onAccept} disabled={pending} title="Add to Lidarr"
-              className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300 disabled:opacity-40">
-              <Check size={15} />
-            </button>
-            <button onClick={onReject} disabled={pending} title="Reject"
-              className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 disabled:opacity-40">
-              <X size={15} />
-            </button>
-          </div>
-        </div>
-
-        {(c.genres.length > 0 || c.era) && (
-          <div className="flex flex-wrap gap-1 mt-2">
-            {c.genres.slice(0, 5).map(g => (
-              <span key={g} className="text-xs bg-purple-900/40 text-purple-200 px-2 py-0.5 rounded">{g}</span>
-            ))}
-            {c.era && <span className="text-xs bg-surface text-slate-400 px-2 py-0.5 rounded border border-purple-900/40">{c.era}</span>}
-          </div>
-        )}
-
-        {bio && (
-          <div className="mt-2">
-            <p className={`text-xs text-slate-400 leading-relaxed ${!expanded && isLong ? "line-clamp-2" : ""}`}>
-              {bio}
-            </p>
-            {isLong && (
-              <button onClick={() => setExpanded(e => !e)}
-                className="flex items-center gap-1 text-xs text-brand-light hover:underline mt-1">
-                {expanded ? <>Show less <ChevronUp size={12} /></> : <>Show more <ChevronDown size={12} /></>}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+    <ArtistCard
+      name={c.artist_name}
+      yearsActive={c.years_active}
+      imageUrl={c.image_url}
+      bio={c.bio}
+      genres={c.genres}
+      era={c.era}
+      subtitle={whySuggested(c)}
+      actions={
+        <>
+          <button onClick={onAccept} disabled={pending} title="Add to Lidarr"
+            className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300 disabled:opacity-40">
+            <Check size={15} />
+          </button>
+          <button onClick={onReject} disabled={pending} title="Reject"
+            className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 disabled:opacity-40">
+            <X size={15} />
+          </button>
+        </>
+      }
+    />
   );
 }
 
@@ -222,11 +173,6 @@ export default function ArtistDiscovery() {
     },
     onError: (e: Error) => setMsg(e.message),
   });
-  const syncMut = useMutation({
-    mutationFn: api.sync,
-    onSuccess: (r) => { setMsg(r.message); qc.invalidateQueries({ queryKey: ["ad-stats"] }); },
-    onError: (e: Error) => setMsg(e.message),
-  });
   const actMut = useMutation({
     mutationFn: ({ id, action }: { id: number; action: "accept" | "reject" }) =>
       action === "accept" ? api.accept(id) : api.reject(id),
@@ -237,6 +183,27 @@ export default function ArtistDiscovery() {
     },
     onError: (e: Error) => setMsg(e.message),
   });
+
+  // Live updates: keeps stats/candidates current whether discovery was
+  // triggered by the button or the background scheduler, and surfaces the
+  // finished/failed message here too (in addition to the tray card).
+  useEffect(() => {
+    const es = new EventSource("/api/v1/imports/events");
+    es.onmessage = ev => {
+      try {
+        const data = JSON.parse(ev.data);
+        if (data.type === "task_update" && data.task?.kind === "artist_discovery") {
+          qc.invalidateQueries({ queryKey: ["ad-stats"] });
+          qc.invalidateQueries({ queryKey: ["ad-candidates"] });
+          qc.invalidateQueries({ queryKey: ["ad-runs"] });
+          if (data.task.status === "done" || data.task.status === "failed") {
+            setMsg(data.task.message || null);
+          }
+        }
+      } catch { /* keepalive */ }
+    };
+    return () => es.close();
+  }, [qc]);
 
   const enabled = !!settings?.enabled;
 
@@ -265,8 +232,9 @@ export default function ArtistDiscovery() {
 
       {stats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-          <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-3">
-            <p className="text-xs text-slate-500">Tracked artists</p>
+          <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-3"
+            title="Total artists in Powarr's shared taste vector space — your monitored artists plus every related artist ever discovered. Never shrinks (points are soft-deleted, not removed).">
+            <p className="text-xs text-slate-500">Taste model size</p>
             <p className="text-white text-lg font-semibold">{stats.tracked_artists ?? "—"}</p>
           </div>
           <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-3">
@@ -289,10 +257,6 @@ export default function ArtistDiscovery() {
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
           <Play size={14} /> {runMut.isPending ? "Running…" : "Run Discovery Now"}
         </button>
-        <button onClick={() => syncMut.mutate()} disabled={syncMut.isPending || !enabled}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 text-sm hover:text-white disabled:opacity-50">
-          <RefreshCw size={14} /> {syncMut.isPending ? "Syncing…" : "Sync Now"}
-        </button>
         {msg && <span className="text-sm text-slate-400">{msg}</span>}
       </div>
 
@@ -301,8 +265,6 @@ export default function ArtistDiscovery() {
           <h2 className="text-white font-semibold text-sm uppercase tracking-wider flex items-center gap-2">
             <Sparkles size={16} /> Pending candidates ({candidates.length})
           </h2>
-          <button onClick={() => qc.invalidateQueries({ queryKey: ["ad-candidates"] })}
-            className="p-1.5 text-slate-400 hover:text-white" title="Refresh"><RefreshCw size={14} /></button>
         </div>
         {candidates.length === 0 ? (
           <p className="text-slate-500 text-sm">

@@ -50,6 +50,7 @@ export const AREAS: AreaDef[] = [
     base: "/music",
     screens: [
       { path: "/music/discovery", label: "Artist Discovery" },
+      { path: "/music/related", label: "Related Artists" },
       { path: "/music/playlists", label: "Playlists" },
     ],
   },

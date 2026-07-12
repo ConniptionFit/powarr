@@ -77,9 +77,9 @@ def find_running(kind: str) -> Optional[TaskProgress]:
     return max(running, key=lambda t: t.started_at)
 
 
-def update_task(task_id: str, current: Optional[int] = None, total: Optional[int] = None,
+def update_task(task_id: Optional[str], current: Optional[int] = None, total: Optional[int] = None,
                 message: Optional[str] = None, label: Optional[str] = None) -> None:
-    task = _tasks.get(task_id)
+    task = _tasks.get(task_id) if task_id else None
     if not task:
         return
     if current is not None:

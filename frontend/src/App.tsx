@@ -6,6 +6,7 @@ import DeletionSuggestions from "./pages/Library/DeletionSuggestions";
 import DeletionHistory from "./pages/Library/DeletionHistory";
 import MatchReview from "./pages/Imports/MatchReview";
 import ArtistDiscovery from "./pages/Music/ArtistDiscovery";
+import RelatedArtists from "./pages/Music/RelatedArtists";
 import Playlists from "./pages/Music/Playlists";
 import SettingsPage from "./pages/Settings";
 import LogsPage from "./pages/Logs";
@@ -127,6 +128,7 @@ export default function App() {
 
               <Route path="/music" element={<Navigate to="/music/discovery" replace />} />
               <Route path="/music/discovery" element={<ArtistDiscovery />} />
+              <Route path="/music/related" element={<RelatedArtists />} />
               <Route path="/music/playlists" element={<Playlists />} />
 
               <Route path="/settings" element={<SettingsPage />} />

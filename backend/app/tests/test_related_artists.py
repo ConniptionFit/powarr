@@ -1,0 +1,167 @@
+"""Related Artists search (ad-hoc, read-only artist-similarity lookup) and the
+_add_artist_to_lidarr() helper extracted from add_to_lidarr() to share with it.
+
+- _add_artist_to_lidarr: lookup -> profile resolution -> add, including the
+  "400 means already there, not a failure" behavior carried over verbatim from
+  the pre-extraction add_to_lidarr().
+- search_related_artists: fails soft with a clear message when there's no
+  query, no Last.fm, or no results; flags already-owned results without
+  filtering them out; never touches Qdrant or DiscoveredArtist.
+"""
+import unittest
+from unittest.mock import AsyncMock, patch
+
+import httpx
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
+from app.schemas.settings import ArtistDiscoverySettings
+from app.services.artist_discovery import (
+    _add_artist_to_lidarr, add_related_artist, search_related_artists,
+)
+
+
+class _FakeLidarr:
+    def __init__(self, lookup_results=None, add_response=None, add_raises=None,
+                existing_artists=None):
+        self._lookup_results = lookup_results if lookup_results is not None else [
+            {"foreignArtistId": "mbid-1", "artistName": "Some Artist"}]
+        self._add_response = add_response if add_response is not None else {"id": 42}
+        self._add_raises = add_raises
+        self._existing = existing_artists or []
+
+    async def lookup_artist(self, term):
+        return self._lookup_results
+
+    async def get_root_folders(self):
+        return [{"path": "/music"}]
+
+    async def get_quality_profiles(self):
+        return [{"id": 1}]
+
+    async def get_metadata_profiles(self):
+        return [{"id": 1}]
+
+    async def add_artist(self, payload):
+        if self._add_raises:
+            raise self._add_raises
+        return self._add_response
+
+    async def get_artists(self):
+        return self._existing
+
+
+def _cfg(**overrides):
+    return ArtistDiscoverySettings(root_folder_path="/music", quality_profile_id=1,
+                                   metadata_profile_id=1, **overrides)
+
+
+class AddArtistToLidarrTests(unittest.IsolatedAsyncioTestCase):
+    async def test_success_returns_lidarr_id(self):
+        lidarr = _FakeLidarr()
+        result = await _add_artist_to_lidarr(lidarr, _cfg(), "mbid-1", "Some Artist")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["lidarr_artist_id"], 42)
+
+    async def test_no_lookup_results_fails(self):
+        lidarr = _FakeLidarr(lookup_results=[])
+        result = await _add_artist_to_lidarr(lidarr, _cfg(), None, "Nobody")
+        self.assertFalse(result["ok"])
+        self.assertIn("No Lidarr lookup results", result["message"])
+
+    async def test_missing_profile_defaults_fails_when_lidarr_has_none_available(self):
+        class _NoProfilesLidarr(_FakeLidarr):
+            async def get_root_folders(self):
+                return []
+            async def get_quality_profiles(self):
+                return []
+            async def get_metadata_profiles(self):
+                return []
+        lidarr = _NoProfilesLidarr()
+        result = await _add_artist_to_lidarr(lidarr, ArtistDiscoverySettings(), "mbid-1", "Some Artist")
+        self.assertFalse(result["ok"])
+        self.assertIn("root folder", result["message"])
+
+    async def test_400_conflict_treated_as_success_with_existing_id(self):
+        resp = httpx.Response(400, request=httpx.Request("POST", "http://lidarr/api/v1/artist"))
+        lidarr = _FakeLidarr(
+            add_raises=httpx.HTTPStatusError("bad request", request=resp.request, response=resp),
+            existing_artists=[{"foreignArtistId": "mbid-1", "artistName": "Some Artist", "id": 99}])
+        result = await _add_artist_to_lidarr(lidarr, _cfg(), "mbid-1", "Some Artist")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["lidarr_artist_id"], 99)
+
+    async def test_other_http_error_fails(self):
+        resp = httpx.Response(500, request=httpx.Request("POST", "http://lidarr/api/v1/artist"))
+        lidarr = _FakeLidarr(
+            add_raises=httpx.HTTPStatusError("server error", request=resp.request, response=resp))
+        result = await _add_artist_to_lidarr(lidarr, _cfg(), "mbid-1", "Some Artist")
+        self.assertFalse(result["ok"])
+
+
+class SearchRelatedArtistsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+    async def test_empty_query_short_circuits(self):
+        result = await search_related_artists(self.db, "  ")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["results"], [])
+
+    async def test_no_lastfm_configured(self):
+        with patch("app.services.artist_discovery._lastfm_client", return_value=None):
+            result = await search_related_artists(self.db, "Radiohead")
+        self.assertFalse(result["ok"])
+        self.assertIn("Last.fm", result["message"])
+
+    async def test_no_results_found_gives_clear_message(self):
+        lastfm = AsyncMock()
+        lastfm.get_similar_artists = AsyncMock(return_value=[])
+        with patch("app.services.artist_discovery._lastfm_client", return_value=lastfm):
+            result = await search_related_artists(self.db, "Xyzzyplugh")
+        self.assertFalse(result["ok"])
+        self.assertIn("No related artists found", result["message"])
+
+    async def test_flags_already_owned_without_dropping_it(self):
+        lastfm = AsyncMock()
+        lastfm.get_similar_artists = AsyncMock(return_value=[
+            {"name": "Owned Artist", "mbid": "mbid-owned", "match": "0.9"},
+            {"name": "New Artist", "mbid": "mbid-new", "match": "0.5"},
+        ])
+        with patch("app.services.artist_discovery._lastfm_client", return_value=lastfm), \
+             patch("app.services.artist_discovery._lidarr_artist_index",
+                   new=AsyncMock(return_value=({"mbid-owned": {"id": 1}}, {}))), \
+             patch("app.services.artist_discovery._enrich_candidate",
+                   new=AsyncMock(return_value={"image_url": None, "bio": None,
+                                               "genres": [], "years_active": None})):
+            result = await search_related_artists(self.db, "Seed Artist")
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["results"]), 2)
+        owned = next(r for r in result["results"] if r["artist_name"] == "Owned Artist")
+        new = next(r for r in result["results"] if r["artist_name"] == "New Artist")
+        self.assertTrue(owned["already_owned"])
+        self.assertFalse(new["already_owned"])
+        self.assertAlmostEqual(owned["match_score"], 0.9)
+
+
+class AddRelatedArtistTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+    async def test_blank_name_rejected(self):
+        result = await add_related_artist(self.db, "mbid-1", "  ")
+        self.assertFalse(result["ok"])
+
+    async def test_no_lidarr_configured(self):
+        result = await add_related_artist(self.db, "mbid-1", "Some Artist")
+        self.assertFalse(result["ok"])
+        self.assertIn("Lidarr", result["message"])
+
+
+if __name__ == "__main__":
+    unittest.main()

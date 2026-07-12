@@ -1,6 +1,9 @@
 """Artist Discovery API — native port of the n8n Music Curator. See vault
-[[Artist Discovery]]. Kept synchronous (request/response), no Active Processes Tray
-wiring — matches Smart Playlists' existing precedent."""
+[[Artist Discovery]]. POST /run stays synchronous (request/response) but is
+tray-tracked as of v0.48.0 (AD-02, artist_discovery task kind) — the tray
+card appears via SSE independent of the request's own lifecycle, same as
+POST /imports/scan. Smart Playlists' own generate/sync endpoints remain
+untracked (its own module's precedent for now)."""
 import json
 from datetime import datetime
 from typing import Optional
@@ -83,7 +86,7 @@ async def stats(db: Session = Depends(get_db)):
 
 @router.post("/run")
 async def run_discovery(db: Session = Depends(get_db)):
-    return await service.run_full_discovery_cycle(db)
+    return await service.run_discovery(db)
 
 
 @router.post("/sync")
@@ -174,3 +177,37 @@ def list_runs(limit: int = Query(20, le=100), db: Session = Depends(get_db)):
 @router.get("/lidarr/profiles")
 async def lidarr_profiles(db: Session = Depends(get_db)):
     return await service.get_lidarr_profiles(db)
+
+
+class RelatedArtistOut(BaseModel):
+    musicbrainz_id: Optional[str] = None
+    artist_name: str
+    match_score: float = 0.0
+    already_owned: bool = False
+    image_url: Optional[str] = None
+    bio: Optional[str] = None
+    genres: list[str] = []
+    years_active: Optional[str] = None
+
+
+class RelatedSearchOut(BaseModel):
+    ok: bool
+    message: str
+    results: list[RelatedArtistOut] = []
+
+
+@router.get("/related", response_model=RelatedSearchOut)
+async def related(artist: str = Query(..., min_length=1), db: Session = Depends(get_db)):
+    """Ad-hoc "who's similar to X" search — read-only, no Qdrant writes, no
+    DiscoveredArtist rows. Independent of the taste-model pipeline."""
+    return await service.search_related_artists(db, artist)
+
+
+@router.post("/related/add")
+async def related_add(body: dict = Body(...), db: Session = Depends(get_db)):
+    """Add a Related Artists search result straight to Lidarr, bypassing the
+    review queue entirely. Body: {mbid?, artist_name}."""
+    artist_name = (body.get("artist_name") or "").strip()
+    if not artist_name:
+        raise HTTPException(status_code=400, detail="Body: {mbid?, artist_name}")
+    return await service.add_related_artist(db, body.get("mbid"), artist_name)

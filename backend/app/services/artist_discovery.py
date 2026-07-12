@@ -636,7 +636,31 @@ async def re_enrich_missing(db, limit: int = 25) -> dict[str, Any]:
 
 # --- Orchestration -----------------------------------------------------------------
 
-async def run_full_discovery_cycle(db=None) -> dict[str, Any]:
+async def run_discovery(db=None) -> dict[str, Any]:
+    """AD-02: tray-tracked wrapper for a user-triggered "Run Discovery Now" —
+    mirrors import_matcher.scan_once()'s thin-wrapper-around-the-real-worker
+    shape, so the tracked task always gets marked done/failed (including on an
+    exception run_full_discovery_cycle doesn't itself catch) without adding a
+    second nested try/finally to that already-long function. The scheduler's
+    own background cycle calls run_full_discovery_cycle() directly and stays
+    silent — the tray is for user-triggered operations only, per tasks.py."""
+    from app.services import tasks
+    task_id = tasks.create_task("artist_discovery", "Running artist discovery")
+    try:
+        result = await run_full_discovery_cycle(db, task_id=task_id)
+        tasks.finish_task(task_id, "done" if result.get("ok") else "failed", result.get("message"))
+        return result
+    except Exception as e:
+        tasks.finish_task(task_id, "failed", str(e))
+        raise
+
+
+async def run_full_discovery_cycle(db=None, task_id: str | None = None) -> dict[str, Any]:
+    """AD-02: `task_id` is optional so existing callers/tests are unaffected —
+    when supplied (by run_discovery()'s tray wrapper), each phase reports its
+    progress via tasks.update_task(). No natural item count exists up front for
+    this pipeline, so the tray renders it indeterminate, same as an llm_run."""
+    from app.services import tasks
     own_session = db is None
     if own_session:
         db = SessionLocal()
@@ -655,6 +679,7 @@ async def run_full_discovery_cycle(db=None) -> dict[str, Any]:
         # so this run's taste centroid and connection counts reflect recent play
         # history rather than the last standalone sync. Fail-soft — a sync
         # failure (e.g. Lidarr down) still lets discovery run on existing state.
+        tasks.update_task(task_id, message="Syncing Lidarr/Last.fm state into Qdrant…")
         sync = await run_differential_sync(db)
         if sync.get("ok"):
             sync_row = db.query(AppSetting).filter_by(key="last_artist_discovery_sync").first()
@@ -666,9 +691,13 @@ async def run_full_discovery_cycle(db=None) -> dict[str, Any]:
         else:
             logger.warning(f"Artist Discovery: pre-run differential sync failed "
                            f"({sync.get('message')}) — continuing with existing Qdrant state")
+        tasks.update_task(task_id, message="Ingesting Last.fm scrobble history…")
         ingest = await ingest_scrobbles(db, cfg)
+        tasks.update_task(task_id, message="Running taste-centroid discovery…")
         centroid = await run_centroid_discovery(db, cfg)
+        tasks.update_task(task_id, message="Expanding related-artist graph…")
         graph = await run_graph_sync(db, cfg)
+        tasks.update_task(task_id, message="Enriching candidate images/bios…")
         await re_enrich_missing(db)
         found = centroid.get("candidates", 0) + graph.get("candidates", 0)
         added = graph.get("promoted", 0)
@@ -775,21 +804,15 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
 
 # --- Review queue actions --------------------------------------------------------
 
-async def add_to_lidarr(db, candidate_id: int) -> dict[str, Any]:
-    cand = db.query(DiscoveredArtist).filter_by(id=candidate_id).first()
-    if not cand:
-        return {"ok": False, "message": "Candidate not found"}
-    if cand.status == "accepted":
-        return {"ok": True, "message": "Already accepted", "lidarr_artist_id": cand.lidarr_artist_id}
-
-    lidarr_row = db.query(Integration).filter_by(name="lidarr", enabled=True).first()
-    if not lidarr_row:
-        return {"ok": False, "message": "Lidarr integration not enabled"}
-    from app.api.v1.integrations import _get_client
-    lidarr = _get_client(lidarr_row)
-    cfg = load_settings(db)
-
-    term = f"lidarr:{cand.musicbrainz_id}" if cand.musicbrainz_id else cand.artist_name
+async def _add_artist_to_lidarr(lidarr, cfg: ArtistDiscoverySettings,
+                                mbid: str | None, name: str) -> dict[str, Any]:
+    """Core Lidarr lookup -> profile resolution -> add. Shared by the Discovery
+    accept flow (add_to_lidarr, below) and the standalone Related Artists
+    search's add action — neither DiscoveredArtist nor Qdrant bookkeeping
+    happens here, callers own that around this call. A 400 from Lidarr is
+    treated as "already there, not a failure" (matches the pre-extraction
+    behavior) — it looks up the existing artist's id instead of erroring."""
+    term = f"lidarr:{mbid}" if mbid else name
     try:
         results = await lidarr.lookup_artist(term)
     except Exception as e:
@@ -798,10 +821,10 @@ async def add_to_lidarr(db, candidate_id: int) -> dict[str, Any]:
         return {"ok": False, "message": "No Lidarr lookup results"}
 
     match = None
-    if cand.musicbrainz_id:
-        match = next((r for r in results if r.get("foreignArtistId") == cand.musicbrainz_id), None)
+    if mbid:
+        match = next((r for r in results if r.get("foreignArtistId") == mbid), None)
     if not match:
-        target = _norm_artist(cand.artist_name)
+        target = _norm_artist(name)
         match = next((r for r in results if _norm_artist(r.get("artistName") or "") == target), None)
     if not match:
         match = results[0]
@@ -828,24 +851,44 @@ async def add_to_lidarr(db, candidate_id: int) -> dict[str, Any]:
     match["monitored"] = True
     match["addOptions"] = {"searchForMissingAlbums": True}
 
-    lidarr_artist_id = None
     try:
         added = await lidarr.add_artist(match)
-        lidarr_artist_id = added.get("id")
+        return {"ok": True, "message": f"Added '{name}' to Lidarr", "lidarr_artist_id": added.get("id")}
     except httpx.HTTPStatusError as e:
         if e.response is not None and e.response.status_code == 400:
+            lidarr_artist_id = None
             try:
                 existing = await lidarr.get_artists()
                 found = next((a for a in existing
-                             if a.get("foreignArtistId") == cand.musicbrainz_id
-                             or _norm_artist(a.get("artistName") or "") == _norm_artist(cand.artist_name)), None)
+                             if a.get("foreignArtistId") == mbid
+                             or _norm_artist(a.get("artistName") or "") == _norm_artist(name)), None)
                 lidarr_artist_id = found.get("id") if found else None
             except Exception:
                 lidarr_artist_id = None
-        else:
-            return {"ok": False, "message": f"Lidarr add failed: {e}"}
+            return {"ok": True, "message": f"Added '{name}' to Lidarr", "lidarr_artist_id": lidarr_artist_id}
+        return {"ok": False, "message": f"Lidarr add failed: {e}"}
     except Exception as e:
         return {"ok": False, "message": f"Lidarr add failed: {e}"}
+
+
+async def add_to_lidarr(db, candidate_id: int) -> dict[str, Any]:
+    cand = db.query(DiscoveredArtist).filter_by(id=candidate_id).first()
+    if not cand:
+        return {"ok": False, "message": "Candidate not found"}
+    if cand.status == "accepted":
+        return {"ok": True, "message": "Already accepted", "lidarr_artist_id": cand.lidarr_artist_id}
+
+    lidarr_row = db.query(Integration).filter_by(name="lidarr", enabled=True).first()
+    if not lidarr_row:
+        return {"ok": False, "message": "Lidarr integration not enabled"}
+    from app.api.v1.integrations import _get_client
+    lidarr = _get_client(lidarr_row)
+    cfg = load_settings(db)
+
+    result = await _add_artist_to_lidarr(lidarr, cfg, cand.musicbrainz_id, cand.artist_name)
+    if not result.get("ok"):
+        return result
+    lidarr_artist_id = result.get("lidarr_artist_id")
 
     qdrant = _qdrant(db)
     if qdrant:
@@ -870,6 +913,71 @@ def reject_candidate(db, candidate_id: int) -> dict[str, Any]:
     cand.resolved_at = datetime.utcnow()
     db.commit()
     return {"ok": True, "message": "Rejected"}
+
+
+# --- Related Artists search (ad-hoc, read-only) ------------------------------------
+# On-demand "who's similar to X" for any artist, not just your own monitored
+# ones. Deliberately independent of the taste-model pipeline above: no Qdrant
+# writes, no DiscoveredArtist rows. Reuses the same Last.fm similar-artist call
+# and enrichment helper the discovery pipeline uses, so results read the same
+# as Discovery candidates; adding one goes straight to Lidarr via
+# _add_artist_to_lidarr, bypassing the review queue entirely.
+
+async def search_related_artists(db, artist: str) -> dict[str, Any]:
+    artist = (artist or "").strip()
+    if not artist:
+        return {"ok": False, "message": "Enter an artist name", "results": []}
+    lastfm = _lastfm_client(db)
+    if not lastfm:
+        return {"ok": False, "message": "Last.fm integration not configured", "results": []}
+
+    try:
+        related = await lastfm.get_similar_artists(artist, limit=15)
+    except Exception as e:
+        return {"ok": False, "message": f"Last.fm lookup failed: {e}", "results": []}
+    if not related:
+        return {"ok": False,
+                "message": f"No related artists found for '{artist}' — check the spelling or try a different name.",
+                "results": []}
+
+    lidarr_by_mbid, lidarr_by_name = await _lidarr_artist_index(db) or ({}, {})
+    plex_names = _plex_artist_names(db)
+
+    results = []
+    for r in related:
+        rname = (r.get("name") or "").strip()
+        if not rname:
+            continue
+        rmbid = (r.get("mbid") or "").strip() or None
+        rname_norm = _norm_artist(rname)
+        already_owned = bool(lidarr_by_mbid.get(rmbid) or lidarr_by_name.get(rname_norm)) \
+            or rname_norm in plex_names
+        try:
+            match_score = float(r.get("match") or 0.0)
+        except (TypeError, ValueError):
+            match_score = 0.0
+        enrichment = await _enrich_candidate(db, rmbid, rname)
+        results.append({
+            "musicbrainz_id": rmbid, "artist_name": rname, "match_score": match_score,
+            "already_owned": already_owned,
+            "image_url": enrichment.get("image_url"), "bio": enrichment.get("bio"),
+            "genres": clean_tags(enrichment.get("genres")), "years_active": enrichment.get("years_active"),
+        })
+    return {"ok": True, "message": f"{len(results)} related artist(s) for '{artist}'", "results": results}
+
+
+async def add_related_artist(db, mbid: str | None, name: str) -> dict[str, Any]:
+    """Add a Related Artists search result straight to Lidarr — no queue row."""
+    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "message": "Artist name required"}
+    lidarr_row = db.query(Integration).filter_by(name="lidarr", enabled=True).first()
+    if not lidarr_row:
+        return {"ok": False, "message": "Lidarr integration not enabled"}
+    from app.api.v1.integrations import _get_client
+    lidarr = _get_client(lidarr_row)
+    cfg = load_settings(db)
+    return await _add_artist_to_lidarr(lidarr, cfg, mbid, name)
 
 
 # --- Misc -------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, RefreshCw, RotateCw, Trash2 } from "lucide-react";
+import { Compass, Loader2, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import { useTasks } from "../context/TaskContext";
 import type { TaskProgress } from "../lib/api";
 import BotState from "./BotState";
@@ -13,6 +13,7 @@ const KIND_ICON: Record<Exclude<TaskProgress["kind"], "llm_run">, React.ElementT
   plex_sync: RotateCw,
   deletion: Trash2,
   import_batch: Loader2, // spinning loader — checkmark read as "done", not in-progress
+  artist_discovery: Compass, // same icon as the Music → Artist Discovery page header
 };
 
 function TaskIcon({ task }: { task: TaskProgress }) {
