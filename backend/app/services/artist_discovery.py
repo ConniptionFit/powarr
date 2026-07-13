@@ -964,6 +964,13 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
                     updated += 1
                 except Exception as e:
                     logger.warning(f"Artist Discovery sync: set_payload failed for point {p.get('id')}: {e}")
+            # Commit after each page rather than once at the very end — this loop can
+            # make many rate-limited MusicBrainz calls (era backfill) and Qdrant calls
+            # per page, and holding the `run` row's transaction open across all of them
+            # is the exact same anti-pattern fixed in generate_candidates() (v0.74.1
+            # live incident): a long-lived idle-in-transaction session starves the pool
+            # and can make the health check's own SELECT 1 start timing out.
+            db.commit()
             if offset is None:
                 break
 
