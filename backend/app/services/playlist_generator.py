@@ -67,6 +67,21 @@ def _blacklist_set(cfg: SmartPlaylistSettings) -> set[str]:
     return {_norm_artist(a) for a in (cfg.blacklisted_artists or []) if a and a.strip()}
 
 
+def _tracks_by_artist(db) -> dict[str, list[MediaItem]]:
+    """Index every track MediaItem by normalized artist name in one query.
+    _add_artist_tracks_to_db used to run this same full-table query (101k+
+    rows on a real library) on every single artist it was asked about — with
+    O(genres * artists) calls per generation run, that's the same table
+    fully re-fetched and re-materialized hundreds of times in one pass,
+    pinning the event loop for minutes (live incident, 2026-07-13, found via
+    py-spy: stuck in SQLAlchemy row instantiation, not I/O). Build the index
+    once per run and look artists up in it instead."""
+    index: dict[str, list[MediaItem]] = defaultdict(list)
+    for t in db.query(MediaItem).filter(MediaItem.media_type == "track").all():
+        index[_norm_artist(t.parent_title or "")].append(t)
+    return index
+
+
 def _is_blacklisted(artist_name: str, blocked: set[str]) -> bool:
     return bool(blocked) and _norm_artist(artist_name) in blocked
 
@@ -253,7 +268,9 @@ async def _sonic_bias(db, plex, pl: SmartPlaylist, candidates: list[MediaItem]) 
 
 async def _add_artist_tracks_to_db(db, pl: SmartPlaylist, artist_name: str,
                              max_tracks: int, *, plex=None,
-                             cfg: SmartPlaylistSettings | None = None) -> list[MediaItem]:
+                             cfg: SmartPlaylistSettings | None = None,
+                             tracks_by_artist: dict[str, list[MediaItem]] | None = None
+                             ) -> list[MediaItem]:
     """Collect MediaItem tracks for artist not yet in the playlist ledger.
     SP-02: when cfg.sonic_similarity_enabled, candidates are sonic-biased before
     the max_tracks cut (see _sonic_bias).
@@ -268,11 +285,10 @@ async def _add_artist_tracks_to_db(db, pl: SmartPlaylist, artist_name: str,
     fully established upstream by _artists_by_genre's Qdrant scroll before this
     function is ever called — no second gate is needed here."""
     target = _norm_artist(artist_name)
-    tracks = db.query(MediaItem).filter(MediaItem.media_type == "track").all()
+    if tracks_by_artist is None:
+        tracks_by_artist = _tracks_by_artist(db)
     candidates: list[MediaItem] = []
-    for t in tracks:
-        if _norm_artist(t.parent_title or "") != target:
-            continue
+    for t in tracks_by_artist.get(target, []):
         exists = db.query(SmartPlaylistTrack).filter_by(
             playlist_id=pl.id, plex_key=t.plex_rating_key).first()
         if exists:
@@ -284,10 +300,13 @@ async def _add_artist_tracks_to_db(db, pl: SmartPlaylist, artist_name: str,
 
 
 async def _sync_tracks_to_plex(db, plex, pl: SmartPlaylist, artists: list[dict],
-                               cfg: SmartPlaylistSettings) -> int:
+                               cfg: SmartPlaylistSettings,
+                               tracks_by_artist: dict[str, list[MediaItem]] | None = None) -> int:
     """Push all eligible artists' tracks into an existing Plex playlist. Returns tracks added."""
     if not pl.plex_playlist_id:
         return 0
+    if tracks_by_artist is None:
+        tracks_by_artist = _tracks_by_artist(db)
     max_tracks = pl.max_tracks_override or cfg.max_tracks_per_playlist
     total_added = 0
     remaining = max_tracks - (pl.track_count or 0)
@@ -299,7 +318,7 @@ async def _sync_tracks_to_plex(db, plex, pl: SmartPlaylist, artists: list[dict],
         if _is_blacklisted(name, _blacklist_set(cfg)):
             continue
         batch = await _add_artist_tracks_to_db(db, pl, name, max(1, remaining or max_tracks),
-                                               plex=plex, cfg=cfg)
+                                               plex=plex, cfg=cfg, tracks_by_artist=tracks_by_artist)
         if not batch:
             # Record artist as included even with no local tracks
             _mark_artist_included(db, pl, a)
@@ -479,7 +498,8 @@ async def _artists_for_related_seed(db, cfg: SmartPlaylistSettings, seed_artist:
 
 async def _upsert_playlist_group(db, cfg: SmartPlaylistSettings, plex, group_key: str,
                                  artists: list[dict], *, is_template: bool = False,
-                                 used_names: set[str] | None = None
+                                 used_names: set[str] | None = None,
+                                 tracks_by_artist: dict[str, list[MediaItem]] | None = None
                                  ) -> tuple[bool, int, bool, int]:
     """Create-or-sync one genre/template playlist group. Shared by the
     per-genre loop and the SP-12 per-template loop below — only the source of
@@ -511,7 +531,7 @@ async def _upsert_playlist_group(db, cfg: SmartPlaylistSettings, plex, group_key
             pruned = 0
             if cfg.prune_stale_tracks_enabled:
                 pruned = await prune_stale_tracks(db, plex, pl, cfg)
-            added = await _sync_tracks_to_plex(db, plex, pl, artists, cfg)
+            added = await _sync_tracks_to_plex(db, plex, pl, artists, cfg, tracks_by_artist=tracks_by_artist)
             msg = f"Synced {len(artists)} artist(s), +{added} track(s)"
             if pruned:
                 msg += f", -{pruned} stale"
@@ -553,10 +573,13 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
         # adding each newly chosen title as this run goes so later groups in
         # the SAME run see earlier ones (mutated in place by _upsert_playlist_group).
         used_names = {_norm_title(t) for (t,) in db.query(SmartPlaylist.title).all()}
+        # Built once per run and threaded through every group below — see
+        # _tracks_by_artist's docstring for the incident this replaced.
+        tracks_by_artist = _tracks_by_artist(db)
 
         for g, artists in by_genre.items():
             created, added, did_sync, pruned = await _upsert_playlist_group(
-                db, cfg, plex, g, artists, used_names=used_names)
+                db, cfg, plex, g, artists, used_names=used_names, tracks_by_artist=tracks_by_artist)
             created_playlists += int(created)
             tracks_added += added
             synced += int(did_sync)
@@ -583,7 +606,8 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                 if len(artists) < cfg.min_artists_per_genre:
                     continue
                 created, added, did_sync, pruned = await _upsert_playlist_group(
-                    db, cfg, plex, template_name, artists, is_template=True, used_names=used_names)
+                    db, cfg, plex, template_name, artists, is_template=True, used_names=used_names,
+                    tracks_by_artist=tracks_by_artist)
                 created_playlists += int(created)
                 tracks_added += added
                 synced += int(did_sync)
@@ -601,7 +625,8 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                 if len(artists) < cfg.min_artists_per_genre:
                     continue
                 created, added, did_sync, pruned = await _upsert_playlist_group(
-                    db, cfg, plex, playlist_name, artists, is_template=True, used_names=used_names)
+                    db, cfg, plex, playlist_name, artists, is_template=True, used_names=used_names,
+                    tracks_by_artist=tracks_by_artist)
                 created_playlists += int(created)
                 tracks_added += added
                 synced += int(did_sync)
