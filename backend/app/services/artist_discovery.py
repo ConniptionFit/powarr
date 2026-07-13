@@ -10,6 +10,7 @@ both API routes and the scheduler, mirroring playlist_generator.py.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -1011,6 +1012,52 @@ def reject_candidate(db, candidate_id: int) -> dict[str, Any]:
 # and enrichment helper the discovery pipeline uses, so results read the same
 # as Discovery candidates; adding one goes straight to Lidarr via
 # _add_artist_to_lidarr, bypassing the review queue entirely.
+
+def _lastfm_image(images: list[dict] | None) -> str | None:
+    by_size = {i.get("size"): (i.get("#text") or "").strip() for i in (images or [])}
+    for size in ("large", "medium", "extralarge", "small"):
+        url = by_size.get(size)
+        if url:
+            return url
+    return None
+
+
+async def search_artist_names(db, query: str, limit: int = 8) -> dict[str, Any]:
+    """Name-completion typeahead for the Related Artists search box — distinct
+    from search_related_artists() (which finds artists similar TO a seed).
+    Deliberately lightweight for as-you-type use: Last.fm's artist.search
+    already returns a thumbnail with no extra call, and genres come from one
+    parallel get_top_tags() call per result (not the full Lidarr/MusicBrainz/
+    Wikipedia/Deezer enrich() chain used elsewhere — far too slow per
+    keystroke). No bio — not useful at this size and not worth the latency."""
+    query = (query or "").strip()
+    if not query:
+        return {"ok": True, "results": []}
+    lastfm = _lastfm_client(db)
+    if not lastfm:
+        return {"ok": False, "message": "Last.fm integration not configured", "results": []}
+    try:
+        matches = await lastfm.search_artists(query, limit=limit)
+    except Exception as e:
+        return {"ok": False, "message": f"Last.fm search failed: {e}", "results": []}
+
+    async def _with_tags(m: dict) -> dict:
+        name = (m.get("name") or "").strip()
+        mbid = (m.get("mbid") or "").strip() or None
+        try:
+            tags = await lastfm.get_top_tags(name, mbid)
+        except Exception:
+            tags = []
+        return {
+            "artist_name": name,
+            "musicbrainz_id": mbid,
+            "image_url": _lastfm_image(m.get("image")),
+            "genres": clean_tags(tags)[:5],
+        }
+
+    results = await asyncio.gather(*(_with_tags(m) for m in matches if (m.get("name") or "").strip()))
+    return {"ok": True, "results": [r for r in results if r["artist_name"]]}
+
 
 async def search_related_artists_tracked(db, artist: str, limit: int = 50) -> dict[str, Any]:
     """Tray-tracked wrapper for a user-triggered Related Artists search — mirrors

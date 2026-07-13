@@ -496,7 +496,7 @@ async def _upsert_playlist_group(db, cfg: SmartPlaylistSettings, plex, group_key
         pl = SmartPlaylist(genre_tag=group_key, title=title, enabled=True, is_template=is_template)
         db.add(pl)
         db.flush()
-        pl.last_run_message = f"Suggested — {len(artists)} artist(s), awaiting Approve"
+        pl.last_run_message = f"Suggested — click Approve to sync {len(artists)} artist(s) to Plex"
         return True, 0, False, 0
 
     # Managed (on Plex): auto-include all non-blacklisted artists
@@ -635,8 +635,27 @@ async def approve_playlist(playlist_id: int) -> dict[str, Any]:
             pl.plex_created_at = datetime.utcnow()
             db.commit()
 
-        by_genre = await _artists_by_genre(db, cfg, pl.genre_tag)
-        artists = by_genre.get(pl.genre_tag) or []
+        # Real bug found from live use (2026-07-13): this always resolved
+        # artists via the plain-genre lookup, but an SP-12 template or SP-09
+        # related-seed playlist's genre_tag is a template/playlist NAME, not a
+        # real genre `_artists_by_genre()` would ever key on — so approving
+        # one of those silently synced 0 tracks (Plex playlist created, always
+        # empty) despite the correct artist list having existed since the
+        # playlist was first suggested. Resolve the same way
+        # generate_candidates()'s three loops do, keyed off which config dict
+        # (if either) still names this genre_tag.
+        if pl.is_template and pl.genre_tag in (cfg.playlist_templates or {}):
+            by_genre_all = await _artists_by_genre(db, cfg)
+            artists = _artists_for_template(by_genre_all, cfg.playlist_templates[pl.genre_tag], cfg.genre_aliases)
+        elif pl.is_template and pl.genre_tag in (cfg.related_artist_seeds or {}):
+            artists = await _artists_for_related_seed(db, cfg, cfg.related_artist_seeds[pl.genre_tag])
+        elif pl.is_template:
+            # Template/seed config entry was renamed or removed since this
+            # playlist was created — nothing to resolve it back to.
+            artists = []
+        else:
+            by_genre = await _artists_by_genre(db, cfg, pl.genre_tag)
+            artists = by_genre.get(pl.genre_tag) or []
         added = await _sync_tracks_to_plex(db, plex, pl, artists, cfg)
         pl.last_run_message = f"Approved — {len(artists)} artist(s), +{added} track(s)"
         db.commit()
@@ -763,6 +782,32 @@ async def rename_playlist(playlist_id: int, title: str) -> dict[str, Any]:
     except Exception as e:
         logger.warning(f"Rename playlist {playlist_id} failed: {e}")
         return {"ok": False, "message": str(e)}
+    finally:
+        db.close()
+
+
+async def clear_suggestions() -> dict[str, Any]:
+    """Bulk-remove every Suggested (not yet approved — no plex_playlist_id)
+    playlist in one action. Never touches Plex (suggested playlists were
+    never pushed there), so this is a pure, fast local DB cleanup — unlike
+    delete_playlist(), no per-row Plex round-trip is needed."""
+    db = SessionLocal()
+    try:
+        rows = db.query(SmartPlaylist).filter(SmartPlaylist.plex_playlist_id.is_(None)).all()
+        ids = [pl.id for pl in rows]
+        if ids:
+            db.query(SmartPlaylistTrack).filter(SmartPlaylistTrack.playlist_id.in_(ids)).delete(
+                synchronize_session=False)
+            db.query(SmartPlaylistCandidate).filter(SmartPlaylistCandidate.playlist_id.in_(ids)).delete(
+                synchronize_session=False)
+            db.query(SmartPlaylistRun).filter(SmartPlaylistRun.playlist_id.in_(ids)).delete(
+                synchronize_session=False)
+            db.query(SmartPlaylist).filter(SmartPlaylist.id.in_(ids)).delete(synchronize_session=False)
+            db.commit()
+        return {"ok": True, "message": f"Cleared {len(ids)} suggested playlist(s)", "cleared": len(ids)}
+    except Exception as e:
+        logger.warning(f"Clear suggestions failed: {e}")
+        return {"ok": False, "message": str(e), "cleared": 0}
     finally:
         db.close()
 

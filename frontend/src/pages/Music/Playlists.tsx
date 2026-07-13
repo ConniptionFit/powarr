@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ListMusic, Play, RefreshCw, Music, Pencil, Settings, Sparkles, Upload, Trash2,
+  ListMusic, Play, Music, Pencil, Settings, Sparkles, Upload, Trash2,
   Ban, Library,
 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -43,6 +43,9 @@ const api = {
   run: () => req<{
     ok: boolean; message: string; playlists_created?: number; tracks_added?: number;
   }>("/smart-playlists/run", { method: "POST", body: "{}" }),
+  clearSuggestions: () =>
+    req<{ ok: boolean; message: string; cleared: number }>(
+      "/smart-playlists/clear-suggestions", { method: "POST" }),
   updatePlaylist: (id: number, body: Partial<PlaylistDetail>) =>
     req<PlaylistDetail>(`/smart-playlists/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deletePlaylist: (id: number) =>
@@ -339,6 +342,15 @@ export default function SmartPlaylists() {
     onError: (e: Error) => setMsg(e.message),
   });
 
+  const clearMut = useMutation({
+    mutationFn: api.clearSuggestions,
+    onSuccess: (r) => {
+      setMsg(r.message);
+      qc.invalidateQueries({ queryKey: ["sp-list"] });
+    },
+    onError: (e: Error) => setMsg(e.message),
+  });
+
   const enabled = !!settings?.enabled;
 
   return (
@@ -371,10 +383,13 @@ export default function SmartPlaylists() {
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
           <Play size={14} /> {runMut.isPending ? "Running…" : "Generate Now"}
         </button>
-        <button onClick={() => qc.invalidateQueries({ queryKey: ["sp-list"] })}
-          className="p-2 text-slate-400 hover:text-white" title="Refresh">
-          <RefreshCw size={14} />
-        </button>
+        {suggested.length > 0 && (
+          <button onClick={() => clearMut.mutate()} disabled={clearMut.isPending}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-400 text-sm hover:text-red-300 hover:bg-red-900/20 disabled:opacity-50"
+            title="Remove all suggested playlists">
+            <Trash2 size={14} /> {clearMut.isPending ? "Clearing…" : `Clear Suggestions (${suggested.length})`}
+          </button>
+        )}
         {msg && <span className="text-sm text-slate-400">{msg}</span>}
       </div>
 

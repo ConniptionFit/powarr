@@ -1,8 +1,15 @@
-import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { Search, Users, Plus, CircleCheck } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Search, Users, Plus, CircleCheck, Music2 } from "lucide-react";
 import { req } from "../../lib/api";
 import ArtistCard, { SourceBadge } from "../../components/ArtistCard";
+
+interface ArtistNameMatch {
+  artist_name: string;
+  musicbrainz_id: string | null;
+  image_url: string | null;
+  genres: string[];
+}
 
 interface RelatedArtist {
   musicbrainz_id: string | null;
@@ -39,7 +46,21 @@ const api = {
       method: "POST",
       body: JSON.stringify({ mbid, artist_name }),
     }),
+  searchNames: (q: string) =>
+    req<{ ok: boolean; message: string; results: ArtistNameMatch[] }>(
+      `/artist-discovery/related/search-names?q=${encodeURIComponent(q)}&limit=8`),
 };
+
+// Debounce a fast-changing value (typeahead input) so we don't fire a
+// network request on every keystroke.
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(t);
+  }, [value, delayMs]);
+  return debounced;
+}
 
 function RelatedArtistCard({ a, onAdd, adding, added }: {
   a: RelatedArtist;
@@ -82,8 +103,30 @@ export default function RelatedArtists() {
   const [hideOwned, setHideOwned] = useState(true);
   const [limit, setLimit] = useState(PAGE_SIZE);
 
+  // Typeahead — pick the right artist before running the slower similar-
+  // artists search below. Closes on selection, blur, or Escape.
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const debouncedQuery = useDebounced(query, 300);
+  const searchBoxRef = useRef<HTMLDivElement>(null);
+  const { data: nameMatches } = useQuery({
+    queryKey: ["related-artist-typeahead", debouncedQuery],
+    queryFn: () => api.searchNames(debouncedQuery.trim()),
+    enabled: debouncedQuery.trim().length >= 2 && showSuggestions,
+  });
+  const suggestions = nameMatches?.results ?? [];
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
   const searchMut = useMutation({
-    mutationFn: (nextLimit: number) => api.search(query.trim(), nextLimit),
+    mutationFn: ({ name, nextLimit }: { name: string; nextLimit: number }) => api.search(name, nextLimit),
     onSuccess: (r) => {
       setMsg(r.message);
       setResults(r.results);
@@ -101,17 +144,20 @@ export default function RelatedArtists() {
     onError: (e: Error) => { setMsg(e.message); setAddingKey(null); },
   });
 
-  const submit = () => {
-    if (!query.trim()) return;
+  const submit = (name?: string) => {
+    const target = (name ?? query).trim();
+    if (!target) return;
+    setShowSuggestions(false);
+    if (name !== undefined) setQuery(name);
     setMsg(null);
     setLimit(PAGE_SIZE);
-    searchMut.mutate(PAGE_SIZE);
+    searchMut.mutate({ name: target, nextLimit: PAGE_SIZE });
   };
 
   const loadMore = () => {
     const nextLimit = limit + PAGE_SIZE;
     setLimit(nextLimit);
-    searchMut.mutate(nextLimit);
+    searchMut.mutate({ name: query.trim(), nextLimit });
   };
 
   const visible = (results || []).filter(a => !hideOwned || !a.already_owned);
@@ -129,15 +175,44 @@ export default function RelatedArtists() {
         </div>
       </div>
 
-      <div className="flex gap-2 mb-6">
-        <input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") submit(); }}
-          placeholder="Search for an artist…"
-          className="flex-1 bg-surface-raised border border-purple-900/40 rounded-lg px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-brand-light"
-        />
-        <button onClick={submit} disabled={searchMut.isPending || !query.trim()}
+      <div className="flex gap-2 mb-6 relative" ref={searchBoxRef}>
+        <div className="flex-1 relative">
+          <input
+            value={query}
+            onChange={e => { setQuery(e.target.value); setShowSuggestions(true); }}
+            onFocus={() => setShowSuggestions(true)}
+            onKeyDown={e => { if (e.key === "Enter") submit(); if (e.key === "Escape") setShowSuggestions(false); }}
+            placeholder="Search for an artist…"
+            autoComplete="off"
+            className="w-full bg-surface-raised border border-purple-900/40 rounded-lg px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-brand-light"
+          />
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="absolute z-20 top-full mt-1 w-full max-h-72 overflow-y-auto bg-surface-raised border border-purple-900/40 rounded-lg shadow-xl">
+              {suggestions.map(s => (
+                <button
+                  key={s.musicbrainz_id || s.artist_name}
+                  onClick={() => submit(s.artist_name)}
+                  className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-white/5 transition-colors border-b border-purple-900/10 last:border-0"
+                >
+                  {s.image_url ? (
+                    <img src={s.image_url} alt="" className="w-8 h-8 rounded object-cover shrink-0 bg-surface" />
+                  ) : (
+                    <div className="w-8 h-8 rounded shrink-0 bg-surface flex items-center justify-center">
+                      <Music2 size={14} className="text-slate-600" />
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm text-white truncate">{s.artist_name}</p>
+                    {s.genres.length > 0 && (
+                      <p className="text-xs text-slate-500 truncate">{s.genres.join(", ")}</p>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button onClick={() => submit()} disabled={searchMut.isPending || !query.trim()}
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-brand/30 text-brand-light text-sm hover:bg-brand/40 disabled:opacity-50">
           <Search size={14} /> {searchMut.isPending ? "Searching…" : "Search"}
         </button>

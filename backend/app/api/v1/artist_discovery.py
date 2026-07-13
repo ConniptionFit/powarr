@@ -197,6 +197,30 @@ class RelatedSearchOut(BaseModel):
     results: list[RelatedArtistOut] = []
 
 
+class ArtistNameMatchOut(BaseModel):
+    artist_name: str
+    musicbrainz_id: Optional[str] = None
+    image_url: Optional[str] = None
+    genres: list[str] = []
+
+
+class ArtistNameSearchOut(BaseModel):
+    ok: bool
+    message: str = ""
+    results: list[ArtistNameMatchOut] = []
+
+
+@router.get("/related/search-names", response_model=ArtistNameSearchOut)
+async def related_search_names(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(8, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """Name-completion typeahead for the Related Artists search box — pick the
+    right artist before running the (much slower) similar-artists search."""
+    return await service.search_artist_names(db, q, limit=limit)
+
+
 @router.get("/related", response_model=RelatedSearchOut)
 async def related(
     artist: str = Query(..., min_length=1),

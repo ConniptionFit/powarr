@@ -108,7 +108,7 @@ export default function RecentDownloads() {
           reimportMut.mutate({ sourceApp, downloadId, matchedId })}
       />
 
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
+      <div className="flex items-center gap-2 mb-5 flex-wrap">
         <div className="relative">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
           <input

@@ -137,6 +137,12 @@ async def run_generate(body: dict = Body(default={})):
     return await playlist_generator.generate_candidates(genre)
 
 
+@router.post("/clear-suggestions")
+async def clear_suggestions():
+    """Bulk-remove every not-yet-approved Suggested playlist in one action."""
+    return await playlist_generator.clear_suggestions()
+
+
 @router.post("/candidates/{candidate_id}/accept")
 async def accept(candidate_id: int):
     result = await playlist_generator.accept_candidate(candidate_id)

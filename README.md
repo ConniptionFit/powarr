@@ -171,7 +171,10 @@ Artists** recommendations (in addition to Last.fm) when the seed artist is in yo
 with a colored badge per source on each result card so you can see which service(s) surfaced it.
 **v0.50.1**: a search now shows a progress card in the corner notification tray (candidates found
 so far / total) instead of just a static "Searching…" button, since enrichment can take 15+
-seconds for a busy query.
+seconds for a busy query. **v0.74.0**: the search box is now a **typeahead** — after two
+characters it shows matching artist names (thumbnail + genres) in a dropdown below the box via
+Last.fm's name-completion search, so you can pick the exact artist before running the slower
+similar-artists search instead of guessing at spelling.
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
 **drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is
@@ -181,6 +184,10 @@ Optional **sonic similarity track bias** (off by default, requires Plex Pass + S
 having run on your Music library) prefers tracks close to the playlist's most recently added
 track — via Plex's own "Sonically Similar" analysis — when trimming an artist's tracks down to
 the playlist's max size; never changes which artists are included, only which of their tracks.
+**v0.74.0**: fixed a real bug where Approving a **playlist template** or **related-artist seed**
+playlist synced zero tracks to Plex (artist resolution never worked for those two playlist
+kinds); the page also gained a **Clear Suggestions** button to bulk-remove every not-yet-approved
+draft in one action, and dropped the redundant refresh button next to Generate Now.
 
 ## Configuration Notes
 

@@ -63,6 +63,21 @@ class LastFmIntegration(BaseIntegration):
             similar = ((data.get("similarartists") or {}).get("artist")) or []
             return similar if isinstance(similar, list) else [similar]
 
+    async def search_artists(self, query: str, limit: int = 8) -> list[dict]:
+        """artist.search — name-completion lookup, distinct from
+        artist.getsimilar (which needs an exact/autocorrected name to already
+        resolve). Response includes a small thumbnail image directly, no
+        separate enrichment call needed."""
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.get(_API, params=self._params(
+                "artist.search", artist=query, limit=limit))
+            r.raise_for_status()
+            data = r.json()
+            if "error" in data:
+                return []
+            matches = (((data.get("results") or {}).get("artistmatches") or {}).get("artist")) or []
+            return matches if isinstance(matches, list) else [matches]
+
     async def get_top_tags(self, artist: str, mbid: str | None = None) -> list[str]:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             r = await client.get(_API, params=self._params(

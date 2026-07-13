@@ -12,6 +12,7 @@ export default function AreaTabs() {
         <NavLink
           key={screen.path}
           to={screen.path}
+          end
           className={({ isActive }) =>
             `px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
               isActive
