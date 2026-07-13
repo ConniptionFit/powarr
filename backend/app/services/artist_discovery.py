@@ -853,12 +853,23 @@ async def run_full_discovery_cycle(db=None, task_id: str | None = None) -> dict[
                            f"({sync.get('message')}) — continuing with existing Qdrant state")
         tasks.update_task(task_id, message="Ingesting Last.fm scrobble history…")
         ingest = await ingest_scrobbles(db, cfg)
+        # Commit between phases rather than only once at the very end — each phase
+        # below makes its own sequence of external Last.fm/Ollama/Qdrant/Lidarr calls
+        # (ingest_scrobbles alone can loop over dozens of artists with zero commits of
+        # its own), and holding the session's transaction open across all four phases
+        # is the same held-transaction anti-pattern already fixed in the sync phase
+        # above and in generate_candidates() (v0.74.1) — confirmed live (idle-in-
+        # transaction sessions on "SELECT app_settings…", health endpoint timing out).
+        db.commit()
         tasks.update_task(task_id, message="Running taste-centroid discovery…")
         centroid = await run_centroid_discovery(db, cfg)
+        db.commit()
         tasks.update_task(task_id, message="Expanding related-artist graph…")
         graph = await run_graph_sync(db, cfg)
+        db.commit()
         tasks.update_task(task_id, message="Enriching candidate images/bios…")
         await re_enrich_missing(db)
+        db.commit()
         found = centroid.get("candidates", 0) + graph.get("candidates", 0)
         added = graph.get("promoted", 0)
         run.candidates_found = found
