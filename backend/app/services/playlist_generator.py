@@ -561,6 +561,15 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
             tracks_added += added
             synced += int(did_sync)
             pruned_total += pruned
+            # Commit per-group rather than once at the end of the whole run — each
+            # group's _upsert_playlist_group can make several external Qdrant/Ollama
+            # calls (LLM playlist naming, sonic bias), so a single end-of-run commit
+            # held one DB transaction open for the entire pass. On a large taste
+            # library that's many minutes; if a call in a later group ever hangs, the
+            # transaction never resolves and blocks any concurrent writer racing on
+            # the same unique genre_tag (real incident, 2026-07-13 — a stuck run left
+            # the pool starved and the health check timing out for 45+ minutes).
+            db.commit()
 
         # SP-12 — named intent templates, each a playlist generated from the
         # UNION of several genres. Only on a full pass (genre is None) — a
@@ -579,6 +588,7 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                 tracks_added += added
                 synced += int(did_sync)
                 pruned_total += pruned
+                db.commit()
 
         # SP-09 — related-artist generation axis: a playlist seeded from one
         # owned artist plus its Last.fm-similar artists that are also
@@ -596,8 +606,8 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                 tracks_added += added
                 synced += int(did_sync)
                 pruned_total += pruned
+                db.commit()
 
-        db.commit()
         return {
             "ok": True,
             "message": "ok",
