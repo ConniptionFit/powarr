@@ -378,6 +378,9 @@ export interface NotificationSettings {
   digest_include_artists: boolean;
   digest_include_playlists: boolean;
   digest_include_cleanup: boolean;
+  discord_enabled: boolean;
+  discord_webhook_url: string;   // blank on read — leave blank on save to keep the stored value
+  discord_webhook_url_set: boolean;
 }
 
 export const settingsApi = {

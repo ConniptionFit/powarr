@@ -411,6 +411,15 @@ class NotificationSettings(BaseModel):
     digest_include_artists: bool = True
     digest_include_playlists: bool = True
     digest_include_cleanup: bool = True
+    # Discord webhook channel (NOTIF-01, v0.76.0) — a second delivery channel
+    # alongside ntfy, same event classes (scan summary, actionable
+    # Accept/Reject links, weekly digest). discord_webhook_url is stored
+    # Fernet-encrypted (same secret_box pattern as QdrantSettings.api_key)
+    # since anyone holding the URL can post to the channel — never
+    # round-tripped in plaintext over the settings API, see
+    # NotificationSettingsOut in api/v1/settings.py.
+    discord_enabled: bool = False
+    discord_webhook_url: str = ""
 
 
 class IntegrationConfig(BaseModel):

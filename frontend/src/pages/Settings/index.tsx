@@ -1986,7 +1986,7 @@ function NotificationsSection() {
     <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
       <div className="flex items-center gap-2 pt-5 pb-3">
         <Bell size={14} className="text-brand-light" />
-        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Notifications (ntfy)</h2>
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Notifications (ntfy + Discord)</h2>
         {msg && <span className="text-xs text-slate-300 ml-auto">{msg}</span>}
       </div>
 
@@ -2086,6 +2086,24 @@ function NotificationsSection() {
               </div>
             </>
           )}
+        </div>
+        <div className="pt-2 border-t border-purple-900/20">
+          <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={cfg.discord_enabled}
+                   onChange={e => setCfg(c => c ? { ...c, discord_enabled: e.target.checked } : c)}
+                   className="accent-purple-500" />
+            Discord webhook (NOTIF-01) — same events, alongside ntfy
+          </label>
+          <p className="text-slate-500 text-xs mt-1 mb-2">
+            Sends the same scan summary / actionable-suggestion / weekly-digest notifications to a Discord channel via an Incoming Webhook. Accept/Reject show as clickable links in the embed rather than native buttons (Discord webhooks have no interactive-component support).
+          </p>
+          <div>
+            <label className="text-xs text-slate-400 mb-1 block">Webhook URL</label>
+            <input type="password" placeholder={cfg.discord_webhook_url_set ? "•••••••••••••••• (leave blank to keep)" : "https://discord.com/api/webhooks/..."}
+                   value={cfg.discord_webhook_url}
+                   onChange={e => setCfg(c => c ? { ...c, discord_webhook_url: e.target.value } : c)}
+                   className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600" />
+          </div>
         </div>
         <div className="flex gap-2">
           <button

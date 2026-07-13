@@ -244,22 +244,39 @@ def update_sync(body: SyncSettings, db: Session = Depends(get_db)):
     return body
 
 
-@router.get("/notifications", response_model=NotificationSettings)
+class NotificationSettingsOut(NotificationSettings):
+    discord_webhook_url_set: bool = False
+
+
+@router.get("/notifications", response_model=NotificationSettingsOut)
 def get_notifications(db: Session = Depends(get_db)):
-    return _get_json_setting(db, "notifications", NotificationSettings)
+    cfg = _get_json_setting(db, "notifications", NotificationSettings)
+    out = NotificationSettingsOut(**cfg.model_dump())
+    out.discord_webhook_url_set = bool(cfg.discord_webhook_url)
+    out.discord_webhook_url = ""
+    return out
 
 
-@router.put("/notifications", response_model=NotificationSettings)
+@router.put("/notifications", response_model=NotificationSettingsOut)
 def update_notifications(body: NotificationSettings, db: Session = Depends(get_db)):
+    from app.services.secret_box import encrypt
+    current = _get_json_setting(db, "notifications", NotificationSettings)
+    webhook = current.discord_webhook_url
+    if (body.discord_webhook_url or "").strip():
+        webhook = encrypt(body.discord_webhook_url) or body.discord_webhook_url
+    body.discord_webhook_url = webhook
     _put_json_setting(db, "notifications", body)
-    return body
+    out = NotificationSettingsOut(**body.model_dump())
+    out.discord_webhook_url_set = bool(webhook)
+    out.discord_webhook_url = ""
+    return out
 
 
 @router.post("/notifications/test")
 async def test_notification(db: Session = Depends(get_db)):
     from app.services import notifier
     ok = await notifier.notify(db, "Powarr test", "Notifications are working 🎉", tags="tada")
-    return {"ok": ok, "message": "Sent" if ok else "Failed — check URL/topic and that notifications are enabled"}
+    return {"ok": ok, "message": "Sent" if ok else "Failed — check ntfy/Discord config and that at least one channel is enabled"}
 
 
 @router.post("/ollama/refine-prompt")

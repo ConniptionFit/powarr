@@ -30,7 +30,7 @@ logger = logging.getLogger("powarr")
 # AppSetting value's nested structure — so any future settings class that
 # adds a field named like a credential is protected automatically, with no
 # export-side allowlist to remember to update.
-_SECRET_KEY_RE = re.compile(r"api[-_]?key|password|passwd|secret|token", re.IGNORECASE)
+_SECRET_KEY_RE = re.compile(r"api[-_]?key|password|passwd|secret|token|webhook", re.IGNORECASE)
 _REDACTED = "***REDACTED***"
 
 
