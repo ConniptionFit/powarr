@@ -116,16 +116,33 @@ def merge_genre_groups(raw_by_genre: dict[str, list[dict]],
     return out
 
 
+def _norm_title(name: str) -> str:
+    return " ".join((name or "").strip().lower().split())
+
+
 async def _playlist_title(db, cfg: SmartPlaylistSettings, genre: str,
-                          artist_names: list[str]) -> str:
+                          artist_names: list[str], used_names: set[str] | None = None) -> str:
+    """SP-11 — `used_names` (normalized) are titles already claimed earlier in
+    this same generation run or by an existing playlist. One retry with the
+    same avoid-list on an exact collision; falls back to the deterministic
+    `Powarr · {genre}` name (always unique — genre/template/seed keys are
+    themselves unique) rather than looping indefinitely."""
     fallback = f"Powarr · {genre}"
+    used_names = used_names if used_names is not None else set()
     if not cfg.llm_playlist_names:
         return fallback
-    name = await suggest_playlist_name_for(db, genre, artist_names)
-    return name or fallback
+    avoid = sorted(used_names)
+    for _ in range(2):
+        name = await suggest_playlist_name_for(db, genre, artist_names, avoid=avoid)
+        if not name:
+            break
+        if _norm_title(name) not in used_names:
+            return name
+    return fallback
 
 
-async def suggest_playlist_name_for(db, genre: str, artist_names: list[str] | None = None) -> str | None:
+async def suggest_playlist_name_for(db, genre: str, artist_names: list[str] | None = None,
+                                    avoid: list[str] | None = None) -> str | None:
     try:
         from app.schemas.settings import OllamaSettings
         row = db.query(AppSetting).filter_by(key="ollama").first()
@@ -137,7 +154,8 @@ async def suggest_playlist_name_for(db, genre: str, artist_names: list[str] | No
             ollama.host, ollama.model, genre, artist_names or [],
             api_style=ollama.api_style, model_size=ollama.model_size,
             keep_alive_minutes=ollama.keep_alive_minutes,
-            forbid_thinking=getattr(ollama, "forbid_thinking", True))
+            forbid_thinking=getattr(ollama, "forbid_thinking", True),
+            avoid=avoid)
     except Exception as e:
         logger.info(f"Smart playlist LLM naming failed for '{genre}': {e}")
         return None
@@ -460,14 +478,21 @@ async def _artists_for_related_seed(db, cfg: SmartPlaylistSettings, seed_artist:
 
 
 async def _upsert_playlist_group(db, cfg: SmartPlaylistSettings, plex, group_key: str,
-                                 artists: list[dict], *, is_template: bool = False
+                                 artists: list[dict], *, is_template: bool = False,
+                                 used_names: set[str] | None = None
                                  ) -> tuple[bool, int, bool, int]:
     """Create-or-sync one genre/template playlist group. Shared by the
     per-genre loop and the SP-12 per-template loop below — only the source of
-    `artists` differs. Returns (created, tracks_added, synced, pruned)."""
+    `artists` differs. Returns (created, tracks_added, synced, pruned).
+
+    `used_names` (SP-11, normalized-lowercase) is mutated in place as new
+    playlists are created, so later groups in the same generation run see
+    titles chosen earlier in that same run, not just pre-existing ones."""
     pl = db.query(SmartPlaylist).filter_by(genre_tag=group_key).first()
     if not pl:
-        title = await _playlist_title(db, cfg, group_key, [a["artist_name"] for a in artists])
+        title = await _playlist_title(db, cfg, group_key, [a["artist_name"] for a in artists], used_names)
+        if used_names is not None:
+            used_names.add(_norm_title(title))
         pl = SmartPlaylist(genre_tag=group_key, title=title, enabled=True, is_template=is_template)
         db.add(pl)
         db.flush()
@@ -523,8 +548,15 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
         pruned_total = 0
         plex = _plex_client(db)
 
+        # SP-11 — seed with every existing playlist's title (normalized) so a
+        # new one this run avoids repeating one from a past run too, then keep
+        # adding each newly chosen title as this run goes so later groups in
+        # the SAME run see earlier ones (mutated in place by _upsert_playlist_group).
+        used_names = {_norm_title(t) for (t,) in db.query(SmartPlaylist.title).all()}
+
         for g, artists in by_genre.items():
-            created, added, did_sync, pruned = await _upsert_playlist_group(db, cfg, plex, g, artists)
+            created, added, did_sync, pruned = await _upsert_playlist_group(
+                db, cfg, plex, g, artists, used_names=used_names)
             created_playlists += int(created)
             tracks_added += added
             synced += int(did_sync)
@@ -542,7 +574,7 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                 if len(artists) < cfg.min_artists_per_genre:
                     continue
                 created, added, did_sync, pruned = await _upsert_playlist_group(
-                    db, cfg, plex, template_name, artists, is_template=True)
+                    db, cfg, plex, template_name, artists, is_template=True, used_names=used_names)
                 created_playlists += int(created)
                 tracks_added += added
                 synced += int(did_sync)
@@ -559,7 +591,7 @@ async def generate_candidates(genre: str | None = None) -> dict[str, Any]:
                 if len(artists) < cfg.min_artists_per_genre:
                     continue
                 created, added, did_sync, pruned = await _upsert_playlist_group(
-                    db, cfg, plex, playlist_name, artists, is_template=True)
+                    db, cfg, plex, playlist_name, artists, is_template=True, used_names=used_names)
                 created_playlists += int(created)
                 tracks_added += added
                 synced += int(did_sync)

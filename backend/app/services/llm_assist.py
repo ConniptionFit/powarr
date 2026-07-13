@@ -1138,16 +1138,25 @@ async def suggest_playlist_name(host: str, model: str, genre: str,
                                 artists: list[str] | None = None,
                                 api_style: str = "ollama", model_size: str = "medium",
                                 keep_alive_minutes: int = 10,
-                                forbid_thinking: bool = True) -> Optional[str]:
+                                forbid_thinking: bool = True,
+                                avoid: list[str] | None = None) -> Optional[str]:
     """SP-04/SP-08 — short Spotify-style display name for a smart playlist.
     Returns the name or None (caller falls back to 'Powarr · {genre}'). Fails soft;
-    minimal context for lightweight local models — genre + up to 5 artists."""
+    minimal context for lightweight local models — genre + up to 5 artists.
+
+    `avoid` (SP-11): names already used earlier in the same generation run (or
+    by existing playlists), so a batch that creates several new playlists at
+    once doesn't hand the user near-identical titles. Soft nudge only — the
+    caller still checks the result and retries/falls back on an exact
+    collision; this just steers the model away from repeating itself."""
     sample = ", ".join((artists or [])[:5])
+    avoid_list = ", ".join((avoid or [])[:10])
     prompt = (
         f"Invent a fun, descriptive Spotify-style playlist title for {genre} music."
         + (f" Artists include: {sample}." if sample else "")
         + " 2-5 words, catchy and specific (like 'Midnight Drive' or 'Kitchen Disco'). "
         "No word 'playlist', no quotes. Reply with ONLY the title."
+        + (f" Do not reuse or closely resemble these already-used titles: {avoid_list}." if avoid_list else "")
         + (" Do not think out loud." if forbid_thinking else "")
     )
     raw = await _generate(host, model, prompt, api_style, json_format=False,
