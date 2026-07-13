@@ -66,6 +66,17 @@ def genres(data: dict[str, Any]) -> list[str]:
     return [g["name"] for g in (data.get("genres") or []) if g.get("name")][:8]
 
 
+def era_decade(data: dict[str, Any]) -> str | None:
+    """SP-15 — bucket life-span.begin into a decade label ("1990s") for era
+    tagging. Distinct from life_span_text() (a display string like "1990-2005")
+    — this is a coarse, groupable key an artist's Qdrant point can carry."""
+    begin = ((data.get("life-span") or {}).get("begin") or "")[:4]
+    if not begin.isdigit():
+        return None
+    decade = (int(begin) // 10) * 10
+    return f"{decade}s"
+
+
 def wikipedia_title(data: dict[str, Any]) -> tuple[str, str] | None:
     """Find a direct wikipedia relation among url-rels; returns (lang, title) or None.
     Rare in practice — MusicBrainz deprecated direct wikipedia rels in favor of

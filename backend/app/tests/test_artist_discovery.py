@@ -110,6 +110,23 @@ class MusicBrainzLifeSpanTests(unittest.TestCase):
         self.assertIsNone(musicbrainz.life_span_text({}))
 
 
+class MusicBrainzEraDecadeTests(unittest.TestCase):
+    """SP-15 — era_decade() buckets life-span.begin into a decade label."""
+
+    def test_buckets_begin_year_into_decade(self):
+        self.assertEqual(musicbrainz.era_decade({"life-span": {"begin": "1994-03-01"}}), "1990s")
+
+    def test_exact_decade_start_year(self):
+        self.assertEqual(musicbrainz.era_decade({"life-span": {"begin": "2000-01-01"}}), "2000s")
+
+    def test_missing_begin_returns_none(self):
+        self.assertIsNone(musicbrainz.era_decade({"life-span": {}}))
+        self.assertIsNone(musicbrainz.era_decade({}))
+
+    def test_non_numeric_begin_returns_none(self):
+        self.assertIsNone(musicbrainz.era_decade({"life-span": {"begin": ""}}))
+
+
 class MusicBrainzGenresTests(unittest.TestCase):
     def test_extracts_genre_names_capped_at_eight(self):
         data = {"genres": [{"name": f"genre{i}"} for i in range(12)]}
@@ -322,6 +339,35 @@ class MatchRatingSortTests(unittest.TestCase):
             DiscoveredArtist(artist_name="StrongGraph", source="graph", associated_seed_mbids='["a","b","c","d","e"]'),
         ]
         self.assertEqual(self._sorted_names(rows), ["WeakCentroid", "StrongGraph"])
+
+
+class ClassifyMoodTagsTests(unittest.TestCase):
+    """SP-15 — classify_mood_tags() pulls the mood-reading subset out of an
+    artist's already-fetched Last.fm tags, no second API call."""
+
+    def test_extracts_known_mood_keywords(self):
+        from app.services.artist_discovery import classify_mood_tags
+        tags = ["Rock", "Chill", "Alternative", "Energetic"]
+        self.assertEqual(classify_mood_tags(tags), ["Chill", "Energetic"])
+
+    def test_case_insensitive_match(self):
+        from app.services.artist_discovery import classify_mood_tags
+        self.assertEqual(classify_mood_tags(["MELANCHOLIC"]), ["MELANCHOLIC"])
+
+    def test_no_mood_tags_returns_empty_list(self):
+        from app.services.artist_discovery import classify_mood_tags
+        self.assertEqual(classify_mood_tags(["Rock", "Alternative", "90s"]), [])
+
+    def test_none_and_empty_input_safe(self):
+        from app.services.artist_discovery import classify_mood_tags
+        self.assertEqual(classify_mood_tags(None), [])
+        self.assertEqual(classify_mood_tags([]), [])
+
+    def test_dedupes_exact_repeated_tag(self):
+        # Same-case dedup only, matching clean_tags()'s existing precedent —
+        # Last.fm returns one canonical casing per tag in practice.
+        from app.services.artist_discovery import classify_mood_tags
+        self.assertEqual(classify_mood_tags(["chill", "chill"]), ["chill"])
 
 
 class BlacklistTests(unittest.TestCase):

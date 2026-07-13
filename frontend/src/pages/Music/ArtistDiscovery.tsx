@@ -12,7 +12,7 @@ interface Candidate {
   genres: string[];
   mood_tags: string[];
   era: string | null;
-  source: "centroid" | "centroid_recent" | "graph";
+  source: string; // "centroid" | "centroid_recent" | "graph" | "centroid_mood_{slug}" (AD-19)
   similarity_score: number | null;
   associated_seed_mbids: string[];
   seed_artist_name: string | null;
@@ -57,12 +57,18 @@ const api = {
 };
 
 function whySuggested(c: Candidate): string {
-  if (c.source === "centroid" || c.source === "centroid_recent") {
+  if (c.source === "centroid" || c.source === "centroid_recent" || c.source.startsWith("centroid_mood_")) {
     const pct = c.similarity_score != null ? `${Math.round(c.similarity_score * 100)}% match to` : "Close match to";
     // AD-17 — a second discovery lane seeded from what you've actually been
     // listening to lately, distinct from the all-time most-played centroid.
-    const profile = c.source === "centroid_recent"
-      ? "your recent listening" : "your overall taste profile, built from your most-played artists";
+    // AD-19 — a third kind of lane, one per configured mood tag (SP-15).
+    let profile = "your overall taste profile, built from your most-played artists";
+    if (c.source === "centroid_recent") {
+      profile = "your recent listening";
+    } else if (c.source.startsWith("centroid_mood_")) {
+      const mood = c.source.slice("centroid_mood_".length).replace(/_/g, " ");
+      profile = `artists tagged "${mood}" in your library`;
+    }
     return `${pct} ${profile}`;
   }
   const names = c.seed_artist_names.length > 0

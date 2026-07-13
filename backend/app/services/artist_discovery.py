@@ -36,6 +36,14 @@ def _norm_artist(name: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _normalize_mood_key(mood: str) -> str:
+    """AD-19 — a configured mood ("Feel Good") into a stable source-tag suffix
+    ("feel_good"), so DiscoveredArtist.source stays a clean identifier."""
+    t = (mood or "").strip().lower()
+    t = re.sub(r"[^\w]+", "_", t)
+    return t.strip("_") or "mood"
+
+
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 # Placeholder values Lidarr/MusicBrainz/Last.fm metadata gaps produce — a literal
@@ -56,6 +64,35 @@ def clean_tags(tags: list[str] | None) -> list[str]:
 def clean_era(era: str | None) -> str | None:
     s = (era or "").strip()
     return None if s.lower() in _PLACEHOLDER_TAGS else s
+
+
+# SP-15 — Last.fm's artist.gettoptags returns freeform user tags with no
+# genre/mood distinction (a "genres" list already carries all of them). This
+# is a curated keyword set of tags that describe a listening mood/vibe rather
+# than a genre, matched case-insensitively against those same already-fetched
+# tags — purely a classification of existing data, never a second API call.
+# Left as a static list rather than a user-editable map (unlike genre_aliases)
+# since these aren't a taxonomy judgment call the way genre equivalence is.
+_MOOD_KEYWORDS = {
+    "chill", "chillout", "mellow", "relaxing", "relax", "calm", "calming",
+    "sad", "sadcore", "melancholy", "melancholic", "bittersweet", "moody",
+    "happy", "feel good", "feelgood", "uplifting", "upbeat", "energetic",
+    "aggressive", "angry", "dark", "dreamy", "ethereal", "atmospheric",
+    "romantic", "sensual", "party", "fun", "introspective", "nostalgic",
+    "hopeful", "ambient", "soothing", "peaceful", "intense", "epic",
+    "dramatic", "groovy", "driving", "motivational", "late night",
+}
+
+
+def classify_mood_tags(tags: list[str] | None) -> list[str]:
+    """Subset of an artist's Last.fm tags that read as a mood/vibe rather than
+    a genre. Pure and cheap — no I/O, safe to recompute every sync cycle."""
+    out: list[str] = []
+    for t in tags or []:
+        s = (t or "").strip()
+        if s and s.lower() in _MOOD_KEYWORDS and s not in out:
+            out.append(s)
+    return out
 
 
 async def _resolve_seed_names(qdrant, seed_keys: list[str] | None) -> list[str]:
@@ -266,7 +303,7 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             "musicbrainz_id": mbid or "",
             "artist_name": name,
             "genres": tags,
-            "mood_tags": [],
+            "mood_tags": classify_mood_tags(tags),
             "era": "",
             "is_monitored_lidarr": False,
             "plex_fulfillment": "none",
@@ -365,6 +402,25 @@ async def compute_recent_taste_centroid(db, lookback_days: int) -> list[float] |
     return _average_vector(vectors)
 
 
+async def compute_mood_centroid(db, mood: str) -> list[float] | None:
+    """AD-19 — a discovery lane sliced by one configured mood tag, distinct
+    from both the all-time and recently-listened lanes. Averages only over
+    discovered points whose SP-15 mood_tags contains this mood (case-
+    insensitive) — fail-soft to None (caller skips the lane) whenever nothing
+    in the taste space carries this mood tag yet."""
+    qdrant = _qdrant(db)
+    if not qdrant or not (mood or "").strip():
+        return None
+    target = mood.strip().lower()
+    points = await _discovered_points(qdrant)
+    mood_points = [
+        p for p in points
+        if target in {(m or "").strip().lower() for m in (p.get("payload") or {}).get("mood_tags") or []}
+    ]
+    vectors = [p["vector"] for p in mood_points if p.get("vector")]
+    return _average_vector(vectors)
+
+
 async def _run_centroid_lane(db, qdrant, centroid: list[float], cfg: ArtistDiscoverySettings,
                              source_label: str) -> int:
     """One discovery-lane search + candidate-creation pass. Shared by the
@@ -424,11 +480,30 @@ async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, 
         if recent_centroid:
             recent_created = await _run_centroid_lane(db, qdrant, recent_centroid, cfg, "centroid_recent")
 
+    # AD-19 — one lane per user-configured mood tag (empty by default), each
+    # sliced from the SP-15 mood_tags now populated on discovered points.
+    # Purely additive like the recent-taste lane above: a mood with nothing
+    # in the taste space yet just contributes 0 candidates this run.
+    mood_created = 0
+    mood_breakdown: list[str] = []
+    for mood in cfg.mood_discovery_lanes or []:
+        mood_centroid = await compute_mood_centroid(db, mood)
+        if not mood_centroid:
+            continue
+        n = await _run_centroid_lane(db, qdrant, mood_centroid, cfg, f"centroid_mood_{_normalize_mood_key(mood)}")
+        mood_created += n
+        if n:
+            mood_breakdown.append(f"{n} {mood}")
+
     db.commit()
-    total = created + recent_created
+    total = created + recent_created + mood_created
     message = f"{total} new candidate(s)"
+    extras = []
     if recent_created:
-        message += f" ({created} all-time, {recent_created} recent-taste)"
+        extras.append(f"{recent_created} recent-taste")
+    extras.extend(mood_breakdown)
+    if extras:
+        message += f" ({created} all-time, {', '.join(extras)})"
     return {"ok": True, "message": message, "candidates": total}
 
 
@@ -564,7 +639,7 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                     continue
                 epayload = {
                     "musicbrainz_id": rmbid or "", "artist_name": rname, "genres": tags,
-                    "mood_tags": [], "era": "", "is_monitored_lidarr": False,
+                    "mood_tags": classify_mood_tags(tags), "era": "", "is_monitored_lidarr": False,
                     "plex_fulfillment": "none", "in_lidarr": False, "in_plex": False,
                     "total_plays_global": 0,
                     "last_played_timestamp": 0, "is_discovered": False,
@@ -840,6 +915,16 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
             except Exception as e:
                 logger.warning(f"Artist Discovery sync: Last.fm top artists fetch failed: {e}")
 
+        # SP-15 — mood_tags is a pure reclassification of the genres already on
+        # the point (no I/O), so it's cheap to keep fresh on every point every
+        # cycle. era needs a MusicBrainz life-span lookup, which is
+        # rate-limited (~1 req/sec) — bounded per run like re_enrich_missing's
+        # own backfill, so a large library just takes a few cycles rather than
+        # one run holding this sync open for a very long time.
+        from app.integrations import musicbrainz
+        _ERA_BACKFILL_CAP = 20
+        era_backfilled = 0
+
         updated = 0
         offset = None
         pages = 0
@@ -860,10 +945,20 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
                 updates: dict[str, Any] = {
                     "is_monitored_lidarr": is_monitored, "plex_fulfillment": fulfillment,
                     "in_lidarr": bool(lidarr_artist), "in_plex": name_key in plex_names,
+                    "mood_tags": classify_mood_tags(payload.get("genres")),
                 }
                 plays = play_counts.get(name_key)
                 if plays is not None:
                     updates["total_plays_global"] = max(payload.get("total_plays_global") or 0, plays)
+                if not payload.get("era") and mbid and era_backfilled < _ERA_BACKFILL_CAP:
+                    era_backfilled += 1
+                    try:
+                        mb = await musicbrainz.get_artist(mbid)
+                        decade = musicbrainz.era_decade(mb) if mb else None
+                        if decade:
+                            updates["era"] = decade
+                    except Exception as e:
+                        logger.warning(f"Artist Discovery sync: MusicBrainz era lookup failed for {mbid}: {e}")
                 try:
                     await qdrant.set_payload([p["id"]], updates)
                     updated += 1

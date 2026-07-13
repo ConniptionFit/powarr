@@ -18,6 +18,7 @@ interface ADSettings {
   auto_promote: boolean;
   thumbnail_retention_days: number;
   recent_taste_lane_enabled: boolean;
+  mood_discovery_lanes: string[];
   root_folder_path: string;
   quality_profile_id: number;
   metadata_profile_id: number;
@@ -145,6 +146,12 @@ function ArtistDiscoverySettingsCard() {
           <input type="checkbox" checked={form.recent_taste_lane_enabled ?? true}
             onChange={e => set("recent_taste_lane_enabled", e.target.checked)} />
           Recent-taste discovery lane
+        </label>
+        <label className={`${labelCls} mt-3 block`}
+          title="AD-19 — one additional discovery lane per mood tag listed here, each averaged only over artists carrying that mood (SP-15's mood tagging, derived from Last.fm tags). Empty by default — pick moods that matter to you, e.g. 'chill, energetic'.">
+          Mood discovery lanes <span className="text-slate-600">(comma-separated, e.g. "chill, energetic")</span>
+          <input className={inputCls} value={(form.mood_discovery_lanes || []).join(", ")}
+            onChange={e => set("mood_discovery_lanes", e.target.value.split(",").map(m => m.trim()).filter(Boolean))} />
         </label>
       </div>
 

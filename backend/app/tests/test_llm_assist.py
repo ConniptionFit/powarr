@@ -162,6 +162,15 @@ class TestPromptShapes(unittest.TestCase):
         self.assertIn("uploader", p)
         self.assertIn("App check", p)
 
+    def test_readarr_guidance_references_app_check_line(self):
+        # LLM-05 — readarr's guidance now defers to the App check line the same
+        # way lidarr's does, so a small model can't contradict the deterministic
+        # author/book containment check.
+        p = build_review_prompt("", "r", "c", "x", "d", source_app="readarr")
+        self.assertIn("BOOK (Readarr) match", p)
+        self.assertIn("App check", p)
+        self.assertIn("Author", p)
+
     def test_sonarr_guidance_treats_bare_series_candidate_as_normal(self):
         p = build_review_prompt("", "r", "c", "x", "d", source_app="sonarr")
         self.assertIn("That is normal, not a mismatch", p)
@@ -262,6 +271,60 @@ class TestMusicMatchEvidence(unittest.TestCase):
             "Enter_Shikari-Take_To_The_Skies-WEB-FLAC-2007-RUIDOS", "Cybotron - Enter")
         self.assertEqual(grades["artist"], "no")
         self.assertEqual(grades["album"], "strict")  # 'Enter' is a real word in the name
+
+
+class TestReadarrAuthorBookEvidence(unittest.TestCase):
+    """LLM-05 — same containment evidence + enforcement as lidarr, applied to
+    readarr's 'Author - Book' candidates via custom labels. The underlying
+    check is identical (music_title_checks is already app-agnostic); only the
+    surfaced wording changes."""
+
+    def test_evidence_uses_author_book_labels(self):
+        ev = music_match_evidence(
+            "Stephen_King-The_Shining-EPUB-2020-GRP", "Stephen King - The Shining",
+            labels=("author", "book"))
+        self.assertIn("author in release name: YES", ev)
+        self.assertIn("book in release name: YES", ev)
+        self.assertNotIn("artist", ev)
+        self.assertNotIn("album", ev)
+
+    def test_wrong_author_reports_no_with_book_labels(self):
+        ev = music_match_evidence(
+            "Brandon_Sanderson-Mistborn-EPUB-2010-GRP", "Stephen King - The Shining",
+            labels=("author", "book"))
+        self.assertIn("author in release name: NO", ev)
+
+    def test_enforce_uses_custom_labels_in_note(self):
+        out = llm_assist.enforce_music_evidence(
+            {"agrees": True, "confidence_adjustment": 0.1, "rationale": "- ok"},
+            (False, True), labels=("author", "book"))
+        self.assertFalse(out["agrees"])
+        self.assertIn("author not found", out["rationale"])
+        self.assertNotIn("artist not found", out["rationale"])
+
+    def test_missing_book_named_with_custom_labels(self):
+        out = llm_assist.enforce_music_evidence(
+            {"agrees": True, "confidence_adjustment": 0.0, "rationale": ""},
+            (True, False), labels=("author", "book"))
+        self.assertIn("book not found", out["rationale"])
+
+    def test_default_labels_unchanged_when_omitted(self):
+        # Existing lidarr call sites don't pass labels — must still read artist/album.
+        ev = music_match_evidence("Prof-Good_Time_Boy-SINGLE-WEB-2026-FATHEAD", "Prof - Good Time Boy")
+        self.assertIn("artist in release name", ev)
+        self.assertIn("album in release name", ev)
+
+
+class TestEvidenceAppsWiring(unittest.TestCase):
+    """LLM-05 — import_matcher's scan/rescore gating now includes readarr
+    alongside lidarr, each with its own label pair."""
+
+    def test_evidence_apps_mapping(self):
+        from app.services.import_matcher import _EVIDENCE_APPS
+        self.assertEqual(_EVIDENCE_APPS["lidarr"], ("artist", "album"))
+        self.assertEqual(_EVIDENCE_APPS["readarr"], ("author", "book"))
+        self.assertNotIn("sonarr", _EVIDENCE_APPS)
+        self.assertNotIn("radarr", _EVIDENCE_APPS)
 
 
 class TestEnforceMusicEvidence(unittest.TestCase):

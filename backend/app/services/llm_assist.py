@@ -260,9 +260,16 @@ _APP_MATCH_GUIDANCE = {
         "'Author - Book'. Do NOT mention anime, episodes, or TV series."
         "\nStrip before judging: format tags (ebook/audiobook/epub/mobi), edition labels, "
         "and uploader tags — never evidence for/against a match."
+        "\nDecide with exactly two checks, same as a music match: do the candidate's "
+        "author words appear in the release name, and do the candidate's book words "
+        "appear in the release name? Compare words only: ignore capitalization, "
+        "punctuation, and separators."
+        "\nIf Context contains an 'App check' line, it reports these two checks computed "
+        "exactly — your two answers MUST match it, even if your own reading differs."
         "\nYear: a missing year on either side is NOT a mismatch."
         "\nDefault to AGREE with the scorer. Reply DISAGREE only for a concrete "
         "contradiction (wrong author or wrong book)."
+        "\nReason: one bullet per check, like: - **Author**: Smith — found in release"
     ),
 }
 _DEFAULT_MATCH_GUIDANCE = _APP_MATCH_GUIDANCE["sonarr"]
@@ -341,29 +348,39 @@ def music_match_checks(release: str, candidate: str) -> Optional[tuple[bool, boo
     return grades["artist"] != "no", grades["album"] != "no"
 
 
-def music_match_evidence(release: str, candidate: str) -> str:
-    """The 'App check' context line for the lidarr judging guidance, or ""."""
+def music_match_evidence(release: str, candidate: str,
+                         labels: tuple[str, str] = ("artist", "album")) -> str:
+    """The 'App check' context line for the lidarr judging guidance, or "".
+
+    `labels` (LLM-05) lets a caller with a different 'X - Y'-shaped candidate
+    reuse the exact same containment check with accurate wording — readarr's
+    'Author - Book' passes ("author", "book"); the check itself is unchanged,
+    only the surfaced text differs."""
     checks = music_match_checks(release, candidate)
     if checks is None:
         return ""
-    artist_found, album_found = checks
-    return (f"App check — candidate artist in release name: "
-            f"{'YES' if artist_found else 'NO'}; "
-            f"candidate album in release name: {'YES' if album_found else 'NO'}")
+    first_found, second_found = checks
+    first_label, second_label = labels
+    return (f"App check — candidate {first_label} in release name: "
+            f"{'YES' if first_found else 'NO'}; "
+            f"candidate {second_label} in release name: {'YES' if second_found else 'NO'}")
 
 
 def enforce_music_evidence(result: Optional[dict],
-                           checks: Optional[tuple[bool, bool]]) -> Optional[dict]:
+                           checks: Optional[tuple[bool, bool]],
+                           labels: tuple[str, str] = ("artist", "album")) -> Optional[dict]:
     """The App check is authoritative in the negative direction (v0.36.2): when
     either containment check failed, an LLM AGREE may not stand — models
     occasionally answer their own inverted question instead of the evidence line.
-    YES/YES is deliberately NOT forced to agree: short album titles can
-    false-positive against years or tags, so an LLM disagree stands there."""
+    YES/YES is deliberately NOT forced to agree: short second-part titles (album,
+    or LLM-05's book) can false-positive against years or tags, so an LLM
+    disagree stands there. `labels` mirrors music_match_evidence()'s param."""
     if not result or not checks or all(checks):
         return result
     if result.get("agrees"):
-        artist_found, _ = checks
-        missing = "artist" if not artist_found else "album"
+        first_found, _ = checks
+        first_label, second_label = labels
+        missing = first_label if not first_found else second_label
         result["agrees"] = False
         try:
             adjustment = float(result.get("confidence_adjustment") or 0.0)

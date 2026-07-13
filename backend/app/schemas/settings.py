@@ -381,6 +381,12 @@ class ArtistDiscoverySettings(BaseModel):
     # more candidates, never removes any) — default on, unlike scoring/
     # auto-resolve-affecting toggles elsewhere in the app.
     recent_taste_lane_enabled: bool = True
+    # AD-19 — one additional discovery lane per configured mood tag (e.g.
+    # ["chill", "energetic"]), each centroid averaged only over discovered
+    # points whose SP-15 mood_tags contain that mood. Empty by default — which
+    # moods are worth a dedicated lane is a taste judgment left to the user,
+    # same "taxonomy left to the user" precedent as Smart Playlists' genre_aliases.
+    mood_discovery_lanes: list[str] = []
 
 
 class NotificationSettings(BaseModel):

@@ -24,6 +24,11 @@ logger = logging.getLogger("powarr")
 
 STUCK_STATES = {"importPending", "importFailed", "importBlocked"}
 OPEN_STATUSES = ("suggested", "auto_resolved", "accepted", "rejected", "orphan_pending")
+# LLM-05 — apps whose candidate is 'X - Y'-shaped (lidarr: Artist - Album,
+# readarr: Author - Book), so the same deterministic containment evidence +
+# negative-direction enforcement (llm_assist.music_match_evidence/
+# enforce_music_evidence) applies to both, just with different labels.
+_EVIDENCE_APPS = {"lidarr": ("artist", "album"), "readarr": ("author", "book")}
 # Scan dedupe additions (v0.44.0): a resolve_failed row already sits in triage, and
 # an orphaned row whose queue entry never left the *arr (still_in_queue) is the same
 # dead download being re-detected — creating a fresh suggestion for either just loops
@@ -1099,8 +1104,9 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             f"Source app: {app_name}",
             f"Queue status: {_queue_messages(rec)[:150]}",
         ]
-        if app_name == "lidarr":
-            evidence = llm_assist.music_match_evidence(raw_title, matched_title)
+        if app_name in _EVIDENCE_APPS:
+            evidence = llm_assist.music_match_evidence(
+                raw_title, matched_title, labels=_EVIDENCE_APPS[app_name])
             if evidence:
                 # Right after the app line so CAP_CONTEXT truncation can't drop it.
                 llm_context_parts.insert(1, evidence)
@@ -1143,10 +1149,10 @@ async def _match_record(app_name: str, rec: dict, history: list[dict], library: 
             **llm_assist.prompt_kwargs(ollama),
             **llm_assist.inference_kwargs(ollama))
         checks = llm_assist.music_match_checks(raw_title, matched_title) \
-            if app_name == "lidarr" else None
+            if app_name in _EVIDENCE_APPS else None
         pre_agrees = llm["agrees"] if llm else None
-        if llm and app_name == "lidarr":
-            llm = llm_assist.enforce_music_evidence(llm, checks)
+        if llm and app_name in _EVIDENCE_APPS:
+            llm = llm_assist.enforce_music_evidence(llm, checks, labels=_EVIDENCE_APPS[app_name])
         if capture.get("replied"):
             # Handed back to the scan loop, which writes the llm_match_log row
             # once the FailedImport row exists (LLM-LOG-01).
@@ -2245,9 +2251,9 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 f"Source app: {row.source_app}",
                 f"Queue error: {(row.message or '')[:200]}",
             ]
-            if row.source_app == "lidarr":
+            if row.source_app in _EVIDENCE_APPS:
                 evidence = llm_assist.music_match_evidence(
-                    row.raw_title, row.matched_title)
+                    row.raw_title, row.matched_title, labels=_EVIDENCE_APPS[row.source_app])
                 if evidence:
                     ctx_parts.insert(1, evidence)
             alts = (meta.get("alternate_titles") or "").strip()
@@ -2271,10 +2277,10 @@ async def _llm_rescore_inner(ids: list[int] | None, limit: int, task_id: str) ->
                 **llm_assist.prompt_kwargs(ollama),
                 **llm_assist.inference_kwargs(ollama))
             checks = llm_assist.music_match_checks(row.raw_title, row.matched_title) \
-                if row.source_app == "lidarr" else None
+                if row.source_app in _EVIDENCE_APPS else None
             pre_agrees = llm["agrees"] if llm else None
-            if llm and row.source_app == "lidarr":
-                llm = llm_assist.enforce_music_evidence(llm, checks)
+            if llm and row.source_app in _EVIDENCE_APPS:
+                llm = llm_assist.enforce_music_evidence(llm, checks, labels=_EVIDENCE_APPS[row.source_app])
             if capture.get("replied"):
                 from app.services import llm_match_log
                 llm_match_log.record(
