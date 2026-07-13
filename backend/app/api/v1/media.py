@@ -295,6 +295,37 @@ def update_arr_link(item_id: int, payload: dict = Body(...), db: Session = Depen
     return {"id": item_id, field: getattr(item, field)}
 
 
+@router.get("/{item_id}/subtitle-warning")
+async def subtitle_warning(item_id: int, db: Session = Depends(get_db)):
+    """INT-01 — on-demand (never automatic) Bazarr subtitle-count lookup ahead of
+    a delete, so orphaned subs don't silently linger unnoticed. Deliberately a
+    separate endpoint rather than folded into build_deletion_preview(), which is
+    explicitly pure/network-free (see services/deletion_preview.py's docstring);
+    this makes exactly one real network call, only when the user asks for it.
+    Read-only against Bazarr — never issues a delete/cleanup call there."""
+    item = db.query(MediaItem).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Media item not found")
+    from app.models.integration import Integration
+    row = db.query(Integration).filter_by(name="bazarr").first()
+    if not row or not row.enabled:
+        return {"available": False, "subtitle_count": None, "message": "Bazarr not configured"}
+    from app.api.v1.integrations import _get_client
+    client = _get_client(row)
+    if item.radarr_id:
+        count = await client.movie_subtitle_count(item.radarr_id)
+    elif item.sonarr_id:
+        count = await client.series_subtitle_count(item.sonarr_id)
+    else:
+        return {"available": False, "subtitle_count": None,
+                "message": "Not linked to a Radarr movie or Sonarr series"}
+    if count is None:
+        return {"available": True, "subtitle_count": None,
+                "message": "Bazarr has no subtitle record for this item"}
+    return {"available": True, "subtitle_count": count,
+            "message": f"Bazarr knows about {count} subtitle file(s) for this item"}
+
+
 @router.post("/llm-run")
 async def media_llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """On-demand LLM deletion rationales. {"ids": [...]} for specific items; omit

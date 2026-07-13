@@ -170,6 +170,12 @@ export const mediaApi = {
     req<Record<string, number | null>>(`/media/${id}/arr-link`, {
       method: "PUT", body: JSON.stringify({ value }),
     }),
+  // INT-01 (v0.77.0) — on-demand Bazarr subtitle-count check ahead of a delete.
+  // Never called automatically (see DeletionPreviewModal) — one real network
+  // call, only when the user asks for it.
+  subtitleWarning: (id: number) =>
+    req<{ available: boolean; subtitle_count: number | null; message: string }>(
+      `/media/${id}/subtitle-warning`),
   explain: (id: number, force = false) =>
     req<{ rationale: string | null; message: string | null; cached: boolean }>(
       `/media/${id}/explain${force ? "?force=true" : ""}`, { method: "POST" }),

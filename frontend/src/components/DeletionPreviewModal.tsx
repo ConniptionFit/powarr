@@ -50,6 +50,9 @@ export default function DeletionPreviewModal({
   confirming: boolean;
 }) {
   const [mode, setMode] = useState<EpisodeDeleteMode>("episode_files");
+  const [subtitleCheck, setSubtitleCheck] = useState<{ loading: boolean; message: string | null }>({
+    loading: false, message: null,
+  });
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["deletion-preview", ids, mode],
@@ -144,6 +147,30 @@ export default function DeletionPreviewModal({
                     protected (Seerr request, another user's watch, in-progress watch, or an actively-seeding torrent).
                     Deleting anyway overrides that protection.
                   </p>
+                </div>
+              )}
+
+              {data.items.length === 1 && ["radarr", "sonarr"].includes(data.items[0].arr_app ?? "") && (
+                <div className="border border-purple-900/20 rounded-lg px-3 py-2.5">
+                  {subtitleCheck.message ? (
+                    <p className="text-slate-300 text-xs">{subtitleCheck.message}</p>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        setSubtitleCheck({ loading: true, message: null });
+                        try {
+                          const r = await mediaApi.subtitleWarning(data.items[0].id);
+                          setSubtitleCheck({ loading: false, message: r.message });
+                        } catch (e: unknown) {
+                          setSubtitleCheck({ loading: false, message: e instanceof Error ? e.message : String(e) });
+                        }
+                      }}
+                      disabled={subtitleCheck.loading}
+                      className="text-xs text-slate-400 hover:text-white underline decoration-dotted disabled:opacity-50"
+                    >
+                      {subtitleCheck.loading ? "Checking Bazarr…" : "Check Bazarr subtitles (INT-01)"}
+                    </button>
+                  )}
                 </div>
               )}
 

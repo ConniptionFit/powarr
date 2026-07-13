@@ -13,6 +13,7 @@ const INTEGRATION_META: Record<string, { label: string; color: string; descripti
   seerr: { label: "Seerr", color: "bg-purple-700", description: "Request management — protects requested media from deletion" },
   qbittorrent: { label: "qBittorrent", color: "bg-sky-700", description: "Download client — WebUI username & password" },
   transmission: { label: "Transmission", color: "bg-red-800", description: "Download client — API key field takes username:password" },
+  bazarr: { label: "Bazarr", color: "bg-indigo-700", description: "Subtitles — INT-01: warns about known subtitles before you delete a linked movie/series (read-only, never deletes on Bazarr's side)" },
 };
 
 function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
@@ -712,7 +713,7 @@ export default function IntegrationsPage({ embedded = false }: { embedded?: bool
     queryFn: integrationsApi.list,
   });
 
-  const order = ["plex", "tautulli", "radarr", "sonarr", "lidarr", "readarr", "seerr", "qbittorrent", "transmission"];
+  const order = ["plex", "tautulli", "radarr", "sonarr", "lidarr", "readarr", "seerr", "bazarr", "qbittorrent", "transmission"];
   const sorted = [...integrations]
     .filter(cfg => cfg.name !== "lastfm")
     .sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
