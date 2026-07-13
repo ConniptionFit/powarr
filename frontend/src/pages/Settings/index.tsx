@@ -5,7 +5,7 @@ import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, Databas
 import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ScoringProfiles,
          type ImportMatchingSettings, type CleanupSettings, type SyncSettings, type NotificationSettings,
          type OllamaSettings, type LlmPolicies, type LlmAppOverride, type LlmLibraryOverride,
-         type LlmScheduleSettings, type BackupSettings, type BackupFile } from "../../lib/api";
+         type LlmScheduleSettings, type BackupSettings, type BackupFile, type SettingsExport } from "../../lib/api";
 import IntegrationsPage from "../Integrations";
 import MusicSettings from "./MusicSettings";
 
@@ -717,6 +717,161 @@ function BackupSection() {
         <p className="text-white text-sm font-medium mb-2">Recent Backups</p>
         {!files || files.length === 0 ? (
           <p className="text-slate-500 text-xs">No backups yet.</p>
+        ) : (
+          <div className="space-y-1">
+            {files.slice(0, 10).map(f => (
+              <div key={f.name} className="flex items-center justify-between text-xs text-slate-400 py-1 border-b border-purple-900/10 last:border-0">
+                <span className="font-mono truncate">{f.name}</span>
+                <span className="flex-shrink-0 ml-4">{fmtBytes(f.size)} — {fmtDate(f.modified)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// OPS-02 — config-as-code settings export/import, deliberately separate from
+// BackupSection above: a JSON settings snapshot (sans secrets) is a much
+// smaller, safer, diffable artifact than a full DB dump, for disaster
+// recovery or standing up a second instance.
+function ConfigExportSection() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["backup-settings"], queryFn: settingsApi.getBackup });
+  const { data: files } = useQuery({ queryKey: ["settings-export-files"], queryFn: settingsApi.listSettingsExports });
+  const [cfg, setCfg] = useState<BackupSettings | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { if (data) setCfg(data); }, [data]);
+
+  const save = async () => {
+    if (!cfg) return;
+    setMsg(null);
+    try {
+      await settingsApi.updateBackup(cfg);
+      qc.invalidateQueries({ queryKey: ["backup-settings"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+
+  const runNow = async () => {
+    setRunning(true);
+    setMsg(null);
+    try {
+      const r = await settingsApi.runSettingsExportNow();
+      setMsg(r.message);
+      qc.invalidateQueries({ queryKey: ["settings-export-files"] });
+    } catch (e: unknown) { setMsg(e instanceof Error ? e.message : String(e)); }
+    finally { setRunning(false); }
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true);
+    setMsg(null);
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text) as SettingsExport;
+      const r = await settingsApi.importSettings(payload);
+      setMsg(`Imported ${r.app_settings_imported} setting(s), updated ${r.integrations_updated} integration(s). Reload the page to see the new values.`);
+    } catch (err: unknown) {
+      setMsg(err instanceof Error ? `Import failed: ${err.message}` : String(err));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  if (!cfg) return null;
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mt-6">
+      <div className="flex items-center gap-2 pt-5 pb-3">
+        <DatabaseBackup size={14} className="text-brand-light" />
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Config-as-Code (Settings Export)</h2>
+      </div>
+      {msg && <p className="text-xs text-slate-300 pb-2">{msg}</p>}
+      <p className="text-slate-500 text-xs pb-3">
+        A JSON snapshot of every setting plus integration URLs — <strong>never credentials</strong> (api keys/passwords are
+        never exported; re-enter them after an import). For disaster recovery or standing up a second instance.
+      </p>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-white text-sm font-medium">Export / Import</p>
+          <p className="text-slate-500 text-xs mt-0.5">Download the current settings, or restore from a previously exported file</p>
+        </div>
+        <div className="flex items-center gap-2 ml-6 flex-shrink-0">
+          <button
+            onClick={settingsApi.exportSettings}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors"
+          >
+            <DatabaseBackup size={13} /> Export
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-overlay hover:bg-white/10 text-slate-300 text-sm transition-colors disabled:opacity-50"
+          >
+            {importing ? "Importing…" : "Import"}
+          </button>
+          <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportFile} />
+        </div>
+      </div>
+
+      <label className="py-4 border-b border-purple-900/20 flex items-center justify-between cursor-pointer">
+        <div>
+          <p className="text-white text-sm font-medium">Enable scheduled settings export</p>
+          <p className="text-slate-500 text-xs mt-0.5">Alongside the DB backup above, same interval</p>
+        </div>
+        <input type="checkbox" checked={cfg.export_settings_enabled} className="accent-purple-500 ml-6"
+               onChange={e => setCfg(c => c ? { ...c, export_settings_enabled: e.target.checked } : c)} />
+      </label>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Retention</p>
+          <p className="text-slate-500 text-xs mt-0.5">Keep the most recent N export files (0 = unlimited)</p>
+        </div>
+        <input type="number" min={0} value={cfg.export_settings_retention_count}
+               onChange={e => setCfg(c => c ? { ...c, export_settings_retention_count: Number(e.target.value) } : c)}
+               className="w-20 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white ml-6" />
+      </div>
+
+      <div className="py-4 border-b border-purple-900/20 flex items-center justify-between">
+        <div>
+          <p className="text-white text-sm font-medium">Run Settings Export Now</p>
+        </div>
+        <div className="flex items-center gap-3 ml-6">
+          <button
+            onClick={save}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors"
+          >
+            <Save size={13} />
+            {saved ? "Saved!" : "Save"}
+          </button>
+          <button
+            onClick={runNow}
+            disabled={running}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors disabled:opacity-50"
+          >
+            <Play size={14} />
+            {running ? "Running…" : "Run Now"}
+          </button>
+        </div>
+      </div>
+
+      <div className="py-4">
+        <p className="text-white text-sm font-medium mb-2">Recent Exports</p>
+        {!files || files.length === 0 ? (
+          <p className="text-slate-500 text-xs">No settings exports yet.</p>
         ) : (
           <div className="space-y-1">
             {files.slice(0, 10).map(f => (
@@ -2218,6 +2373,7 @@ export default function SettingsPage() {
           <CleanupSection />
           <SyncSection />
           <BackupSection />
+          <ConfigExportSection />
         </>
       )}
       {category === "llm-assist" && (

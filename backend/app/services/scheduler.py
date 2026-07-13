@@ -131,6 +131,36 @@ async def _scheduled_backup(db) -> None:
     logger.info(f"Scheduled backup: {result['message']}" + (f", pruned {pruned} old backup(s)" if pruned else ""))
 
 
+async def _scheduled_settings_export(db) -> None:
+    """OPS-02 — same due-ness check shape as _scheduled_backup, own last-run
+    timestamp key so the two toggles run independently even though they share
+    BackupSettings.interval_hours."""
+    cfg = _get_setting(db, "backup", BackupSettings)
+    if not cfg.export_settings_enabled or cfg.interval_hours <= 0:
+        return
+    row = db.query(AppSetting).filter_by(key="last_settings_export").first()
+    if row and row.value:
+        try:
+            last = datetime.fromisoformat(row.value)
+            if datetime.utcnow() - last < timedelta(hours=cfg.interval_hours):
+                return
+        except ValueError:
+            pass
+    from app.services.settings_export import run_settings_export, prune_settings_exports
+    result = run_settings_export(db)
+    if not result["ok"]:
+        logger.error(f"Scheduled settings export failed: {result['message']}")
+        return
+    if not row:
+        row = AppSetting(key="last_settings_export")
+        db.add(row)
+    row.value = datetime.utcnow().isoformat()
+    db.commit()
+    pruned = prune_settings_exports(cfg.export_settings_retention_count)
+    logger.info(f"Scheduled settings export: {result['message']}"
+               + (f", pruned {pruned} old export(s)" if pruned else ""))
+
+
 async def _scheduled_malformed_audit(db) -> None:
     """FI-10 — nightly re-check of already-imported Sonarr packs for
     incomplete coverage that went unnoticed once the download left triage.
@@ -266,6 +296,7 @@ async def maintenance_loop():
                 await _scheduled_plex_sync(db)
                 await _scheduled_llm_run(db)
                 await _scheduled_backup(db)
+                await _scheduled_settings_export(db)
                 await _scheduled_weekly_digest(db)
                 await _scheduled_malformed_audit(db)
                 # SP-06 — artist DB refresh before playlist auto-updates so

@@ -327,6 +327,17 @@ export interface BackupSettings {
   enabled: boolean;
   interval_hours: number;
   retention_count: number;
+  // OPS-02 (v0.72.0) — optional settings-only export alongside the DB backup
+  export_settings_enabled: boolean;
+  export_settings_retention_count: number;
+}
+
+// OPS-02 — config-as-code export/import payload shape
+export interface SettingsExport {
+  powarr_version: string;
+  exported_at: string;
+  app_settings: Record<string, unknown>;
+  integrations: { name: string; url: string | null; enabled: boolean }[];
 }
 
 export interface BackupFile {
@@ -393,6 +404,15 @@ export const settingsApi = {
     req<BackupSettings>("/settings/backup", { method: "PUT", body: JSON.stringify(s) }),
   runBackupNow: () => req<{ ok: boolean; path: string | null; message: string }>("/settings/backup/run", { method: "POST" }),
   listBackups: () => req<BackupFile[]>("/settings/backup/list"),
+  // OPS-02 — config-as-code export/import (on-demand) + the scheduled variant
+  exportSettings: () => downloadCsv("/settings/export"),
+  importSettings: (payload: SettingsExport) =>
+    req<{ app_settings_imported: number; integrations_updated: number }>("/settings/import", {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+  runSettingsExportNow: () =>
+    req<{ ok: boolean; path: string | null; message: string }>("/settings/export/run", { method: "POST" }),
+  listSettingsExports: () => req<BackupFile[]>("/settings/export/list"),
   getCleanup: () => req<CleanupSettings>("/settings/cleanup"),
   updateCleanup: (s: CleanupSettings) =>
     req<CleanupSettings>("/settings/cleanup", { method: "PUT", body: JSON.stringify(s) }),

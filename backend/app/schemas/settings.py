@@ -254,6 +254,12 @@ class BackupSettings(BaseModel):
     enabled: bool = False
     interval_hours: int = 24
     retention_count: int = 7  # keep the most recent N backup files; 0 = unlimited
+    # OPS-02 (v0.72.0) — optional settings-only export (config-as-code JSON,
+    # sans secrets) alongside the DB backup above, same interval_hours cadence
+    # check. Separate toggle from `enabled`: a settings snapshot is orders of
+    # magnitude smaller/safer to turn on than a full DB dump. Off by default.
+    export_settings_enabled: bool = False
+    export_settings_retention_count: int = 7
 
 
 class QdrantSettings(BaseModel):

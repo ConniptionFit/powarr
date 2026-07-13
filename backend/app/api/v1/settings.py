@@ -1,5 +1,6 @@
 import json
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -176,6 +177,49 @@ async def run_backup_now(db: Session = Depends(get_db)):
 def list_backup_files():
     from app.services.backup import list_backups
     return list_backups()
+
+
+@router.get("/export")
+def export_settings_now(request: Request, db: Session = Depends(get_db)):
+    """OPS-02 — config-as-code JSON snapshot (every AppSetting + non-secret
+    integration metadata) as a downloadable attachment."""
+    from app.services.settings_export import export_settings
+    data = export_settings(db, request.app.version)
+    return JSONResponse(
+        content=data,
+        headers={"Content-Disposition": 'attachment; filename="powarr-settings.json"'},
+    )
+
+
+@router.post("/import")
+def import_settings_now(payload: dict = Body(...), db: Session = Depends(get_db)):
+    """OPS-02 — restore a settings export produced by GET /settings/export.
+    Never touches integration secrets (api_key/username/password/extra_config)
+    — those aren't in the export to begin with, so a restored instance needs
+    them re-entered."""
+    from app.services.settings_export import import_settings
+    try:
+        return import_settings(db, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/export/run")
+def run_settings_export_now(request: Request, db: Session = Depends(get_db)):
+    """OPS-02 — write a settings export file into settings-exports/ (same
+    on-demand shape as POST /settings/backup/run)."""
+    from app.services.settings_export import run_settings_export, prune_settings_exports
+    result = run_settings_export(db, request.app.version)
+    if result["ok"]:
+        cfg = _get_json_setting(db, "backup", BackupSettings)
+        prune_settings_exports(cfg.export_settings_retention_count)
+    return result
+
+
+@router.get("/export/list")
+def list_settings_export_files():
+    from app.services.settings_export import list_settings_exports
+    return list_settings_exports()
 
 
 @router.get("/cleanup", response_model=CleanupSettings)
