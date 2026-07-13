@@ -50,6 +50,12 @@ export interface MediaItem {
   lidarr_id: number | null;
 }
 
+export interface ArrCandidate {
+  id: number;
+  title: string;
+  year: number | null;
+}
+
 export interface DeletionLogEntry {
   id: number;
   title: string;
@@ -154,6 +160,16 @@ export const mediaApi = {
   libraries: () => req<string[]>("/media/libraries"),
   duplicates: () => req<DuplicateGroup[]>("/media/duplicates"),
   restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
+  // INT-02 (v0.71.0) — manual *arr ID override, fixing a bad auto-link without a
+  // full resync. arrCandidates browses/searches the matching app's library;
+  // setArrLink writes (or clears, with value: null) the field for this item's
+  // media_type.
+  arrCandidates: (id: number, q = "") =>
+    req<{ candidates: ArrCandidate[] }>(`/media/${id}/arr-candidates${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  setArrLink: (id: number, value: number | null) =>
+    req<Record<string, number | null>>(`/media/${id}/arr-link`, {
+      method: "PUT", body: JSON.stringify({ value }),
+    }),
   explain: (id: number, force = false) =>
     req<{ rationale: string | null; message: string | null; cached: boolean }>(
       `/media/${id}/explain${force ? "?force=true" : ""}`, { method: "POST" }),

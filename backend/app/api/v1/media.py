@@ -263,6 +263,38 @@ def restore_media(item_id: int, db: Session = Depends(get_db)):
     return {"id": item_id, "restored": True}
 
 
+@router.get("/{item_id}/arr-candidates")
+async def arr_candidates(item_id: int, q: str = Query(""), db: Session = Depends(get_db)):
+    """INT-02 — search the *arr app's library matching this item's media_type,
+    for the manual ID-override UI. Empty query browses the whole library."""
+    item = db.query(MediaItem).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Media item not found")
+    from app.services.arr_link import search_arr_candidates
+    return {"candidates": await search_arr_candidates(db, item.media_type, q)}
+
+
+@router.put("/{item_id}/arr-link")
+def update_arr_link(item_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+    """INT-02 — manually set (or clear, {"value": null}) the *arr id fixing a bad
+    auto-link from link_arr_ids() without a full resync. link_arr_ids() only ever
+    fills a missing id (never overwrites one it finds already set), so a manual
+    link here is permanent until cleared — it won't be silently reverted by the
+    next Plex sync."""
+    item = db.query(MediaItem).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Media item not found")
+    from app.services.arr_link import ID_FIELD_FOR_MEDIA_TYPE
+    field = ID_FIELD_FOR_MEDIA_TYPE.get(item.media_type)
+    if not field:
+        raise HTTPException(status_code=400,
+                            detail=f"Manual *arr linking isn't supported for media_type={item.media_type}")
+    value = payload.get("value")
+    setattr(item, field, int(value) if value is not None else None)
+    db.commit()
+    return {"id": item_id, field: getattr(item, field)}
+
+
 @router.post("/llm-run")
 async def media_llm_run(payload: dict = Body(default={}), db: Session = Depends(get_db)):
     """On-demand LLM deletion rationales. {"ids": [...]} for specific items; omit

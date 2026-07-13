@@ -1,12 +1,13 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3, ShieldAlert } from "lucide-react";
+import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3, ShieldAlert, Link2 } from "lucide-react";
 import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem, type EpisodeDeleteMode } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
 import DeletionPreviewModal from "../../components/DeletionPreviewModal";
+import ArrLinkModal from "../../components/ArrLinkModal";
 import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 import { SkeletonTable } from "../../components/Skeleton";
 
@@ -99,6 +100,7 @@ export default function DeletionSuggestions() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [previewIds, setPreviewIds] = useState<number[] | null>(null); // LIB-01 dry-run preview modal
+  const [arrLinkItem, setArrLinkItem] = useState<MediaItem | null>(null); // INT-02 manual *arr link fix modal
   const [explainBusy, setExplainBusy] = useState<number | null>(null);
   const [explainMsg, setExplainMsg] = useState<Record<number, string>>({});
   const [streamText, setStreamText] = useState<Record<number, string>>({});
@@ -595,6 +597,15 @@ export default function DeletionSuggestions() {
                             >
                               {explainBusy === item.id ? <BotState variant="responding" size={15} /> : <Bot size={15} />}
                             </button>
+                            {["movie", "episode", "track"].includes(item.media_type) && (
+                              <button
+                                onClick={() => setArrLinkItem(item)}
+                                title="Fix *arr link (INT-02) — repoint this item at the correct Sonarr/Radarr/Lidarr entry"
+                                className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                              >
+                                <Link2 size={15} />
+                              </button>
+                            )}
                             <button onClick={() => ignoreMut.mutate({ id: item.id, ignored: !item.ignored })} title={item.ignored ? "Un-ignore" : "Ignore"} className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
                               {item.ignored ? <Eye size={15} /> : <EyeOff size={15} />}
                             </button>
@@ -650,6 +661,10 @@ export default function DeletionSuggestions() {
           onConfirm={deleteMode => deleteBatchMut.mutate({ ids: previewIds, deleteMode })}
           confirming={deleteBatchMut.isPending}
         />
+      )}
+
+      {arrLinkItem && (
+        <ArrLinkModal item={arrLinkItem} onClose={() => setArrLinkItem(null)} />
       )}
     </div>
   );
