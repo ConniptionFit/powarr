@@ -30,7 +30,7 @@ export interface SourceBadge {
   className: string;
 }
 
-export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, era, subtitle, actions, sourceBadges }: {
+export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, era, subtitle, actions, sourceBadges, preview }: {
   name: string;
   yearsActive?: string | null;
   imageUrl: string | null;
@@ -40,6 +40,10 @@ export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, e
   subtitle: string;
   actions: React.ReactNode;
   sourceBadges?: SourceBadge[];
+  // AD-18 — a caller-supplied preview trigger/player (see ArtistPreviewButton),
+  // rendered full-width below the bio rather than squeezed into the small
+  // actions icon row, since its expanded state is an iframe/audio player.
+  preview?: React.ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const bioText = bio || "";
@@ -94,6 +98,8 @@ export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, e
             )}
           </div>
         )}
+
+        {preview}
       </div>
     </div>
   );

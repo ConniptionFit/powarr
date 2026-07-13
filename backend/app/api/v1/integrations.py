@@ -10,7 +10,8 @@ from app.schemas.settings import IntegrationConfig, IntegrationConfigUpdate, Qdr
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
 INTEGRATION_NAMES = ("plex", "tautulli", "sonarr", "radarr", "lidarr",
-                     "readarr", "seerr", "qbittorrent", "transmission", "lastfm", "bazarr")
+                     "readarr", "seerr", "qbittorrent", "transmission", "lastfm", "bazarr",
+                     "youtube", "spotify")
 
 # Integrations that are torrent/download clients — anything needing "which client
 # holds this download?" (orphan cleanup, reject-and-remove) iterates this, never
@@ -59,6 +60,13 @@ def _get_client(integration: Integration):
     if integration.name == "bazarr":
         from app.integrations.bazarr import BazarrIntegration
         return BazarrIntegration(integration.url, api_key, extra)
+    if integration.name == "youtube":
+        from app.integrations.youtube import YoutubeIntegration
+        return YoutubeIntegration(integration.url, api_key, extra)
+    if integration.name == "spotify":
+        from app.integrations.spotify import SpotifyIntegration
+        return SpotifyIntegration(integration.url, api_key, extra,
+                                  username=integration.username or "")
     raise HTTPException(status_code=404, detail=f"Unknown integration: {integration.name}")
 
 

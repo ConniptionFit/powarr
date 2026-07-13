@@ -233,6 +233,15 @@ async def related(
     return await service.search_related_artists_tracked(db, artist, limit=limit)
 
 
+@router.get("/preview")
+async def artist_preview(artist: str = Query(..., min_length=1), db: Session = Depends(get_db)):
+    """AD-18 — on-demand listen-before-add preview (YouTube video / Spotify 30s
+    clip), whichever configured+enabled sources resolve. Never automatic —
+    called only when the user clicks Preview on a card. One call per click."""
+    from app.services.artist_preview import get_preview
+    return await get_preview(db, artist)
+
+
 @router.post("/related/add")
 async def related_add(body: dict = Body(...), db: Session = Depends(get_db)):
     """Add a Related Artists search result straight to Lidarr, bypassing the

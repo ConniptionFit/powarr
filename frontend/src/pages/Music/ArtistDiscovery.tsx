@@ -4,6 +4,7 @@ import { Compass, Play, Check, X, Sparkles, Settings, ChevronDown, ChevronUp, Hi
 import { Link } from "react-router-dom";
 import { req, fmtRelative, parseApiDate } from "../../lib/api";
 import ArtistCard from "../../components/ArtistCard";
+import ArtistPreviewButton from "../../components/ArtistPreviewButton";
 
 interface Candidate {
   id: number;
@@ -109,6 +110,7 @@ function CandidateCard({ c, onAccept, onReject, pending }: {
           </button>
         </>
       }
+      preview={<ArtistPreviewButton artistName={c.artist_name} />}
     />
   );
 }

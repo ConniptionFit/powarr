@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Search, Users, Plus, CircleCheck, Music2 } from "lucide-react";
 import { req } from "../../lib/api";
 import ArtistCard, { SourceBadge } from "../../components/ArtistCard";
+import ArtistPreviewButton from "../../components/ArtistPreviewButton";
 
 interface ArtistNameMatch {
   artist_name: string;
@@ -90,6 +91,7 @@ function RelatedArtistCard({ a, onAdd, adding, added }: {
           </button>
         )
       }
+      preview={<ArtistPreviewButton artistName={a.artist_name} />}
     />
   );
 }
