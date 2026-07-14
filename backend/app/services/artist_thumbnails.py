@@ -36,19 +36,21 @@ from app.models import ArtistThumbnail, MediaItem
 logger = logging.getLogger("powarr")
 
 _MISS_RETRY_DAYS = 7
-_DEEZER_LOOKUP_CAP = 100  # max Deezer name-searches per refresh run
-_DEEZER_PAUSE_S = 0.25
+_DEEZER_LOOKUP_CAP = 250  # max Deezer name-searches per refresh run
+_DEEZER_PAUSE_S = 0.3
 
 
 def _lidarr_remote_poster(images: list[dict] | None) -> str | None:
     """Public remoteUrl from a Lidarr library artist's images — never the
     relative /MediaCover url, which would need the Lidarr host + API key in
-    the browser. coverType casing differs between Lidarr endpoints, so match
-    case-insensitively."""
+    the browser. Live finding on first deploy: Lidarr sometimes reports a
+    container-local path (/config/MediaCover/...) as remoteUrl too, so only
+    absolute http(s) URLs count. coverType casing differs between Lidarr
+    endpoints, so match case-insensitively."""
     by_type = {}
     for img in images or []:
         url = (img.get("remoteUrl") or "").strip()
-        if url:
+        if url.startswith("http"):
             by_type[(img.get("coverType") or "").lower()] = url
     return by_type.get("poster") or by_type.get("fanart") or by_type.get("banner")
 
@@ -110,6 +112,15 @@ async def refresh_library_thumbnails(db) -> dict[str, Any]:
     retry_cutoff = now - timedelta(days=_MISS_RETRY_DAYS)
     for key, info in library.items():
         row = existing.get(key)
+        if row and row.image_url and not row.image_url.startswith("http"):
+            # A non-http URL is unusable in the browser (see
+            # _lidarr_remote_poster) — clear it and fall through to
+            # re-resolve. fetched_at lands exactly on the retry cutoff so the
+            # artist stays retry-eligible next run if the Deezer cap hits
+            # before we reach it.
+            row.image_url = None
+            row.source = None
+            row.fetched_at = retry_cutoff
         if row and row.image_url:
             # Keep a lidarr-sourced URL current if Lidarr's poster changed —
             # free, the URL is already in the get_artists() payload.
@@ -158,4 +169,6 @@ def thumbnails_for(db, names: list[str]) -> dict[str, str]:
             .filter(ArtistThumbnail.name_key.in_(keys),
                     ArtistThumbnail.image_url.isnot(None))
             .all())
-    return {r.name_key: r.image_url for r in rows}
+    # Belt-and-braces against rows written before the http-only rule: never
+    # hand the frontend a URL it can't load.
+    return {r.name_key: r.image_url for r in rows if r.image_url.startswith("http")}

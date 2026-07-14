@@ -125,6 +125,31 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         deezer_mock.assert_awaited_once()
         self.assertEqual(self.db.query(ArtistThumbnail).one().image_url, "https://x/found.jpg")
 
+    async def test_non_http_stored_url_is_cleared_and_re_resolved(self):
+        # Live finding: Lidarr sometimes reports /config/MediaCover/... as
+        # remoteUrl — rows written from it must be re-resolved, not kept.
+        _track(self.db, "Local Path", "t1")
+        self.db.add(ArtistThumbnail(name_key="local path", artist_name="Local Path",
+                                    image_url="/config/MediaCover/394/poster.jpg",
+                                    source="lidarr", fetched_at=datetime.utcnow()))
+        self.db.commit()
+        result, deezer_mock = await self._refresh(_index(), deezer_url="https://x/fixed.jpg")
+        deezer_mock.assert_awaited_once_with("Local Path")
+        row = self.db.query(ArtistThumbnail).one()
+        self.assertEqual(row.image_url, "https://x/fixed.jpg")
+        self.assertEqual(row.source, "deezer")
+
+    async def test_non_http_url_cleared_even_when_deezer_finds_nothing(self):
+        _track(self.db, "Local Path", "t1")
+        self.db.add(ArtistThumbnail(name_key="local path", artist_name="Local Path",
+                                    image_url="/config/MediaCover/394/poster.jpg",
+                                    source="lidarr", fetched_at=datetime.utcnow()))
+        self.db.commit()
+        await self._refresh(_index(), deezer_url=None)
+        row = self.db.query(ArtistThumbnail).one()
+        self.assertIsNone(row.image_url)
+        self.assertIsNone(row.source)
+
     async def test_changed_lidarr_poster_updates_existing_row(self):
         self.db.add(ArtistThumbnail(name_key="some artist", artist_name="Some Artist",
                                     image_url="https://old/poster.jpg", source="lidarr"))
@@ -146,6 +171,9 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(_lidarr_remote_poster(images), "https://x/poster.jpg")
         self.assertIsNone(_lidarr_remote_poster([{"coverType": "poster",
                                                   "url": "/MediaCover/1/poster.jpg"}]))
+        # remoteUrl itself can be a container-local path — not a usable image
+        self.assertIsNone(_lidarr_remote_poster([{"coverType": "poster",
+                                                  "remoteUrl": "/config/MediaCover/394/poster.jpg"}]))
 
     def test_lastfm_placeholder_star_treated_as_no_image(self):
         images = [{"size": "large",
