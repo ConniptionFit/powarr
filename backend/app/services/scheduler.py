@@ -299,6 +299,33 @@ async def _scheduled_artist_discovery_sync(db) -> None:
     logger.info(f"Scheduled Artist Discovery sync: {result.get('message')}")
 
 
+async def _scheduled_artist_thumbnail_refresh(db) -> None:
+    """AD-21 — daily refresh of the library-artist thumbnail cache backing the
+    Related Artists typeahead, including cleanup of rows whose artist has been
+    deleted from the library. Zero-config: runs whenever Lidarr and/or synced
+    Plex music exists; fails soft (and is skipped entirely, cleanup included)
+    when Lidarr is unreachable."""
+    row = db.query(AppSetting).filter_by(key="last_artist_thumb_refresh").first()
+    if row and row.value:
+        try:
+            last = datetime.fromisoformat(row.value)
+            if datetime.utcnow() - last < timedelta(hours=24):
+                return
+        except ValueError:
+            pass
+    from app.services.artist_thumbnails import refresh_library_thumbnails
+    result = await refresh_library_thumbnails(db)
+    if not row:
+        row = AppSetting(key="last_artist_thumb_refresh")
+        db.add(row)
+    row.value = datetime.utcnow().isoformat()
+    db.commit()
+    if result.get("ok"):
+        logger.info(f"Artist thumbnail refresh: {result.get('message')}")
+    else:
+        logger.warning(f"Artist thumbnail refresh: {result.get('message')}")
+
+
 async def maintenance_loop():
     logger.info("Maintenance scheduler started")
     while True:
@@ -317,6 +344,7 @@ async def maintenance_loop():
                 await _scheduled_artist_discovery(db)
                 await _scheduled_artist_discovery_sync(db)
                 await _scheduled_playlist_generation(db)
+                await _scheduled_artist_thumbnail_refresh(db)
                 # AD-08 — drop enrichment art on accepted artists past retention.
                 from app.services.artist_discovery import purge_stale_thumbnails
                 purge_stale_thumbnails(db)

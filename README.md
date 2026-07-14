@@ -177,7 +177,11 @@ so far / total) instead of just a static "Searching…" button, since enrichment
 seconds for a busy query. **v0.74.0**: the search box is now a **typeahead** — after two
 characters it shows matching artist names (thumbnail + genres) in a dropdown below the box via
 Last.fm's name-completion search, so you can pick the exact artist before running the slower
-similar-artists search instead of guessing at spelling.
+similar-artists search instead of guessing at spelling. **v0.80.0**: the typeahead now actually
+shows artist photos — Last.fm's search images have been blank/placeholder for years, so Powarr
+keeps its own thumbnail for every artist in your library (Lidarr's poster art, with a Deezer
+fallback for Plex-only artists), refreshed daily and cleaned up automatically when an artist is
+removed from the library.
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
 **drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is

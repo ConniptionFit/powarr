@@ -1131,11 +1131,16 @@ def reject_candidate(db, candidate_id: int) -> dict[str, Any]:
 # as Discovery candidates; adding one goes straight to Lidarr via
 # _add_artist_to_lidarr, bypassing the review queue entirely.
 
+# Last.fm has served this same star graphic instead of real artist photos for
+# years — treat it as no image so local/enrichment sources can fill in (AD-21).
+_LASTFM_PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f"
+
+
 def _lastfm_image(images: list[dict] | None) -> str | None:
     by_size = {i.get("size"): (i.get("#text") or "").strip() for i in (images or [])}
     for size in ("large", "medium", "extralarge", "small"):
         url = by_size.get(size)
-        if url:
+        if url and _LASTFM_PLACEHOLDER not in url:
             return url
     return None
 
@@ -1174,7 +1179,19 @@ async def search_artist_names(db, query: str, limit: int = 8) -> dict[str, Any]:
         }
 
     results = await asyncio.gather(*(_with_tags(m) for m in matches if (m.get("name") or "").strip()))
-    return {"ok": True, "results": [r for r in results if r["artist_name"]]}
+    results = [r for r in results if r["artist_name"]]
+    # AD-21 — Last.fm's search images are blank/placeholder for most artists;
+    # overlay the locally-kept library-artist thumbnails wherever they match.
+    try:
+        from app.services.artist_thumbnails import thumbnails_for
+        local = thumbnails_for(db, [r["artist_name"] for r in results])
+        for r in results:
+            url = local.get(_norm_artist(r["artist_name"]))
+            if url:
+                r["image_url"] = url
+    except Exception as e:
+        logger.debug(f"Artist Discovery: thumbnail overlay failed: {e}")
+    return {"ok": True, "results": results}
 
 
 async def search_related_artists_tracked(db, artist: str, limit: int = 50) -> dict[str, Any]:

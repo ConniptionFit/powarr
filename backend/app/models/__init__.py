@@ -8,8 +8,10 @@ from app.models.smart_playlist import (
 )
 from app.models.artist_discovery import DiscoveredArtist, ArtistDiscoveryRun
 from app.models.artist_add_log import ArtistAddLog
+from app.models.artist_thumbnail import ArtistThumbnail
 from app.models.malformed_import_flag import MalformedImportFlag
 
 __all__ = ["MediaItem", "Integration", "AppSetting", "FailedImport", "DeletionLog",
            "SmartPlaylist", "SmartPlaylistCandidate", "SmartPlaylistRun", "SmartPlaylistTrack",
-           "DiscoveredArtist", "ArtistDiscoveryRun", "ArtistAddLog", "MalformedImportFlag"]
+           "DiscoveredArtist", "ArtistDiscoveryRun", "ArtistAddLog", "ArtistThumbnail",
+           "MalformedImportFlag"]
