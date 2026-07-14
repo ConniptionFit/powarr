@@ -235,9 +235,10 @@ async def related(
 
 @router.get("/preview")
 async def artist_preview(artist: str = Query(..., min_length=1), db: Session = Depends(get_db)):
-    """AD-18 — on-demand listen-before-add preview (YouTube video / Spotify 30s
-    clip), whichever configured+enabled sources resolve. Never automatic —
-    called only when the user clicks Preview on a card. One call per click."""
+    """AD-18 — listen-before-add preview (YouTube video / Spotify 30s clip),
+    whichever configured+enabled sources resolve. Since v0.79.0 the frontend
+    calls this once per card as it scrolls into view (availability gate for
+    the Play button); results are cached in-process — see artist_preview.py."""
     from app.services.artist_preview import get_preview
     return await get_preview(db, artist)
 

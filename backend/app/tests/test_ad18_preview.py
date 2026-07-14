@@ -10,7 +10,7 @@ from app.database import Base
 from app.integrations.spotify import SpotifyIntegration
 from app.integrations.youtube import YoutubeIntegration
 from app.models.integration import Integration
-from app.services.artist_preview import get_preview
+from app.services.artist_preview import clear_preview_cache, get_preview
 
 
 class _FakeResponse:
@@ -151,9 +151,11 @@ class GetPreviewTests(unittest.IsolatedAsyncioTestCase):
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
         self.db = sessionmaker(bind=self.engine)()
+        clear_preview_cache()
 
     def tearDown(self):
         self.db.close()
+        clear_preview_cache()
 
     async def test_no_sources_configured_returns_empty_list(self):
         result = await get_preview(self.db, "Some Artist")
@@ -196,6 +198,74 @@ class GetPreviewTests(unittest.IsolatedAsyncioTestCase):
         sources_by_name = {s["source"]: s for s in result["sources"]}
         self.assertTrue(sources_by_name["youtube"]["available"])
         self.assertTrue(sources_by_name["spotify"]["available"])
+
+
+class PreviewCacheTests(unittest.IsolatedAsyncioTestCase):
+    """v0.79.0 — availability checks fire per card render (viewport-lazy), so
+    results are cached in-process to protect the YouTube search quota."""
+
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.db = sessionmaker(bind=self.engine)()
+        clear_preview_cache()
+
+    def tearDown(self):
+        self.db.close()
+        clear_preview_cache()
+
+    async def test_second_call_served_from_cache(self):
+        self.db.add(Integration(name="youtube", api_key="k", enabled=True))
+        self.db.commit()
+        calls = {"n": 0}
+
+        class _CountingClient(_FakeYoutubeClient):
+            async def search_video(self, artist_name):
+                calls["n"] += 1
+                return {"video_id": "abc", "title": "T"}
+
+        with patch("app.api.v1.integrations._get_client", return_value=_CountingClient()):
+            first = await get_preview(self.db, "Some Artist")
+            second = await get_preview(self.db, "Some Artist")
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(first, second)
+
+    async def test_cache_key_includes_enabled_fingerprint(self):
+        # A miss cached while only YouTube was enabled must not mask Spotify
+        # after the user turns Spotify on.
+        yt = Integration(name="youtube", api_key="k", enabled=True)
+        sp = Integration(name="spotify", api_key="secret", username="id", enabled=False)
+        self.db.add_all([yt, sp])
+        self.db.commit()
+
+        def fake_get_client(row):
+            if row.name == "youtube":
+                return _FakeYoutubeClient(None)
+            return _FakeSpotifyClient({"preview_url": "https://p.scdn.co/x.mp3", "title": "Track"})
+
+        with patch("app.api.v1.integrations._get_client", side_effect=fake_get_client):
+            miss = await get_preview(self.db, "Some Artist")
+            self.assertFalse(any(s["available"] for s in miss["sources"]))
+            sp.enabled = True
+            self.db.commit()
+            hit = await get_preview(self.db, "Some Artist")
+        by_name = {s["source"]: s for s in hit["sources"]}
+        self.assertTrue(by_name["spotify"]["available"])
+
+    async def test_artist_name_normalized_in_key(self):
+        self.db.add(Integration(name="youtube", api_key="k", enabled=True))
+        self.db.commit()
+        calls = {"n": 0}
+
+        class _CountingClient(_FakeYoutubeClient):
+            async def search_video(self, artist_name):
+                calls["n"] += 1
+                return {"video_id": "abc", "title": "T"}
+
+        with patch("app.api.v1.integrations._get_client", return_value=_CountingClient()):
+            await get_preview(self.db, "Some Artist")
+            await get_preview(self.db, "  some artist ")
+        self.assertEqual(calls["n"], 1)
 
 
 if __name__ == "__main__":

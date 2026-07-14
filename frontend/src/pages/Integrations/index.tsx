@@ -587,7 +587,7 @@ function YoutubeCard({ cfg }: { cfg: IntegrationConfig }) {
       <div className="flex items-center gap-3 mb-4">
         <span className={`w-2.5 h-2.5 rounded-full ${enabled ? "bg-green-400" : "bg-slate-600"}`} />
         <div className="px-2 py-0.5 rounded text-xs font-bold text-white bg-red-600">YouTube</div>
-        <span className="text-slate-500 text-xs">AD-18 — video preview source for Discovery/Related Artists "listen before you add"</span>
+        <span className="text-slate-500 text-xs">Video preview source for the Play button on Artist Discovery / Related Artists cards</span>
       </div>
 
       <div>
@@ -603,7 +603,7 @@ function YoutubeCard({ cfg }: { cfg: IntegrationConfig }) {
 
       <label className="flex items-center gap-2 text-sm text-slate-300 mt-3">
         <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
-        Enabled
+        Search YouTube for artist previews
       </label>
 
       <div className="flex items-center flex-wrap gap-2 mt-4">
@@ -669,7 +669,7 @@ function SpotifyCard({ cfg }: { cfg: IntegrationConfig }) {
         <span className={`w-2.5 h-2.5 rounded-full ${enabled ? "bg-green-400" : "bg-slate-600"}`} />
         <div className="px-2 py-0.5 rounded text-xs font-bold text-white bg-green-700">Spotify</div>
         <span className="text-slate-500 text-xs">
-          AD-18 — 30s track preview source. Spotify has scaled back preview_url availability for newer API apps; a missing preview isn't an error
+          Optional 30s track preview source. Spotify has scaled back preview availability for newer API apps; a missing preview isn't an error
         </span>
       </div>
 
@@ -689,7 +689,7 @@ function SpotifyCard({ cfg }: { cfg: IntegrationConfig }) {
 
       <label className="flex items-center gap-2 text-sm text-slate-300 mt-3">
         <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
-        Enabled
+        Search Spotify for artist previews (off by default — leave unchecked if you don't use Spotify)
       </label>
 
       <div className="flex items-center flex-wrap gap-2 mt-4">
