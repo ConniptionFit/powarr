@@ -234,8 +234,21 @@ async def _scheduled_playlist_generation(db) -> None:
     cfg = _get_setting(db, "smart_playlists", SmartPlaylistSettings)
     if not cfg.enabled or not cfg.schedule_enabled:
         return
+    row = db.query(AppSetting).filter_by(key="last_playlist_generation").first()
+    if row and row.value:
+        try:
+            last = datetime.fromisoformat(row.value)
+            if datetime.utcnow() - last < timedelta(hours=cfg.schedule_interval_hours):
+                return
+        except ValueError:
+            pass
     from app.services.playlist_generator import run_scheduled_generation
     result = await run_scheduled_generation()
+    if not row:
+        row = AppSetting(key="last_playlist_generation")
+        db.add(row)
+    row.value = datetime.utcnow().isoformat()
+    db.commit()
     if result.get("ok") and result.get("playlists", 0) > 0:
         logger.info(f"Scheduled playlist generation: {result.get('message')}")
 

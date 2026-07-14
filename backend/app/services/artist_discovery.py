@@ -937,6 +937,7 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
         era_backfilled = 0
 
         updated = 0
+        unchanged = 0
         offset = None
         pages = 0
         while pages < 80:
@@ -970,6 +971,9 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
                             updates["era"] = decade
                     except Exception as e:
                         logger.warning(f"Artist Discovery sync: MusicBrainz era lookup failed for {mbid}: {e}")
+                if all(payload.get(k) == v for k, v in updates.items()):
+                    unchanged += 1  # every field already matches the point — skip the write
+                    continue
                 try:
                     await qdrant.set_payload([p["id"]], updates)
                     updated += 1
@@ -986,9 +990,10 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
                 break
 
         run.finished_at = datetime.utcnow()
-        run.message = f"Synced {updated} artist point(s)"
+        run.message = f"Synced {updated} artist point(s)" + (
+            f" ({unchanged} unchanged, skipped)" if unchanged else "")
         db.commit()
-        return {"ok": True, "message": run.message, "updated": updated}
+        return {"ok": True, "message": run.message, "updated": updated, "unchanged": unchanged}
     except Exception as e:
         logger.error(f"Artist Discovery differential sync failed: {e}", exc_info=True)
         run.message = f"Error: {e}"

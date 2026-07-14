@@ -18,3 +18,6 @@ config/
 docker-compose.yml
 docker-compose.yml.*
 docker-compose*.bak*
+
+# Claude Code local session state (settings.local.json, launch.json, worktrees)
+.claude/
