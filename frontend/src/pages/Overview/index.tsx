@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity, AlertTriangle, Shuffle, ChevronRight } from "lucide-react";
-import { mediaApi, integrationsApi, importsApi, systemApi, fmtBytes, parseApiDate, type DepHealth, type ImportFunnel } from "../../lib/api";
+import { mediaApi, integrationsApi, importsApi, systemApi, settingsApi, fmtBytes, parseApiDate, type DepHealth, type ImportFunnel } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
 
 function PipelineChip({ icon: Icon, label, count, color, onClick }: {
@@ -261,6 +261,15 @@ export default function Dashboard() {
     (d: DepHealth) => d.ok === false || d.breaker_open,
   );
 
+  // OPS-03 — scheduled-backup staleness. Cheap local check server-side, so a
+  // 5-minute refetch is plenty; renders nothing unless backups are enabled
+  // and overdue (or have never completed).
+  const { data: backupStatus } = useQuery({
+    queryKey: ["backup-status"],
+    queryFn: settingsApi.backupStatus,
+    refetchInterval: 300_000,
+  });
+
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
@@ -314,6 +323,18 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {backupStatus?.stale && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-700/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+          <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="font-medium">Backups are stale</p>
+            <p className="text-amber-200/80 text-xs mt-0.5">
+              {backupStatus.reason} — run one now from Settings → Automation, or check the scheduler logs.
+            </p>
+          </div>
+        </div>
+      )}
 
       {downIntegrations.length > 0 && (
         <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-700/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">

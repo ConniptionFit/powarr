@@ -10,6 +10,7 @@ import BotState from "../../components/BotState";
 import ConfidenceBadge from "../../components/ConfidenceBadge";
 import { PlatformBadge, PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 import { SkeletonTable } from "../../components/Skeleton";
+import Kbd from "../../components/Kbd";
 
 /** True when the click landed on (or inside) an interactive control — row-click
  *  select must ignore these so buttons/checkboxes/links keep their own behavior. */
@@ -1550,14 +1551,5 @@ function PackReviewButton({
         </div>
       )}
     </div>
-  );
-}
-
-// UX-05 — inline keycap for the shortcut hint line.
-function Kbd({ children }: { children: React.ReactNode }) {
-  return (
-    <kbd className="px-1 py-px rounded border border-purple-900/50 bg-surface-raised text-slate-400 font-mono text-[10px]">
-      {children}
-    </kbd>
   );
 }

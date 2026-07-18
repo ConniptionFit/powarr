@@ -383,6 +383,18 @@ export interface BackupFile {
   modified: string;
 }
 
+// OPS-03 (v0.82.0) — read-only scheduled-backup staleness check
+export interface BackupStatus {
+  enabled: boolean;
+  interval_hours: number;
+  last_backup: string | null;
+  age_hours: number | null;
+  backup_count: number;
+  newest_file: string | null;
+  stale: boolean;
+  reason: string | null;
+}
+
 export interface CleanupSettings {
   excluded_libraries: string[];
   soft_delete_days: number;
@@ -444,6 +456,7 @@ export const settingsApi = {
     req<BackupSettings>("/settings/backup", { method: "PUT", body: JSON.stringify(s) }),
   runBackupNow: () => req<{ ok: boolean; path: string | null; message: string }>("/settings/backup/run", { method: "POST" }),
   listBackups: () => req<BackupFile[]>("/settings/backup/list"),
+  backupStatus: () => req<BackupStatus>("/settings/backup/status"),
   // OPS-02 — config-as-code export/import (on-demand) + the scheduled variant
   exportSettings: () => downloadCsv("/settings/export"),
   importSettings: (payload: SettingsExport) =>

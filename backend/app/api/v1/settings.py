@@ -173,6 +173,17 @@ async def run_backup_now(db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/backup/status")
+def backup_status_now(db: Session = Depends(get_db)):
+    """OPS-03 — read-only staleness check for scheduled backups (local files +
+    AppSetting timestamp only, no external calls). The Overview page surfaces
+    a warning banner when `stale` is true."""
+    from app.services.backup import backup_status
+    cfg = _get_json_setting(db, "backup", BackupSettings)
+    row = db.query(AppSetting).filter_by(key="last_backup").first()
+    return backup_status(cfg.enabled, cfg.interval_hours, row.value if row else None)
+
+
 @router.get("/backup/list")
 def list_backup_files():
     from app.services.backup import list_backups

@@ -101,6 +101,52 @@ def list_backups() -> list[dict]:
     ]
 
 
+def backup_status(enabled: bool, interval_hours: int, last_backup_iso: str | None,
+                  now: datetime | None = None) -> dict:
+    """OPS-03 — read-only staleness assessment for the scheduled-backup config.
+    Reference point is the `last_backup` AppSetting timestamp (written by both
+    the scheduler and the on-demand run), falling back to the newest backup
+    file's mtime when the setting is missing. A backup counts as stale once its
+    age exceeds twice the configured interval — the 2x grace keeps a single
+    late maintenance tick from raising a false alarm. Never stale while
+    scheduled backups are off: nothing was promised, so nothing is overdue."""
+    now = now or datetime.now(timezone.utc)
+    files = list_backups()
+    newest = files[0] if files else None
+    last_dt = None
+    if last_backup_iso:
+        try:
+            last_dt = datetime.fromisoformat(last_backup_iso)
+        except ValueError:
+            pass
+    if last_dt is None and newest:
+        last_dt = datetime.fromisoformat(newest["modified"])
+    if last_dt is not None and last_dt.tzinfo is None:
+        # last_backup is stored as naive UTC (datetime.utcnow().isoformat())
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    age_hours = (now - last_dt).total_seconds() / 3600 if last_dt else None
+    scheduled = enabled and interval_hours > 0
+    stale = False
+    reason = None
+    if scheduled:
+        if last_dt is None:
+            stale = True
+            reason = "Scheduled backups are enabled but none has ever completed"
+        elif age_hours > interval_hours * 2:
+            stale = True
+            reason = f"Last backup was {age_hours:.0f}h ago — expected every {interval_hours}h"
+    return {
+        "enabled": scheduled,
+        "interval_hours": interval_hours,
+        "last_backup": last_dt.isoformat() if last_dt else None,
+        "age_hours": round(age_hours, 1) if age_hours is not None else None,
+        "backup_count": len(files),
+        "newest_file": newest["name"] if newest else None,
+        "stale": stale,
+        "reason": reason,
+    }
+
+
 def prune_backups(retention_count: int) -> int:
     """Deletes backups beyond the most recent `retention_count` (by mtime).
     retention_count <= 0 means unlimited — nothing is pruned. Returns the number

@@ -10,6 +10,7 @@ import DeletionPreviewModal from "../../components/DeletionPreviewModal";
 import ArrLinkModal from "../../components/ArrLinkModal";
 import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 import { SkeletonTable } from "../../components/Skeleton";
+import Kbd from "../../components/Kbd";
 
 function ScoreBadge({ score }: { score: number }) {
   const color =
@@ -101,6 +102,7 @@ export default function DeletionSuggestions() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [previewIds, setPreviewIds] = useState<number[] | null>(null); // LIB-01 dry-run preview modal
   const [arrLinkItem, setArrLinkItem] = useState<MediaItem | null>(null); // INT-02 manual *arr link fix modal
+  const [focusedKey, setFocusedKey] = useState<string | null>(null); // UX-06 keyboard focus (group title or item id)
   const [explainBusy, setExplainBusy] = useState<number | null>(null);
   const [explainMsg, setExplainMsg] = useState<Record<number, string>>({});
   const [streamText, setStreamText] = useState<Record<number, string>>({});
@@ -308,6 +310,49 @@ export default function DeletionSuggestions() {
     }
   };
 
+  // UX-06 — same keyboard triage pattern as Match Review (UX-05): j/k move a
+  // focus ring through the visible rows (show groups or single items), x
+  // selects, d opens the non-destructive LIB-01 deletion preview for the
+  // focused row (the modal's Confirm stays click-only — no key ever deletes
+  // anything directly), i toggles ignore on a single item (reversible), Esc
+  // clears focus. Ignored while typing, with a modifier held, or while a
+  // modal is open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (previewIds !== null || arrLinkItem !== null) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable=true]")) return;
+      if (!["j", "k", "x", "d", "i", "Escape"].includes(e.key)) return;
+      if (e.key === "Escape") { setFocusedKey(null); return; }
+      const rows: { key: string; ids: number[]; item?: MediaItem }[] = isShowMode
+        ? showGroups.map(g => ({ key: g.parent_title, ids: g.ids }))
+        : displayItems.map(it => ({ key: String(it.id), ids: [it.id], item: it }));
+      if (rows.length === 0) return;
+      const idx = rows.findIndex(r => r.key === focusedKey);
+      if (e.key === "j" || e.key === "k") {
+        e.preventDefault();
+        const nextIdx = idx === -1 ? 0
+          : e.key === "j" ? Math.min(idx + 1, rows.length - 1)
+          : Math.max(idx - 1, 0);
+        const next = rows[nextIdx];
+        setFocusedKey(next.key);
+        document.getElementById(`del-row-${next.key}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return;
+      }
+      const row = idx >= 0 ? rows[idx] : undefined;
+      if (!row) return;
+      if (e.key === "x") {
+        if (row.item) toggleSelect(row.item.id); else toggleSelectMany(row.ids);
+      }
+      if (e.key === "d") setPreviewIds(row.ids);
+      if (e.key === "i" && row.item) ignoreMut.mutate({ id: row.item.id, ignored: !row.item.ignored });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isShowMode, showGroups, displayItems, focusedKey, previewIds, arrLinkItem]);
+
   const toggleSort = (key: SortKey) => {
     if (sortBy === key) setOrder(o => o === "desc" ? "asc" : "desc");
     else { setSortBy(key); setOrder("desc"); }
@@ -321,7 +366,13 @@ export default function DeletionSuggestions() {
   return (
     <div>
       <div className="flex items-center justify-between mb-5">
-        <p className="text-slate-400 text-sm">Deletion candidates sorted by score</p>
+        <div>
+          <p className="text-slate-400 text-sm">Deletion candidates sorted by score</p>
+          {/* UX-06 — pointer-only devices never see the shortcut hint */}
+          <p className="hidden md:block text-slate-600 text-xs mt-0.5">
+            Keyboard: <Kbd>j</Kbd>/<Kbd>k</Kbd> navigate · <Kbd>x</Kbd> select · <Kbd>d</Kbd> preview delete · <Kbd>i</Kbd> ignore
+          </p>
+        </div>
         <div className="flex items-center gap-3">
           {syncMsg && <span className="text-sm text-red-400">{syncMsg}</span>}
           {batchMsg && <span className="text-sm text-slate-400">{batchMsg}</span>}
@@ -512,8 +563,10 @@ export default function DeletionSuggestions() {
                     return (
                       <tr
                         key={group.parent_title}
-                        className={`hover:bg-white/5 transition-colors cursor-pointer ${groupSelected ? "bg-brand/5" : ""}`}
+                        id={`del-row-${group.parent_title}`}
+                        className={`hover:bg-white/5 transition-colors cursor-pointer ${groupSelected ? "bg-brand/5" : ""} ${focusedKey === group.parent_title ? "ring-1 ring-inset ring-brand/60" : ""}`}
                         onClick={e => {
+                          setFocusedKey(group.parent_title);
                           if (isInteractiveTarget(e.target)) return;
                           toggleSelectMany(group.ids);
                         }}
@@ -549,8 +602,10 @@ export default function DeletionSuggestions() {
                     return (
                       <Fragment key={item.id}>
                       <tr
-                        className={`hover:bg-white/5 transition-colors cursor-pointer ${selected.has(item.id) ? "bg-brand/5" : ""}`}
+                        id={`del-row-${item.id}`}
+                        className={`hover:bg-white/5 transition-colors cursor-pointer ${selected.has(item.id) ? "bg-brand/5" : ""} ${focusedKey === String(item.id) ? "ring-1 ring-inset ring-brand/60" : ""}`}
                         onClick={e => {
+                          setFocusedKey(String(item.id));
                           if (isInteractiveTarget(e.target)) return;
                           toggleSelect(item.id);
                         }}
