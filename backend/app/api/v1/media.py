@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.app_setting import AppSetting
 from app.models.deletion_log import DeletionLog
 from app.models.media import MediaItem
-from app.schemas.media import MediaItemOut, MediaStats, DeletionLogOut, DeletionStats, DeletionPreview, DuplicateGroup
+from app.schemas.media import MediaItemOut, MediaStats, DeletionLogOut, DeletionStats, DeletionPreview, DuplicateGroup, LibraryHealth
 from app.schemas.settings import ScoringWeights, CleanupSettings
 from app.services.deleter import propagate_and_delete
 
@@ -71,6 +71,17 @@ def list_duplicates(db: Session = Depends(get_db)):
     picks to keep vs. delete."""
     from app.services.duplicate_finder import find_duplicate_groups
     return find_duplicate_groups(db)
+
+
+@router.get("/health", response_model=LibraryHealth)
+def library_health(db: Session = Depends(get_db)):
+    """LIB-06: read-only library health KPIs — per-type footprint, *arr link
+    coverage, duplicate load, AD-21 thumbnail coverage, open import backlog,
+    protect-flag shielding. Computed entirely from the synced local tables:
+    no live Plex/*arr calls, so this can never hang on a flaky integration.
+    (Distinct from /system/health, the Docker healthcheck.)"""
+    from app.services.library_health import compute_library_health
+    return compute_library_health(db)
 
 
 @router.get("/stats", response_model=MediaStats)

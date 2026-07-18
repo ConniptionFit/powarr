@@ -4,6 +4,7 @@ import { Menu, X } from "lucide-react";
 import Overview from "./pages/Overview";
 import DeletionSuggestions from "./pages/Library/DeletionSuggestions";
 import Duplicates from "./pages/Library/Duplicates";
+import Health from "./pages/Library/Health";
 import DeletionHistory from "./pages/Library/DeletionHistory";
 import MatchReview from "./pages/Imports/MatchReview";
 import RecentDownloads from "./pages/Imports/RecentDownloads";
@@ -124,6 +125,7 @@ export default function App() {
               <Route path="/library" element={<Navigate to="/library/deletion-suggestions" replace />} />
               <Route path="/library/deletion-suggestions" element={<div className="p-4 sm:p-8"><DeletionSuggestions /></div>} />
               <Route path="/library/duplicates" element={<div className="p-4 sm:p-8"><Duplicates /></div>} />
+              <Route path="/library/health" element={<div className="p-4 sm:p-8"><Health /></div>} />
               <Route path="/library/deletion-history" element={<div className="p-4 sm:p-8"><DeletionHistory /></div>} />
 
               <Route path="/imports" element={<div className="p-4 sm:p-8"><MatchReview /></div>} />

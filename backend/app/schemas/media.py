@@ -126,3 +126,38 @@ class DuplicateGroup(BaseModel):
     has_size_signal: bool = True
     total_size_bytes: int
     reclaimable_bytes: int
+
+
+class MediaTypeFootprint(BaseModel):
+    """LIB-06 — one media_type's count/size within the synced library."""
+    media_type: str
+    count: int
+    total_size_bytes: int
+
+
+class ArrLinkCoverage(BaseModel):
+    """LIB-06 — how many items of a linkable media_type carry their *arr id.
+    Only movie/episode/track appear (the types link_arr_ids() actually links —
+    parent container rows inherit linkage through children)."""
+    media_type: str
+    arr_field: str
+    linked: int
+    total: int
+
+
+class LibraryHealth(BaseModel):
+    """LIB-06 — read-only KPI aggregation computed purely from the synced
+    local tables (no live Plex/*arr calls). No composite score on purpose:
+    scoring formulas are a confirmation-gated surface in Powarr."""
+    by_type: list[MediaTypeFootprint]
+    arr_link_coverage: list[ArrLinkCoverage]
+    duplicate_groups: int
+    duplicate_reclaimable_bytes: int
+    artist_thumbnails_total: int
+    artist_thumbnails_with_image: int
+    open_imports_by_status: dict[str, int]
+    open_imports_total: int
+    malformed_flags_open: int
+    protections: dict[str, int]
+    pending_soft_deletes: int
+    ignored_items: int

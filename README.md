@@ -83,6 +83,8 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 - **Discord webhook channel (v0.76.0)**: a second notification delivery channel alongside ntfy — Settings → Notifications → enter an Incoming Webhook URL (masked once saved, same as an integration secret). Covers the same events (scan summary, actionable new-suggestion links, weekly digest); Accept/Reject render as clickable markdown links in the embed rather than native buttons, since Discord webhooks have no interactive-component support
 - **Bazarr subtitle awareness (v0.77.0)**: new read-only Bazarr integration (Settings → Integrations) — the single-item Deletion Suggestions preview modal gains an on-demand "Check Bazarr subtitles" button for Radarr/Sonarr-linked items, reporting how many subtitle files Bazarr knows about before you delete, so orphaned subs don't silently linger. Never deletes anything on Bazarr's side — informational only
 - **Listen-before-add previews (v0.78.0, reworked v0.79.0)**: Artist Discovery and Related Artists cards show a Play button that embeds a YouTube video or plays a Spotify 30-second clip. The button only appears when a preview is actually confirmed to exist on a source you've enabled in Settings → Integrations — availability is checked as each card scrolls into view (server-side cached to protect the YouTube API quota), so no button means no preview, never a dead-end click. Spotify is opt-in ("Search Spotify for artist previews", unchecked by default) and is never queried while unchecked. YouTube Music has no official public API and isn't implemented
+- **Library Health dashboard (v0.81.0)**: new **Library → Health** tab with read-only upkeep KPIs — per-type item counts and disk footprint, *arr link coverage bars (movies→Radarr, episodes→Sonarr, tracks→Lidarr), duplicate-group count with reclaimable space, artist-thumbnail cache coverage, the open failed-import backlog, what the protect flags currently shield, and pending soft-deletes. Computed entirely from Powarr's synced local data (no live Plex/*arr calls), each tile linking to the page where the number can be acted on
+- **Match Review keyboard shortcuts (v0.81.0)**: triage without the mouse — `j`/`k` move a highlighted focus through the filtered list, `x` toggles selection, `e` expands details, `y` accepts (press twice — the second press fires the same Confirm Import step the button shows), `n` rejects, `Esc` backs out. Reject-and-remove-download stays click-only, and keys are ignored while typing in any field
 
 ---
 
@@ -118,7 +120,7 @@ Then open `http://<host>:7979`:
 
 ### Navigation (v0.38.0; Imports consolidated v0.43.0)
 A left icon rail replaces the old always-expanded sidebar. Rail areas: **Overview**, **Library**
-(Deletion Suggestions / Deletion History), **Imports** (a single **Match Review** view — detection,
+(Deletion Suggestions / Duplicates / Health / Deletion History), **Imports** (a single **Match Review** view — detection,
 confidence scoring, and triage together; the v0.38.0 split into separate Import Queue and Match
 Review tabs was consolidated back into one screen in v0.43.0), **Music** (Artist Discovery /
 Related Artists / Playlists), and **Settings** (category grid: Integrations, Matching & Scoring,

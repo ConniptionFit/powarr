@@ -461,6 +461,8 @@ export default function MatchReview() {
   const [llmQueued, setLlmQueued] = useState<number | null>(null); // queue position, null = not queued
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [expanded, setExpanded] = useState<number | null>(null);
+  // UX-05 — row the keyboard shortcuts act on (ring-highlighted in both views).
+  const [focusedId, setFocusedId] = useState<number | null>(null);
 
   // table view state (persisted per-browser)
   const [visibleCols, setVisibleCols] = useState<Set<ColKey>>(loadVisible);
@@ -791,6 +793,51 @@ export default function MatchReview() {
       ? new Set() : new Set(allSelectable.map(i => i.id)));
   };
 
+  // UX-05 — keyboard-first triage over the currently filtered/sorted list:
+  // j/k move focus, x selects, e expands, y accepts (two-step — the first y
+  // arms the same Confirm Import step the button uses, the second fires it),
+  // n rejects (never the reject-and-remove-download variant: that one stays
+  // click-only), Esc backs out of the confirm then clears focus. Ignored
+  // while typing in any input/select and when a modifier is held.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable=true]")) return;
+      if (!["j", "k", "x", "y", "n", "e", "Escape"].includes(e.key)) return;
+      if (e.key === "Escape") {
+        if (confirmAccept !== null) setConfirmAccept(null);
+        else setFocusedId(null);
+        return;
+      }
+      if (sortedItems.length === 0) return;
+      const idx = sortedItems.findIndex(i => i.id === focusedId);
+      if (e.key === "j" || e.key === "k") {
+        e.preventDefault();
+        const nextIdx = idx === -1 ? 0
+          : e.key === "j" ? Math.min(idx + 1, sortedItems.length - 1)
+          : Math.max(idx - 1, 0);
+        const next = sortedItems[nextIdx];
+        setFocusedId(next.id);
+        document.getElementById(`import-item-${next.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return;
+      }
+      const item = idx >= 0 ? sortedItems[idx] : undefined;
+      if (!item) return;
+      const actionable = item.status === "suggested" || item.status === "resolve_failed";
+      if (e.key === "x" && (actionable || item.status === "orphan_pending")) toggleSelect(item.id);
+      if (e.key === "e") setExpanded(prev => (prev === item.id ? null : item.id));
+      if (e.key === "y" && actionable && item.matched_id && !acceptingIds.has(item.id)) {
+        if (confirmAccept === item.id) acceptMut.mutate(item.id);
+        else setConfirmAccept(item.id);
+      }
+      if (e.key === "n" && actionable) rejectMut.mutate({ id: item.id, remove: false });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortedItems, focusedId, confirmAccept, acceptingIds]);
+
   const toggleSort = (field: keyof FailedImport) => {
     if (sortBy === field) setSortDir(d => d === "desc" ? "asc" : "desc");
     else { setSortBy(field); setSortDir("desc"); }
@@ -1010,7 +1057,13 @@ export default function MatchReview() {
         <h2 className="text-white font-semibold text-sm">Match Review</h2>
       </div>
       <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
-        <p className="text-slate-400 text-sm">Stuck *arr downloads matched against your library — accept to push the import</p>
+        <div>
+          <p className="text-slate-400 text-sm">Stuck *arr downloads matched against your library — accept to push the import</p>
+          {/* UX-05 — pointer-only devices never see the shortcut hint */}
+          <p className="hidden md:block text-slate-600 text-xs mt-0.5">
+            Keyboard: <Kbd>j</Kbd>/<Kbd>k</Kbd> navigate · <Kbd>x</Kbd> select · <Kbd>e</Kbd> details · <Kbd>y</Kbd> accept (twice to confirm) · <Kbd>n</Kbd> reject
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setViewMode(m => m === "cards" ? "table" : "cards")}
@@ -1322,8 +1375,9 @@ export default function MatchReview() {
                     <tr
                       key={item.id}
                       id={`import-item-${item.id}`}
-                      className={`hover:bg-white/5 transition-colors ${selectable ? "cursor-pointer" : ""} ${selected.has(item.id) ? "bg-brand/5" : ""}`}
+                      className={`hover:bg-white/5 transition-colors ${selectable ? "cursor-pointer" : ""} ${selected.has(item.id) ? "bg-brand/5" : ""} ${focusedId === item.id ? "ring-1 ring-inset ring-brand/60" : ""}`}
                       onClick={e => {
+                        setFocusedId(item.id);
                         if (!selectable || isInteractiveTarget(e.target)) return;
                         toggleSelect(item.id);
                       }}
@@ -1372,7 +1426,8 @@ export default function MatchReview() {
                 id={`import-item-${item.id}`}
                 className={`bg-surface-raised rounded-xl border p-4 transition-colors ${
                   selected.has(item.id) ? "border-brand/50 bg-brand/5" : "border-purple-900/30"
-                }`}
+                } ${focusedId === item.id ? "ring-1 ring-brand/60" : ""}`}
+                onClick={() => setFocusedId(item.id)}
               >
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div className="flex items-start gap-2 min-w-0 flex-1">
@@ -1495,5 +1550,14 @@ function PackReviewButton({
         </div>
       )}
     </div>
+  );
+}
+
+// UX-05 — inline keycap for the shortcut hint line.
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="px-1 py-px rounded border border-purple-900/50 bg-surface-raised text-slate-400 font-mono text-[10px]">
+      {children}
+    </kbd>
   );
 }

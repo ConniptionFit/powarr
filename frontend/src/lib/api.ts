@@ -130,6 +130,36 @@ export interface DuplicateGroup {
   reclaimable_bytes: number;
 }
 
+// LIB-06 — read-only library health KPIs, computed entirely from the synced
+// local tables (no live Plex/*arr calls behind this endpoint).
+export interface MediaTypeFootprint {
+  media_type: string;
+  count: number;
+  total_size_bytes: number;
+}
+
+export interface ArrLinkCoverage {
+  media_type: string;
+  arr_field: string;
+  linked: number;
+  total: number;
+}
+
+export interface LibraryHealth {
+  by_type: MediaTypeFootprint[];
+  arr_link_coverage: ArrLinkCoverage[];
+  duplicate_groups: number;
+  duplicate_reclaimable_bytes: number;
+  artist_thumbnails_total: number;
+  artist_thumbnails_with_image: number;
+  open_imports_by_status: Record<string, number>;
+  open_imports_total: number;
+  malformed_flags_open: number;
+  protections: Record<string, number>;
+  pending_soft_deletes: number;
+  ignored_items: number;
+}
+
 // LIB-02 — explicit Sonarr episode delete policy modes, only meaningful when
 // every previewed item is a Sonarr-linked episode.
 export type EpisodeDeleteMode = "episode_files" | "unmonitor_season" | "unmonitor_series" | "remove_from_sonarr";
@@ -159,6 +189,7 @@ export const mediaApi = {
     }),
   libraries: () => req<string[]>("/media/libraries"),
   duplicates: () => req<DuplicateGroup[]>("/media/duplicates"),
+  health: () => req<LibraryHealth>("/media/health"),
   restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
   // INT-02 (v0.71.0) — manual *arr ID override, fixing a bad auto-link without a
   // full resync. arrCandidates browses/searches the matching app's library;
