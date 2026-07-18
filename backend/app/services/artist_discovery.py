@@ -1351,6 +1351,58 @@ async def add_related_artist(db, mbid: str | None, name: str) -> dict[str, Any]:
 
 # --- Misc -------------------------------------------------------------------------
 
+def list_recent_adds(db, limit: int = 10) -> list[dict[str, Any]]:
+    """AD-22 — the last N artists actually added to Lidarr (ArtistAddLog rows,
+    written only for genuine adds — Lidarr's "already existed" 400 never logs),
+    enriched for display: a discovery add pulls its DiscoveredArtist row's
+    why-suggested fields/image/bio; a Related Artists add has no candidate row,
+    so its reasoning is just its source. Any still-missing image falls back to
+    the AD-21 library thumbnail cache — these artists are in the library now,
+    so the daily refresh covers them even after AD-08 purges the accepted
+    candidate's enrichment image. Read-only, local tables only."""
+    from app.services.artist_thumbnails import thumbnails_for
+    logs = (db.query(ArtistAddLog)
+            .order_by(ArtistAddLog.added_at.desc(), ArtistAddLog.id.desc())
+            .limit(limit).all())
+    if not logs:
+        return []
+    mbids = [log.musicbrainz_id for log in logs if log.musicbrainz_id]
+    names = [log.artist_name for log in logs]
+    cands = (db.query(DiscoveredArtist)
+             .filter(DiscoveredArtist.musicbrainz_id.in_(mbids)).all()) if mbids else []
+    by_mbid = {c.musicbrainz_id: c for c in cands}
+    # Name fallback for log rows without an mbid (or whose candidate predates it)
+    remaining = [n for n in names]
+    name_cands = (db.query(DiscoveredArtist)
+                  .filter(DiscoveredArtist.artist_name.in_(remaining)).all()) if remaining else []
+    by_name = {c.artist_name.lower(): c for c in name_cands}
+    thumbs = thumbnails_for(db, names)
+    out: list[dict[str, Any]] = []
+    for log in logs:
+        cand = by_mbid.get(log.musicbrainz_id) if log.musicbrainz_id else None
+        if cand is None:
+            cand = by_name.get(log.artist_name.lower())
+        image = (cand.image_url if cand else None) or thumbs.get(_norm_artist(log.artist_name))
+        out.append({
+            "id": log.id,
+            "artist_name": log.artist_name,
+            "musicbrainz_id": log.musicbrainz_id,
+            "source": log.source,
+            "lidarr_artist_id": log.lidarr_artist_id,
+            "added_at": log.added_at,
+            "discovery_source": cand.source if cand else None,
+            "similarity_score": cand.similarity_score if cand else None,
+            "seed_artist_name": cand.seed_artist_name if cand else None,
+            "seed_artist_names": json.loads(cand.seed_artist_names) if cand and cand.seed_artist_names else [],
+            "associated_seed_mbids": json.loads(cand.associated_seed_mbids) if cand and cand.associated_seed_mbids else [],
+            "genres": clean_tags(json.loads(cand.genres) if cand and cand.genres else []),
+            "years_active": cand.years_active if cand else None,
+            "image_url": image,
+            "bio": cand.bio if cand else None,
+        })
+    return out
+
+
 async def get_lidarr_profiles(db) -> dict[str, Any]:
     lidarr_row = db.query(Integration).filter_by(name="lidarr", enabled=True).first()
     if not lidarr_row:

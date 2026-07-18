@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Compass, Play, Check, X, Sparkles, Settings, ChevronDown, ChevronUp, History } from "lucide-react";
+import { Compass, Play, Check, X, Sparkles, Settings, ChevronDown, ChevronUp, History, UserPlus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { req, fmtRelative, parseApiDate } from "../../lib/api";
 import ArtistCard from "../../components/ArtistCard";
@@ -35,6 +35,26 @@ interface DiscoveryRun {
   message: string | null;
 }
 
+// AD-22 — one genuine Lidarr add (ArtistAddLog row) with enough of its
+// DiscoveredArtist enrichment to reuse whySuggested()'s wording.
+interface RecentAdd {
+  id: number;
+  artist_name: string;
+  musicbrainz_id: string | null;
+  source: string; // "discovery" | "related"
+  lidarr_artist_id: number | null;
+  added_at: string | null;
+  discovery_source: string | null;
+  similarity_score: number | null;
+  seed_artist_name: string | null;
+  seed_artist_names: string[];
+  associated_seed_mbids: string[];
+  genres: string[];
+  years_active: string | null;
+  image_url: string | null;
+  bio: string | null;
+}
+
 interface Stats {
   pending: number;
   accepted: number;
@@ -51,13 +71,14 @@ const api = {
     req<Candidate[]>(`/artist-discovery/candidates?status=${status}`),
   run: () => req<{ ok: boolean; message: string }>("/artist-discovery/run", { method: "POST" }),
   runs: () => req<DiscoveryRun[]>("/artist-discovery/runs?limit=10"),
+  recentAdds: (limit: number) => req<RecentAdd[]>(`/artist-discovery/recent-adds?limit=${limit}`),
   accept: (id: number) =>
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/accept`, { method: "POST" }),
   reject: (id: number) =>
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/reject`, { method: "POST" }),
 };
 
-function whySuggested(c: Candidate): string {
+function whySuggested(c: Pick<Candidate, "source" | "similarity_score" | "seed_artist_name" | "seed_artist_names" | "associated_seed_mbids">): string {
   if (c.source === "centroid" || c.source === "centroid_recent" || c.source.startsWith("centroid_mood_")) {
     const pct = c.similarity_score != null ? `${Math.round(c.similarity_score * 100)}% match to` : "Close match to";
     // AD-17 — a second discovery lane seeded from what you've actually been
@@ -119,6 +140,79 @@ function runDuration(r: DiscoveryRun): string {
   if (!r.started_at || !r.finished_at) return "—";
   const secs = Math.max(0, Math.round((parseApiDate(r.finished_at).getTime() - parseApiDate(r.started_at).getTime()) / 1000));
   return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
+// AD-22 — the last N artists actually added to Lidarr (discovery accepts +
+// Related Artists adds), with when, why, thumbnail, and bio. Reuses the shared
+// ArtistCard shell; the added-time rides in the actions slot since these rows
+// have no buttons.
+function addReason(a: RecentAdd): string {
+  if (a.source === "related") return "Added from a Related Artists search";
+  if (a.discovery_source) {
+    return `Accepted from the discovery queue — ${whySuggested({
+      source: a.discovery_source,
+      similarity_score: a.similarity_score,
+      seed_artist_name: a.seed_artist_name,
+      seed_artist_names: a.seed_artist_names,
+      associated_seed_mbids: a.associated_seed_mbids,
+    })}`;
+  }
+  return "Accepted from the discovery queue";
+}
+
+function RecentlyAdded() {
+  const [open, setOpen] = useState(true);
+  const [limit, setLimit] = useState(10);
+  const { data: adds = [] } = useQuery({
+    queryKey: ["ad-recent-adds", limit],
+    queryFn: () => api.recentAdds(limit),
+    enabled: open,
+  });
+
+  return (
+    <section className="mt-8">
+      <div className="flex items-center gap-3 mb-3">
+        <button onClick={() => setOpen(o => !o)}
+          className="flex items-center gap-2 text-white font-semibold text-sm uppercase tracking-wider">
+          <UserPlus size={16} /> Recently added
+          {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+        {open && (
+          <select value={limit} onChange={e => setLimit(Number(e.target.value))}
+            title="How many recent adds to show"
+            className="bg-surface-raised border border-purple-900/40 rounded px-2 py-1 text-xs text-slate-300">
+            <option value={10}>Last 10</option>
+            <option value={25}>Last 25</option>
+            <option value={50}>Last 50</option>
+          </select>
+        )}
+      </div>
+      {open && (
+        adds.length === 0 ? (
+          <p className="text-slate-500 text-sm">No artists added yet — accept a discovery candidate or add one from Related Artists.</p>
+        ) : (
+          <div className="grid gap-2">
+            {adds.map(a => (
+              <ArtistCard
+                key={a.id}
+                name={a.artist_name}
+                yearsActive={a.years_active}
+                imageUrl={a.image_url}
+                bio={a.bio}
+                genres={a.genres}
+                subtitle={addReason(a)}
+                actions={
+                  <span className="text-xs text-slate-500 whitespace-nowrap" title={a.added_at ? parseApiDate(a.added_at).toLocaleString() : undefined}>
+                    {fmtRelative(a.added_at)}
+                  </span>
+                }
+              />
+            ))}
+          </div>
+        )
+      )}
+    </section>
+  );
 }
 
 function RecentRuns() {
@@ -192,6 +286,7 @@ export default function ArtistDiscovery() {
       setMsg(r.message);
       qc.invalidateQueries({ queryKey: ["ad-candidates"] });
       qc.invalidateQueries({ queryKey: ["ad-stats"] });
+      qc.invalidateQueries({ queryKey: ["ad-recent-adds"] });
     },
     onError: (e: Error) => setMsg(e.message),
   });
@@ -296,6 +391,8 @@ export default function ArtistDiscovery() {
           </div>
         )}
       </section>
+
+      <RecentlyAdded />
 
       <RecentRuns />
     </div>

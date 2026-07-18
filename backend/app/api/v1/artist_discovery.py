@@ -163,6 +163,34 @@ class RunOut(BaseModel):
     message: Optional[str] = None
 
 
+class RecentAddOut(BaseModel):
+    """AD-22 — one artist actually added to Lidarr, with enough of its
+    DiscoveredArtist enrichment (when it has one) for the frontend to reuse
+    the candidate cards' why-suggested wording."""
+    id: int
+    artist_name: str
+    musicbrainz_id: Optional[str] = None
+    source: str  # discovery | related
+    lidarr_artist_id: Optional[int] = None
+    added_at: Optional[datetime] = None
+    discovery_source: Optional[str] = None  # centroid | graph | centroid_recent | centroid_mood_*
+    similarity_score: Optional[float] = None
+    seed_artist_name: Optional[str] = None
+    seed_artist_names: list[str] = []
+    associated_seed_mbids: list[str] = []
+    genres: list[str] = []
+    years_active: Optional[str] = None
+    image_url: Optional[str] = None
+    bio: Optional[str] = None
+
+
+@router.get("/recent-adds", response_model=list[RecentAddOut])
+def recent_adds(limit: int = Query(10, ge=1, le=100), db: Session = Depends(get_db)):
+    """AD-22 — the last N genuine Lidarr adds (discovery accepts + Related
+    Artists adds), newest first. Read-only, local tables only."""
+    return [RecentAddOut(**row) for row in service.list_recent_adds(db, limit=limit)]
+
+
 @router.get("/runs", response_model=list[RunOut])
 def list_runs(limit: int = Query(20, le=100), db: Session = Depends(get_db)):
     from app.models.artist_discovery import ArtistDiscoveryRun
