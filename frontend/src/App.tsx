@@ -123,14 +123,16 @@ export default function App() {
               <Route path="/" element={<Overview />} />
 
               <Route path="/library" element={<Navigate to="/library/deletion-suggestions" replace />} />
-              <Route path="/library/deletion-suggestions" element={<div className="p-4 sm:p-8"><DeletionSuggestions /></div>} />
-              <Route path="/library/duplicates" element={<div className="p-4 sm:p-8"><Duplicates /></div>} />
-              <Route path="/library/health" element={<div className="p-4 sm:p-8"><Health /></div>} />
-              <Route path="/library/deletion-history" element={<div className="p-4 sm:p-8"><DeletionHistory /></div>} />
+              {/* Pages self-pad at their root (p-4 sm:p-8), matching Overview/Music/Settings/Logs —
+                  one consistent rule instead of App.tsx padding some routes and pages padding others. */}
+              <Route path="/library/deletion-suggestions" element={<DeletionSuggestions />} />
+              <Route path="/library/duplicates" element={<Duplicates />} />
+              <Route path="/library/health" element={<Health />} />
+              <Route path="/library/deletion-history" element={<DeletionHistory />} />
 
-              <Route path="/imports" element={<div className="p-4 sm:p-8"><MatchReview /></div>} />
-              <Route path="/imports/recent-downloads" element={<div className="p-4 sm:p-8"><RecentDownloads /></div>} />
-              <Route path="/imports/llm-accuracy" element={<div className="p-4 sm:p-8"><LlmAccuracy /></div>} />
+              <Route path="/imports" element={<MatchReview />} />
+              <Route path="/imports/recent-downloads" element={<RecentDownloads />} />
+              <Route path="/imports/llm-accuracy" element={<LlmAccuracy />} />
               {/* Redirect old /imports/queue URL for backwards compatibility */}
               <Route path="/imports/queue" element={<Navigate to="/imports" replace />} />
 

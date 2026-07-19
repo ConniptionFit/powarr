@@ -72,7 +72,7 @@ export default function LlmAccuracy() {
   });
 
   return (
-    <div>
+    <div className="p-4 sm:p-8">
       <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
         <p className="text-slate-400 text-sm">
           Match-review LLM call accuracy — agree/disagree rate, parse success, enforcement flips, and

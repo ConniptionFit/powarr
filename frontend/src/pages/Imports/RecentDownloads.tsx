@@ -97,7 +97,7 @@ export default function RecentDownloads() {
   });
 
   return (
-    <div>
+    <div className="p-4 sm:p-8">
       <p className="text-slate-400 text-sm mb-5">
         Browse recent grabs from every enabled *arr app and force a re-import — distinct from Scan Now,
         which only surfaces items already flagged as stuck.

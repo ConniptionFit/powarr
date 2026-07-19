@@ -36,7 +36,7 @@ export default function DeletionHistory() {
   });
 
   return (
-    <div>
+    <div className="p-4 sm:p-8">
       <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
         <p className="text-slate-400 text-sm">What was deleted, when, and how much space it freed</p>
         <div className="flex items-center gap-3">

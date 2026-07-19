@@ -364,7 +364,7 @@ export default function DeletionSuggestions() {
   const hasEpisodes = filteredItems.some(i => i.media_type === "episode") || (!mediaType);
 
   return (
-    <div>
+    <div className="p-4 sm:p-8">
       <div className="flex items-center justify-between mb-5">
         <div>
           <p className="text-slate-400 text-sm">Deletion candidates sorted by score</p>

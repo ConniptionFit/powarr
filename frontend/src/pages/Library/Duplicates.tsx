@@ -54,7 +54,7 @@ export default function Duplicates() {
   const totalReclaimable = groups.reduce((sum, g) => sum + g.reclaimable_bytes, 0);
 
   return (
-    <div>
+    <div className="p-4 sm:p-8">
       <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
         <p className="text-slate-400 text-sm">
           Same title, multiple copies living separately in Plex — pick what to keep, review, then delete the rest.

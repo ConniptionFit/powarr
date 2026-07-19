@@ -1052,7 +1052,7 @@ export default function MatchReview() {
   };
 
   return (
-    <div>
+    <div className="p-4 sm:p-8">
       <div className="flex items-center gap-2 mb-1">
         <BotState variant="available" size={22} />
         <h2 className="text-white font-semibold text-sm">Match Review</h2>

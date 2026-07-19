@@ -18,7 +18,7 @@ export default function Health() {
   if (isLoading || !data) return <SkeletonGrid cols={3} rows={2} />;
 
   return (
-    <div>
+    <div className="p-4 sm:p-8">
       <p className="text-slate-400 text-sm mb-5">
         A snapshot of library upkeep — computed from Powarr's synced data, refreshed by the regular Plex sync.
       </p>
