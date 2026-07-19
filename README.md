@@ -88,6 +88,7 @@ Successor to the original Node.js Powarr completed-downloads monitor, rebuilt on
 - **Deletion Suggestions keyboard shortcuts (v0.82.0)**: the same triage keys on Library → Deletion Suggestions — `j`/`k` navigate (show groups or single items), `x` selects, `d` opens the non-destructive deletion preview (the modal's Confirm stays click-only — no key ever deletes anything directly), `i` toggles ignore, `Esc` clears focus
 - **Recently Added artists (v0.83.0)**: Music → Artist Discovery now lists the last 10/25/50 artists actually added to Lidarr — thumbnail, short bio, when they were added, and why (the taste-model match %, the similar-artists connections, or a Related Artists search)
 - **Backup staleness warning (v0.82.0)**: when scheduled backups are enabled but overdue (past twice the configured interval) or have never completed, the Overview page shows a warning banner — backed by a read-only `GET /settings/backup/status` that only inspects local backup files and the last-run timestamp
+- **UI polish & accessibility (v0.84.0)**: a keyboard focus ring now highlights the focused control everywhere (pairs with the `j`/`k`/`x` triage shortcuts), icon-only buttons carry accessible labels, and the last few "Loading…" placeholders became skeleton loaders for a consistent feel. Settings gained a category-switcher so you jump straight between categories, the header is now a clickable Area › Screen breadcrumb, and the Overview "Sync Library" button uses the primary brand color
 
 ---
 
