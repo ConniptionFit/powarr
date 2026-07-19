@@ -71,7 +71,7 @@ export default function DeletionPreviewModal({
           <h2 className="text-lg font-bold text-white">
             {data?.would_pend ? "Confirm Soft-Delete" : "Confirm Delete"}
           </h2>
-          <button onClick={onCancel} className="text-slate-400 hover:text-white">
+          <button onClick={onCancel} aria-label="Close" className="text-slate-400 hover:text-white">
             <X size={18} />
           </button>
         </div>

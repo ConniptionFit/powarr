@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Navigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup, Activity, RotateCcw, Plug, SlidersHorizontal, Music } from "lucide-react";
+import { Skeleton } from "../../components/Skeleton";
 import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ScoringProfiles,
          type ImportMatchingSettings, type CleanupSettings, type SyncSettings, type NotificationSettings,
          type OllamaSettings, type LlmPolicies, type LlmAppOverride, type LlmLibraryOverride,
@@ -2284,7 +2285,7 @@ function ScoringWeightsSection() {
     setWeights(w => w ? { ...w, [field]: val } : w);
   };
 
-  if (isLoading || !weights) return <div className="text-slate-400">Loading…</div>;
+  if (isLoading || !weights) return <div className="pt-4"><Skeleton className="h-10 w-full" count={5} /></div>;
 
   return (
     <>
@@ -2370,13 +2371,36 @@ export default function SettingsPage() {
     );
   }
 
+  // Unknown /settings/:category (typo, stale bookmark) — fall back to the grid
+  // rather than rendering a heading with no section below it.
+  if (!cat) return <Navigate to="/settings" replace />;
+
   return (
     <div className="p-4 sm:p-8 max-w-2xl">
-      <button onClick={() => navigate("/settings")} className="text-slate-400 hover:text-white text-sm mb-4">
-        ‹ All Settings
-      </button>
-      <h1 className="text-2xl font-bold text-white mb-1">{cat?.label ?? "Settings"}</h1>
-      <p className="text-slate-400 text-sm mb-6">{cat?.description}</p>
+      {/* Direct category switcher — jump straight between categories instead of
+          bouncing back out to the grid. Scrolls horizontally on narrow screens. */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-4 -mx-1 px-1">
+        {CATEGORIES.map(c => {
+          const Icon = c.icon;
+          const active = c.key === category;
+          return (
+            <button
+              key={c.key}
+              onClick={() => navigate(`/settings/${c.key}`)}
+              className={`flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                active
+                  ? "bg-brand text-white"
+                  : "text-slate-400 hover:text-white hover:bg-white/5 border border-purple-900/40"
+              }`}
+            >
+              <Icon size={14} />
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+      <h1 className="text-2xl font-bold text-white mb-1">{cat.label}</h1>
+      <p className="text-slate-400 text-sm mb-6">{cat.description}</p>
 
       {category === "integrations" && <IntegrationsPage embedded />}
       {category === "matching-scoring" && (

@@ -309,7 +309,7 @@ export default function Dashboard() {
           <button
             onClick={handleSync}
             disabled={syncing}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-yellow-700 hover:bg-yellow-600 text-white text-sm transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand hover:bg-brand-dark text-white text-sm transition-colors disabled:opacity-50"
           >
             <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
             {syncing ? "Syncing…" : "Sync Library"}

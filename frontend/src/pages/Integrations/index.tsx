@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle, XCircle, Loader2, Save, RefreshCw, Bot, Sparkles } from "lucide-react";
 import { integrationsApi, settingsApi, ollamaApi, type IntegrationConfig, req } from "../../lib/api";
+import { Skeleton } from "../../components/Skeleton";
 
 const INTEGRATION_META: Record<string, { label: string; color: string; description: string }> = {
   plex: { label: "Plex", color: "bg-yellow-600", description: "Media server — required for library sync" },
@@ -884,7 +885,7 @@ export default function IntegrationsPage({ embedded = false }: { embedded?: bool
   const spotify = integrations.find(cfg => cfg.name === "spotify");
 
   const body = isLoading ? (
-    <p className="text-slate-400">Loading…</p>
+    <Skeleton className="h-20 w-full" count={4} />
   ) : (
     <div className="space-y-4">
       {sorted.map(cfg => <IntegrationCard key={cfg.name} cfg={cfg} />)}

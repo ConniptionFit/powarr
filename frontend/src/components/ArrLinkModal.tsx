@@ -57,7 +57,7 @@ export default function ArrLinkModal({ item, onClose }: { item: MediaItem; onClo
             <h2 className="text-lg font-bold text-white">Fix {appLabel} Link</h2>
             <p className="text-slate-500 text-xs mt-0.5 truncate max-w-xs" title={item.title}>{item.title}</p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white flex-shrink-0">
+          <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white flex-shrink-0">
             <X size={18} />
           </button>
         </div>

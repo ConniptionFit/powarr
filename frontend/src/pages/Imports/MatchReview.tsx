@@ -9,7 +9,7 @@ import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
 import ConfidenceBadge from "../../components/ConfidenceBadge";
 import { PlatformBadge, PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
-import { SkeletonTable } from "../../components/Skeleton";
+import { Skeleton, SkeletonTable } from "../../components/Skeleton";
 import Kbd from "../../components/Kbd";
 
 /** True when the click landed on (or inside) an interactive control — row-click
@@ -416,7 +416,7 @@ function AutoGateInspector({ item }: { item: FailedImport }) {
       </button>
       {open && (
         isLoading || !data ? (
-          <p className="text-slate-500 text-xs mt-2">Loading…</p>
+          <Skeleton className="h-4 w-40 mt-2" />
         ) : (
           <div className="mt-2 space-y-2">
             <div className="flex flex-wrap items-center gap-3">

@@ -121,11 +121,11 @@ function CandidateCard({ c, onAccept, onReject, pending }: {
       subtitle={whySuggested(c)}
       actions={
         <>
-          <button onClick={onAccept} disabled={pending} title="Add to Lidarr"
+          <button onClick={onAccept} disabled={pending} title="Add to Lidarr" aria-label="Add to Lidarr"
             className="p-1.5 rounded hover:bg-green-900/40 text-slate-400 hover:text-green-300 disabled:opacity-40">
             <Check size={15} />
           </button>
-          <button onClick={onReject} disabled={pending} title="Reject"
+          <button onClick={onReject} disabled={pending} title="Reject" aria-label="Reject"
             className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 disabled:opacity-40">
             <X size={15} />
           </button>

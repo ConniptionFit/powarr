@@ -1,4 +1,4 @@
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { areaForPath, screenForPath } from "../lib/navConfig";
 
 export default function Breadcrumb() {
@@ -6,15 +6,26 @@ export default function Breadcrumb() {
   const area = areaForPath(location.pathname);
   if (!area) return null;
   const screen = screenForPath(area, location.pathname);
-  const hasTabs = area.screens.length > 1;
-  const suffix = !hasTabs && screen && screen.label !== area.label ? ` · ${screen.label}` : "";
+  // Show the sub-screen segment only when it's a distinct screen from the area
+  // itself (single-screen areas like Overview/Settings/Logs render just the area).
+  const showScreen = !!screen && screen.label !== area.label;
+
+  const crumbCls =
+    "text-[11px] font-semibold uppercase tracking-wider text-slate-500 transition-colors";
 
   return (
-    <div className="px-4 sm:px-8 pt-4 sm:pt-6">
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+    <nav aria-label="Breadcrumb" className="px-4 sm:px-8 pt-4 sm:pt-6 flex items-center gap-1.5">
+      {/* Area links back to its first screen; when we're already on a bare area
+          screen this is a no-op click, but it stays a real affordance for sub-screens. */}
+      <Link to={area.screens[0].path} className={`${crumbCls} hover:text-brand-light`}>
         {area.label}
-        {suffix}
-      </span>
-    </div>
+      </Link>
+      {showScreen && (
+        <>
+          <span className={`${crumbCls} text-slate-600`}>›</span>
+          <span className={`${crumbCls} text-slate-400`}>{screen!.label}</span>
+        </>
+      )}
+    </nav>
   );
 }
