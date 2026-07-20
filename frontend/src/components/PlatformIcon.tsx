@@ -1,11 +1,16 @@
 import { Clapperboard, Tv, Music, Book, type LucideIcon } from "lucide-react";
 
-/** *arr platform → Lucide icon + accent classes (v0.28.0). */
+/** *arr platform → Lucide icon + accent classes (v0.28.0). `chip` is text-color
+    only — every call site already supplies its own inactive border
+    (border-purple-900/40) alongside it; a chip-owned border class used to
+    fight that one for specificity, and since Tailwind's generated stylesheet
+    order (not class-string order) decides the winner, it happened to make
+    Sonarr's teal border win everywhere while the other three stayed subtle. */
 export const PLATFORM_META: Record<string, { label: string; Icon: LucideIcon; badge: string; chip: string }> = {
-  radarr: { label: "Radarr", Icon: Clapperboard, badge: "bg-amber-600", chip: "border-amber-700/60 text-amber-300" },
-  sonarr: { label: "Sonarr", Icon: Tv, badge: "bg-teal-600", chip: "border-teal-700/60 text-teal-300" },
-  lidarr: { label: "Lidarr", Icon: Music, badge: "bg-pink-600", chip: "border-pink-700/60 text-pink-300" },
-  readarr: { label: "Readarr", Icon: Book, badge: "bg-orange-700", chip: "border-orange-700/60 text-orange-300" },
+  radarr: { label: "Radarr", Icon: Clapperboard, badge: "bg-amber-600", chip: "text-amber-300" },
+  sonarr: { label: "Sonarr", Icon: Tv, badge: "bg-teal-600", chip: "text-teal-300" },
+  lidarr: { label: "Lidarr", Icon: Music, badge: "bg-pink-600", chip: "text-pink-300" },
+  readarr: { label: "Readarr", Icon: Book, badge: "bg-orange-700", chip: "text-orange-300" },
 };
 
 export const PLATFORM_ORDER = ["radarr", "sonarr", "lidarr", "readarr"] as const;
