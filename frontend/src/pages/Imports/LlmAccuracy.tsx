@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import { importsApi, type LlmLogGroupStats } from "../../lib/api";
 import { SkeletonTable } from "../../components/Skeleton";
+import ScrollFadeX from "../../components/ScrollFadeX";
 
 // LLM-06 — in-app accuracy dashboard from llm_match_log. CSV export
 // (llm-log/export.csv) is raw rows for offline replay; this page is the
@@ -16,7 +17,7 @@ function GroupTable({ title, groups }: { title: string; groups: LlmLogGroupStats
   return (
     <div className="mb-6">
       <h3 className="text-sm font-medium text-slate-300 mb-2">{title}</h3>
-      <div className="overflow-x-auto rounded-lg border border-purple-900/40">
+      <ScrollFadeX className="overflow-x-auto rounded-lg border border-purple-900/40" fadeFrom="from-[#1a1a2e]">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-surface-raised text-slate-400 text-left">
@@ -52,7 +53,7 @@ function GroupTable({ title, groups }: { title: string; groups: LlmLogGroupStats
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollFadeX>
     </div>
   );
 }

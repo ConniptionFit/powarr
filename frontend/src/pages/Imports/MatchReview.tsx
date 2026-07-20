@@ -11,6 +11,7 @@ import ConfidenceBadge from "../../components/ConfidenceBadge";
 import { PlatformBadge, PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 import { Skeleton, SkeletonTable } from "../../components/Skeleton";
 import Kbd from "../../components/Kbd";
+import ScrollFadeX from "../../components/ScrollFadeX";
 
 /** True when the click landed on (or inside) an interactive control — row-click
  *  select must ignore these so buttons/checkboxes/links keep their own behavior. */
@@ -1162,40 +1163,48 @@ export default function MatchReview() {
             {filterCount(f) !== null && <span className="ml-1.5 text-xs opacity-70">{filterCount(f)}</span>}
           </button>
         ))}
+        {/* Independent boolean toggles (combine freely) — pill-shaped with a
+            checkmark when on, to read as a distinct control type from the
+            mutually-exclusive status filters (rounded-lg) to their left. */}
+        <div className="w-px h-5 bg-purple-900/40 mx-0.5" />
         <button
           onClick={() => setDowngradeOnly(v => !v)}
           title="Show only items where every file rejects as not an upgrade over an existing library file"
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition-colors border ${
             downgradeOnly ? "bg-orange-700 border-orange-700 text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
           }`}
         >
+          {downgradeOnly && <Check size={13} />}
           Covered only
         </button>
         <button
           onClick={() => setSuspiciousOnly(v => !v)}
           title="Show only items with a suspicious file type (e.g. .exe) in the download"
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition-colors border ${
             suspiciousOnly ? "bg-red-700 border-red-700 text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
           }`}
         >
+          {suspiciousOnly && <Check size={13} />}
           Suspicious only
         </button>
         <button
           onClick={() => setPackFilter(f => f === "packs" ? "all" : "packs")}
           title="Show only season-pack downloads"
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition-colors border ${
             packFilter === "packs" ? "bg-brand border-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
           }`}
         >
+          {packFilter === "packs" && <Check size={13} />}
           Packs only
         </button>
         <button
           onClick={() => setPackFilter(f => f === "singles" ? "all" : "singles")}
           title="Show only single-episode (non-pack) downloads"
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition-colors border ${
             packFilter === "singles" ? "bg-brand border-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white border-purple-900/40"
           }`}
         >
+          {packFilter === "singles" && <Check size={13} />}
           Singles only
         </button>
         {llmQueued !== null && (
@@ -1328,7 +1337,7 @@ export default function MatchReview() {
           </p>
         </div>
       ) : viewMode === "table" ? (
-        <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
+        <ScrollFadeX className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
           <table
             className={`text-sm ${density === "compact" ? "[&_td]:!py-1.5 [&_th]:!py-1.5 [&_td]:text-xs" : ""}`}
             style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}
@@ -1412,7 +1421,7 @@ export default function MatchReview() {
               })}
             </tbody>
           </table>
-        </div>
+        </ScrollFadeX>
       ) : (
         <div className="space-y-3">
           {sortedItems.map((item: FailedImport) => {

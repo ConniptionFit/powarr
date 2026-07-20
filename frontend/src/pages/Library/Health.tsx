@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Activity, Copy, DownloadCloud, Image, Link2, Shield, Trash2 } from "lucide-react";
 import { mediaApi, fmtBytes, type LibraryHealth } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
+import ScrollFadeX from "../../components/ScrollFadeX";
 
 // LIB-06 — library health dashboard. Read-only KPI tiles over signals Powarr
 // already tracks locally (synced tables only — the endpoint makes no live
@@ -25,12 +26,14 @@ export default function Health() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
         <Tile
-          icon={<Link2 size={16} />}
+          icon={Link2}
+          color="bg-sky-700"
           title="*arr link coverage"
           body={<ArrCoverage data={data} />}
         />
         <Tile
-          icon={<Copy size={16} />}
+          icon={Copy}
+          color="bg-amber-700"
           title="Duplicates"
           to="/library/duplicates"
           body={
@@ -49,7 +52,8 @@ export default function Health() {
           }
         />
         <Tile
-          icon={<DownloadCloud size={16} />}
+          icon={DownloadCloud}
+          color="bg-purple-700"
           title="Import backlog"
           to="/imports"
           body={
@@ -73,7 +77,8 @@ export default function Health() {
           }
         />
         <Tile
-          icon={<Image size={16} />}
+          icon={Image}
+          color="bg-indigo-600"
           title="Artist thumbnails"
           body={
             data.artist_thumbnails_total === 0 ? (
@@ -92,12 +97,14 @@ export default function Health() {
           }
         />
         <Tile
-          icon={<Shield size={16} />}
+          icon={Shield}
+          color="bg-emerald-700"
           title="Protected from deletion"
           body={<Protections data={data} />}
         />
         <Tile
-          icon={<Trash2 size={16} />}
+          icon={Trash2}
+          color="bg-red-700"
           title="Deletion state"
           to="/library/deletion-suggestions"
           body={
@@ -119,7 +126,7 @@ export default function Health() {
         {data.by_type.length === 0 ? (
           <p className="text-slate-500 text-sm">Nothing synced yet — run a Plex sync first.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollFadeX className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-slate-500 text-xs uppercase tracking-wider">
@@ -140,20 +147,32 @@ export default function Health() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollFadeX>
         )}
       </div>
     </div>
   );
 }
 
-function Tile({ icon, title, to, body }: { icon: React.ReactNode; title: string; to?: string; body: React.ReactNode }) {
+// Icon-badge + label layout matches Overview's StatCard so the two KPI grids
+// read as one family; unlike StatCard, body is a free-form slot since these
+// tiles render progress bars and multi-row lists, not just a number.
+function Tile({ icon: Icon, color, title, to, body }: {
+  icon: React.ElementType;
+  color: string;
+  title: string;
+  to?: string;
+  body: React.ReactNode;
+}) {
   const inner = (
-    <div className="bg-surface-raised border border-purple-900/40 rounded-lg p-4 h-full hover:border-purple-700/50 transition-colors">
-      <div className="flex items-center gap-2 text-slate-300 text-sm font-medium mb-2">
-        <span className="text-brand-light">{icon}</span> {title}
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-5 h-full flex items-start gap-4 hover:border-purple-700/50 transition-colors">
+      <div className={`p-3 rounded-lg ${color} flex-shrink-0`}>
+        <Icon size={20} className="text-white" />
       </div>
-      {body}
+      <div className="min-w-0 flex-1">
+        <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">{title}</p>
+        {body}
+      </div>
     </div>
   );
   return to ? <Link to={to} className="block">{inner}</Link> : inner;

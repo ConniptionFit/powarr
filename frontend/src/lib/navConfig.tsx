@@ -83,8 +83,3 @@ export function areaForPath(pathname: string): AreaDef | undefined {
     .filter(a => a.base !== "/" && pathname.startsWith(a.base))
     .sort((a, b) => b.base.length - a.base.length)[0];
 }
-
-export function screenForPath(area: AreaDef | undefined, pathname: string): ScreenDef | undefined {
-  if (!area) return undefined;
-  return area.screens.find(s => s.path === pathname) ?? area.screens[0];
-}

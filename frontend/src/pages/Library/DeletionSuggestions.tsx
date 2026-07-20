@@ -11,6 +11,7 @@ import ArrLinkModal from "../../components/ArrLinkModal";
 import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 import { SkeletonTable } from "../../components/Skeleton";
 import Kbd from "../../components/Kbd";
+import ScrollFadeX from "../../components/ScrollFadeX";
 
 function ScoreBadge({ score }: { score: number }) {
   const color =
@@ -526,7 +527,7 @@ export default function DeletionSuggestions() {
           <p className="text-slate-400">No candidates found. Try lowering the minimum score or sync Plex first.</p>
         </div>
       ) : (
-        <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
+        <ScrollFadeX className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
           <table className={`w-full text-sm ${density === "compact" ? "[&_td]:!py-1.5 [&_th]:!py-1.5 [&_td]:text-xs" : ""}`}>
             <thead className="border-b border-purple-900/30 text-slate-400 text-xs uppercase tracking-wider">
               <tr>
@@ -706,7 +707,7 @@ export default function DeletionSuggestions() {
                   })}
             </tbody>
           </table>
-        </div>
+        </ScrollFadeX>
       )}
 
       {previewIds && (

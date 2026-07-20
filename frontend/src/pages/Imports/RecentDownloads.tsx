@@ -4,6 +4,7 @@ import { Search, RotateCcw, AlertTriangle, X } from "lucide-react";
 import { importsApi, fmtDate } from "../../lib/api";
 import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
 import { SkeletonTable } from "../../components/Skeleton";
+import ScrollFadeX from "../../components/ScrollFadeX";
 
 // FI-10 — flags from the nightly malformed-import audit (settled Sonarr
 // packs whose current on-disk coverage looks incomplete). Notify-and-triage
@@ -147,7 +148,7 @@ export default function RecentDownloads() {
       ) : rows.length === 0 ? (
         <div className="text-center py-16 text-slate-500">No recent grabs found for this filter.</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-purple-900/40">
+        <ScrollFadeX className="overflow-x-auto rounded-lg border border-purple-900/40" fadeFrom="from-[#1a1a2e]">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-surface-raised text-slate-400 text-left">
@@ -216,7 +217,7 @@ export default function RecentDownloads() {
               })}
             </tbody>
           </table>
-        </div>
+        </ScrollFadeX>
       )}
     </div>
   );

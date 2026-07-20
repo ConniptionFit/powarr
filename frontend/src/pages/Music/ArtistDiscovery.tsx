@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { req, fmtRelative, parseApiDate } from "../../lib/api";
 import ArtistCard from "../../components/ArtistCard";
 import ArtistPreviewButton from "../../components/ArtistPreviewButton";
+import ScrollFadeX from "../../components/ScrollFadeX";
 
 interface Candidate {
   id: number;
@@ -230,7 +231,7 @@ function RecentRuns() {
         runs.length === 0 ? (
           <p className="text-slate-500 text-sm">No runs recorded yet.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollFadeX className="overflow-x-auto" fadeFrom="from-[#1a1a2e]">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-slate-500 border-b border-purple-900/30">
@@ -255,7 +256,7 @@ function RecentRuns() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollFadeX>
         )
       )}
     </section>

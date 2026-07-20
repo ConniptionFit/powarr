@@ -188,7 +188,7 @@ function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
           <button
             onClick={handleSync}
             disabled={syncing || !enabled}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-yellow-700 hover:bg-yellow-600 text-white text-sm transition-colors disabled:opacity-40"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-brand hover:bg-brand-dark text-white text-sm transition-colors disabled:opacity-40"
           >
             <RefreshCw size={13} className={syncing ? "animate-spin" : ""} />
             {syncing ? "Syncing…" : "Sync Library"}

@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity, AlertTriangle, Shuffle, ChevronRight } from "lucide-react";
 import { mediaApi, integrationsApi, importsApi, systemApi, settingsApi, fmtBytes, parseApiDate, type DepHealth, type ImportFunnel } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
+import ScrollFadeX from "../../components/ScrollFadeX";
 
 function PipelineChip({ icon: Icon, label, count, color, onClick }: {
   icon: React.ElementType;
@@ -74,7 +75,7 @@ function FunnelByAppCard({ funnel }: { funnel: ImportFunnel | undefined }) {
       <p className="text-slate-400 text-xs uppercase tracking-wider mb-3">
         Import Funnel — last {funnel.days ?? "all-time"} {funnel.days ? "days" : ""}
       </p>
-      <div className="overflow-x-auto">
+      <ScrollFadeX className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-slate-500 text-left text-xs uppercase tracking-wider">
@@ -115,7 +116,7 @@ function FunnelByAppCard({ funnel }: { funnel: ImportFunnel | undefined }) {
             })}
           </tbody>
         </table>
-      </div>
+      </ScrollFadeX>
     </div>
   );
 }
@@ -137,18 +138,26 @@ function Sparkline({ values, color = "#a78bfa" }: { values: number[]; color?: st
   );
 }
 
-function StatCard({ icon: Icon, label, value, sub, color, error }: {
+function StatCard({ icon: Icon, label, value, sub, color, error, attention }: {
   icon: React.ElementType;
   label: string;
   value: string;
   sub?: string;
   color: string;
   error?: boolean;
+  /** Distinct from `error` (query failed) — flags a tile whose *value* itself
+      needs the user's attention (a nonzero backlog count), e.g. Push Failures.
+      Reserved for tiles that represent an actionable pipeline backlog, not
+      routine library totals, so the signal stays meaningful. */
+  attention?: boolean;
 }) {
   return (
-    <div className={`bg-surface-raised rounded-xl border p-5 flex items-start gap-4 ${
-      error ? "border-red-700/50" : "border-purple-900/30"
+    <div className={`relative bg-surface-raised rounded-xl border p-5 flex items-start gap-4 ${
+      error ? "border-red-700/50" : attention ? "border-amber-600/50" : "border-purple-900/30"
     }`}>
+      {attention && !error && (
+        <span className="absolute top-3 right-3 w-2 h-2 rounded-full bg-amber-400" title="Needs attention" />
+      )}
       <div className={`p-3 rounded-lg ${error ? "bg-red-900/60" : color}`}>
         <Icon size={20} className="text-white" />
       </div>
@@ -393,6 +402,7 @@ export default function Dashboard() {
             sub={byServiceLabel}
             color="bg-purple-700"
             error={importErr}
+            attention={!importErr && (importStats?.suggested ?? 0) > 0}
           />
           <StatCard
             icon={CheckCircle}
@@ -417,6 +427,7 @@ export default function Dashboard() {
             sub={importErr ? "unavailable" : "imports needing re-triage"}
             color="bg-red-800"
             error={importErr}
+            attention={!importErr && (importStats?.resolve_failed ?? 0) > 0}
           />
           <CountdownStat
             icon={Clock}

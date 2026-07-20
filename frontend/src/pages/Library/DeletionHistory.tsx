@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Download } from "lucide-react";
 import { mediaApi, fmtBytes, fmtDate, type MediaItem } from "../../lib/api";
 import { SkeletonTable } from "../../components/Skeleton";
+import ScrollFadeX from "../../components/ScrollFadeX";
 
 const ACTION_LABELS: Record<string, string> = {
   none: "No *arr action",
@@ -62,7 +63,7 @@ export default function DeletionHistory() {
           <h3 className="text-sm font-semibold text-yellow-300 uppercase tracking-wider mb-2">
             Pending deletion ({pending.length}) — restorable until the soft-delete window ends
           </h3>
-          <div className="bg-surface-raised rounded-xl border border-yellow-900/40 overflow-x-auto">
+          <ScrollFadeX className="bg-surface-raised rounded-xl border border-yellow-900/40 overflow-x-auto">
             <table className="w-full text-sm">
               <tbody className="divide-y divide-purple-900/20">
                 {pending.map((item: MediaItem) => (
@@ -87,7 +88,7 @@ export default function DeletionHistory() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollFadeX>
         </div>
       )}
 
@@ -98,7 +99,7 @@ export default function DeletionHistory() {
           <p className="text-slate-400">No deletions recorded yet.</p>
         </div>
       ) : (
-        <div className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
+        <ScrollFadeX className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-purple-900/30 text-slate-400 text-xs uppercase tracking-wider">
               <tr>
@@ -126,7 +127,7 @@ export default function DeletionHistory() {
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollFadeX>
       )}
     </div>
   );
