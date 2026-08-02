@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Compass, Play, Check, X, Sparkles, Settings, ChevronDown, ChevronUp, History, UserPlus } from "lucide-react";
 import { Link } from "react-router-dom";
 import { req, fmtRelative, parseApiDate } from "../../lib/api";
+import { usePersistedState } from "../../lib/usePersistedState";
 import ArtistCard from "../../components/ArtistCard";
 import ArtistPreviewButton from "../../components/ArtistPreviewButton";
 import ScrollFadeX from "../../components/ScrollFadeX";
@@ -14,16 +15,40 @@ interface Candidate {
   genres: string[];
   mood_tags: string[];
   era: string | null;
-  source: string; // "centroid" | "centroid_recent" | "graph" | "centroid_mood_{slug}" (AD-19)
+  source: string; // "centroid" | "centroid_recent" | "graph" | "ingest" | "centroid_mood_{slug}" (AD-19)
   similarity_score: number | null;
   associated_seed_mbids: string[];
   seed_artist_name: string | null;
   seed_artist_names: string[];
   status: string;
   lidarr_artist_id: number | null;
+  created_at: string | null;
   image_url: string | null;
   bio: string | null;
   years_active: string | null;
+}
+
+// Sort options for the pending-candidates queue — "match" is the server's own
+// best-match-first order (AD-11: similarity_score desc, then connection count
+// desc, centroid group always ahead of graph); "newest"/"name" are client-side
+// re-sorts of the same fetched list.
+type CandidateSort = "match" | "newest" | "name" | "connections";
+
+function connectionCount(c: Candidate): number {
+  return Math.max(c.associated_seed_mbids.length, c.seed_artist_names.length);
+}
+
+function sortCandidates(list: Candidate[], sortBy: CandidateSort): Candidate[] {
+  if (sortBy === "match") return list; // server order, left as-is
+  const sorted = [...list];
+  if (sortBy === "name") {
+    sorted.sort((a, b) => a.artist_name.localeCompare(b.artist_name));
+  } else if (sortBy === "newest") {
+    sorted.sort((a, b) => (parseApiDate(b.created_at ?? "").getTime() || 0) - (parseApiDate(a.created_at ?? "").getTime() || 0));
+  } else if (sortBy === "connections") {
+    sorted.sort((a, b) => connectionCount(b) - connectionCount(a));
+  }
+  return sorted;
 }
 
 interface DiscoveryRun {
@@ -79,6 +104,24 @@ const api = {
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/reject`, { method: "POST" }),
 };
 
+function seedConnectionSuffix(c: Pick<Candidate, "seed_artist_name" | "seed_artist_names" | "associated_seed_mbids">): string {
+  // Every candidate now carries its triggering seed(s) once it has at least
+  // one tracked connection — including centroid matches, whose Qdrant point
+  // may have been created by ingestion's/graph-sync's shared related-artist
+  // expansion before the centroid search ever found it. Empty when a
+  // candidate genuinely has no tracked seeds yet (legacy rows).
+  const names = c.seed_artist_names.length > 0
+    ? c.seed_artist_names
+    : c.seed_artist_name ? [c.seed_artist_name] : [];
+  const conn = Math.max(c.associated_seed_mbids.length, names.length);
+  if (conn === 0) return "";
+  if (names.length === 0) {
+    return ` — similar to ${conn} artist${conn === 1 ? "" : "s"} already in your library`;
+  }
+  const listed = names.slice(0, 4).join(", ") + (names.length > 4 ? ` +${names.length - 4} more` : "");
+  return ` — similar to ${listed} (${conn} connection${conn === 1 ? "" : "s"})`;
+}
+
 function whySuggested(c: Pick<Candidate, "source" | "similarity_score" | "seed_artist_name" | "seed_artist_names" | "associated_seed_mbids">): string {
   if (c.source === "centroid" || c.source === "centroid_recent" || c.source.startsWith("centroid_mood_")) {
     const pct = c.similarity_score != null ? `${Math.round(c.similarity_score * 100)}% match to` : "Close match to";
@@ -92,7 +135,7 @@ function whySuggested(c: Pick<Candidate, "source" | "similarity_score" | "seed_a
       const mood = c.source.slice("centroid_mood_".length).replace(/_/g, " ");
       profile = `artists tagged "${mood}" in your library`;
     }
-    return `${pct} ${profile}`;
+    return `${pct} ${profile}${seedConnectionSuffix(c)}`;
   }
   const names = c.seed_artist_names.length > 0
     ? c.seed_artist_names
@@ -269,6 +312,8 @@ export default function ArtistDiscovery() {
   const { data: stats } = useQuery({ queryKey: ["ad-stats"], queryFn: api.stats });
   const { data: candidates = [] } = useQuery({ queryKey: ["ad-candidates"], queryFn: () => api.candidates("pending") });
   const [msg, setMsg] = useState<string | null>(null);
+  const [candidateSort, setCandidateSort] = usePersistedState<CandidateSort>("powarr.artistDiscovery.candidateSort", "match");
+  const sortedCandidates = sortCandidates(candidates, candidateSort);
 
   const runMut = useMutation({
     mutationFn: api.run,
@@ -373,6 +418,16 @@ export default function ArtistDiscovery() {
           <h2 className="text-white font-semibold text-sm uppercase tracking-wider flex items-center gap-2">
             <Sparkles size={16} /> Pending candidates ({candidates.length})
           </h2>
+          {candidates.length > 1 && (
+            <select value={candidateSort} onChange={e => setCandidateSort(e.target.value as CandidateSort)}
+              title="Sort pending candidates"
+              className="bg-surface-raised border border-purple-900/40 rounded px-2 py-1 text-xs text-slate-300">
+              <option value="match">Best match</option>
+              <option value="connections">Most connections</option>
+              <option value="newest">Newest first</option>
+              <option value="name">Name A–Z</option>
+            </select>
+          )}
         </div>
         {candidates.length === 0 ? (
           <p className="text-slate-500 text-sm">
@@ -380,7 +435,7 @@ export default function ArtistDiscovery() {
           </p>
         ) : (
           <div className="grid gap-2">
-            {candidates.map(c => (
+            {sortedCandidates.map(c => (
               <CandidateCard
                 key={c.id}
                 c={c}

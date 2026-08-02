@@ -262,7 +262,16 @@ def _candidate_exists(db, mbid: str | None, name: str) -> bool:
 async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     """Pull Last.fm top artists as taste seeds, embed new ones, upsert into Qdrant
     as is_discovered=true. Simplified from n8n's precise recent-tracks delta cursor —
-    uses top-artists (by playcount) as the seed set instead."""
+    uses top-artists (by playcount) as the seed set instead.
+
+    AD-## — also expands each stale taste seed into new is_discovered=false
+    candidates via Last.fm artist.getsimilar, mirroring n8n's ingestor_filter.
+    This was the actual gap vs. n8n: without it, the only thing populating the
+    centroid-search candidate pool was run_graph_sync, scoped to monitored-
+    Lidarr artists only — a much narrower seed set than "everyone you actually
+    listen to." Shares _expand_seed_similar_artists/_gate_and_create_candidate
+    with run_graph_sync so a related artist discovered via either path
+    accumulates connections onto the exact same Qdrant point."""
     lastfm = _lastfm_client(db)
     if not lastfm:
         return {"ok": False, "message": "Last.fm integration not configured", "ingested": 0}
@@ -274,10 +283,19 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     except Exception as e:
         return {"ok": False, "message": f"Last.fm fetch failed: {e}", "ingested": 0}
 
+    recent_keys = await _recently_listened_keys(lastfm, cfg.scrobble_lookback_days)
+    lidarr_by_mbid, lidarr_by_name = await _lidarr_artist_index(db) or ({}, {})
+    plex_names = _plex_artist_names(db)
+    cutoff = int((datetime.utcnow() - timedelta(days=cfg.related_artists_refresh_days)).timestamp())
+    expand_cap = max(cfg.max_candidates_per_run, 1)  # stale seeds expanded this run
+
     ingested = 0
+    expanded = 0
+    promoted = 0
     cap = max(cfg.max_candidates_per_run * 4, 10)
+    seeds_expanded = 0
     for a in top_artists:
-        if ingested >= cap:
+        if ingested >= cap and seeds_expanded >= expand_cap:
             break
         name = (a.get("name") or "").strip()
         if not name:
@@ -290,44 +308,88 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
         except Exception as e:
             logger.warning(f"Artist Discovery ingest: Qdrant retrieve failed for {name}: {e}")
             continue
-        if existing and (existing[0].get("payload") or {}).get("is_discovered"):
-            continue  # already tracked as a discovered seed
-        try:
-            tags = await lastfm.get_top_tags(name, mbid)
-        except Exception:
-            tags = []
-        vector = await _embed_artist(cfg, name, tags)
-        if not vector:
+        payload = (existing[0].get("payload") or {}) if existing else {}
+
+        if not payload.get("is_discovered") and ingested < cap:
+            try:
+                tags = await lastfm.get_top_tags(name, mbid)
+            except Exception:
+                tags = []
+            vector = await _embed_artist(cfg, name, tags)
+            if not vector:
+                continue
+            payload = {
+                "musicbrainz_id": mbid or "",
+                "artist_name": name,
+                "genres": tags,
+                "mood_tags": classify_mood_tags(tags),
+                "era": "",
+                "is_monitored_lidarr": False,
+                "plex_fulfillment": "none",
+                "in_lidarr": False,
+                "in_plex": False,
+                "total_plays_global": plays,
+                "last_played_timestamp": int(datetime.utcnow().timestamp()),
+                "is_discovered": True,
+                "associated_seed_mbids": [],
+                "last_related_scan_timestamp": 0,
+                **payload,
+            }
+            try:
+                await qdrant.upsert_points([{"id": pid, "vector": vector, "payload": payload}])
+            except Exception as e:
+                logger.warning(f"Artist Discovery ingest: Qdrant upsert failed for {name}: {e}")
+                continue
+            ingested += 1
+        elif not payload.get("is_discovered"):
+            continue  # not yet a seed and this run's ingest cap is spent
+
+        # Similar-artist expansion (n8n ingestor_filter parity) — only for seeds
+        # whose related-artist scan is stale, capped per run like graph sync's
+        # own stale-seed throttle so a large taste space doesn't hammer Last.fm.
+        if seeds_expanded >= expand_cap or (payload.get("last_related_scan_timestamp") or 0) >= cutoff:
             continue
-        payload = {
-            "musicbrainz_id": mbid or "",
-            "artist_name": name,
-            "genres": tags,
-            "mood_tags": classify_mood_tags(tags),
-            "era": "",
-            "is_monitored_lidarr": False,
-            "plex_fulfillment": "none",
-            "in_lidarr": False,
-            "in_plex": False,
-            "total_plays_global": plays,
-            "last_played_timestamp": int(datetime.utcnow().timestamp()),
-            "is_discovered": True,
-            "associated_seed_mbids": [],
-            "last_related_scan_timestamp": 0,
-        }
-        if existing:
-            payload = {**(existing[0].get("payload") or {}), **payload}
+        seeds_expanded += 1
+        seed_key = mbid or name
         try:
-            await qdrant.upsert_points([{"id": pid, "vector": vector, "payload": payload}])
+            related = await lastfm.get_similar_artists(name, mbid, limit=15)
         except Exception as e:
-            logger.warning(f"Artist Discovery ingest: Qdrant upsert failed for {name}: {e}")
-            continue
-        ingested += 1
+            logger.warning(f"Artist Discovery ingest: Last.fm similar-artist lookup failed for {name}: {e}")
+            related = []
+        for r in related[:cfg.related_artists_limit]:
+            rname = (r.get("name") or "").strip()
+            if not rname:
+                continue
+            rmbid = (r.get("mbid") or "").strip() or None
+            rname_norm = _norm_artist(rname)
+            already_owned = bool(lidarr_by_mbid.get(rmbid) or lidarr_by_name.get(rname_norm)) \
+                or rname_norm in plex_names
+            if already_owned:
+                continue
+            point = await _upsert_related_point(qdrant, lastfm, cfg, seed_key, rname, rmbid)
+            if point is None:
+                continue
+            seeds_list = list(point["payload"].get("associated_seed_mbids") or [])
+            result = await _gate_and_create_candidate(
+                db, qdrant, cfg, recent_keys, mbid=rmbid, name=rname, seeds_list=seeds_list,
+                source_label="ingest", seed_artist_name=name, payload=point["payload"])
+            expanded += result["created"]
+            promoted += result["promoted"]
+        try:
+            await qdrant.set_payload([pid], {"last_related_scan_timestamp": int(datetime.utcnow().timestamp())})
+        except Exception as e:
+            logger.warning(f"Artist Discovery ingest: seed timestamp update failed for {name}: {e}")
 
     state = _load_state(db)
     state["last_lastfm_scrobble_time"] = int(datetime.utcnow().timestamp())
     _save_state(db, state)
-    return {"ok": True, "message": f"Ingested {ingested} artist(s)", "ingested": ingested}
+    db.commit()
+    message = f"Ingested {ingested} artist(s)"
+    if expanded or promoted:
+        message += f", expanded {expanded} new candidate(s)"
+        if promoted:
+            message += f", {promoted} auto-promoted"
+    return {"ok": True, "message": message, "ingested": ingested, "expanded": expanded, "promoted": promoted}
 
 
 # --- Centroid similarity search --------------------------------------------------
@@ -422,89 +484,100 @@ async def compute_mood_centroid(db, mood: str) -> list[float] | None:
 
 
 async def _run_centroid_lane(db, qdrant, centroid: list[float], cfg: ArtistDiscoverySettings,
-                             source_label: str) -> int:
+                             source_label: str, recent_keys: set[str]) -> dict[str, int]:
     """One discovery-lane search + candidate-creation pass. Shared by the
-    all-time (AD original) and recently-listened (AD-17) lanes so both create
-    candidates identically — only the seed centroid and the resulting
-    `source` tag differ. Relies on SQLAlchemy's autoflush so a candidate the
-    all-time lane just added (uncommitted) is still visible to the recent
-    lane's _candidate_exists() check within the same run — no duplicate rows
-    when both lanes surface the same artist."""
+    all-time (AD original), recently-listened (AD-17), and mood (AD-19) lanes
+    so all three create candidates identically — only the seed centroid and
+    the resulting `source` tag differ. Relies on SQLAlchemy's autoflush so a
+    candidate the all-time lane just added (uncommitted) is still visible to
+    the recent lane's _find_candidate() check within the same run — no
+    duplicate rows when both lanes surface the same artist.
+
+    AD-## — a hit's suggest-worthiness is Qdrant's own score_threshold (cosine
+    similarity); connections never suppress a centroid match. They only decide
+    whether it's queued for review or, once well-connected enough, skips the
+    queue via the same connection-count auto-add gate graph-sync/ingestion use
+    (_gate_centroid_candidate)."""
     hits = await qdrant.search(
         centroid, limit=cfg.max_candidates_per_run, score_threshold=cfg.similarity_threshold,
         must=[{"key": "is_discovered", "match": {"value": False}}],
         must_not=[{"key": "in_plex", "match": {"value": True}},
                   {"key": "in_lidarr", "match": {"value": True}}])
     created = 0
+    promoted = 0
     for h in hits:
         payload = h.get("payload") or {}
         name = (payload.get("artist_name") or "").strip()
         if not name:
             continue
         mbid = payload.get("musicbrainz_id") or None
-        if _candidate_exists(db, mbid, name):
-            continue
-        enrichment = await _enrich_candidate(db, mbid, name)
-        genres_list = clean_tags(payload.get("genres")) or clean_tags(enrichment["genres"])
-        db.add(DiscoveredArtist(
-            musicbrainz_id=mbid, artist_name=name,
-            genres=json.dumps(genres_list),
-            mood_tags=json.dumps(clean_tags(payload.get("mood_tags"))),
-            era=clean_era(payload.get("era")), source=source_label,
-            similarity_score=h.get("score"), status="pending",
-            image_url=enrichment["image_url"], bio=enrichment["bio"],
-            years_active=enrichment["years_active"],
-        ))
-        created += 1
-    return created
+        result = await _gate_centroid_candidate(
+            db, qdrant, cfg, recent_keys, mbid=mbid, name=name,
+            source_label=source_label, similarity_score=h.get("score"), payload=payload)
+        created += result["created"]
+        promoted += result["promoted"]
+    return {"created": created, "promoted": promoted}
 
 
 async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     qdrant = _qdrant(db)
     if not qdrant:
-        return {"ok": False, "message": "Qdrant not configured (Settings → Integrations)", "candidates": 0}
+        return {"ok": False, "message": "Qdrant not configured (Settings → Integrations)", "candidates": 0, "promoted": 0}
 
     centroid = await compute_taste_centroid(db)
     if not centroid:
-        return {"ok": True, "message": "No taste centroid yet (no discovered artists)", "candidates": 0}
+        return {"ok": True, "message": "No taste centroid yet (no discovered artists)", "candidates": 0, "promoted": 0}
 
-    created = await _run_centroid_lane(db, qdrant, centroid, cfg, "centroid")
+    lastfm = _lastfm_client(db)
+    recent_keys = await _recently_listened_keys(lastfm, cfg.scrobble_lookback_days) if lastfm else set()
+
+    lane = await _run_centroid_lane(db, qdrant, centroid, cfg, "centroid", recent_keys)
+    created, promoted = lane["created"], lane["promoted"]
 
     # AD-17 — second lane from recently-listened artists, distinct from the
     # all-time-most-played centroid above. Purely additive: fail-soft to
     # "nothing extra" whenever Last.fm isn't configured or nothing recent
     # is in the taste space yet, never blocks the all-time lane's results.
     recent_created = 0
+    recent_promoted = 0
     if cfg.recent_taste_lane_enabled:
         recent_centroid = await compute_recent_taste_centroid(db, cfg.scrobble_lookback_days)
         if recent_centroid:
-            recent_created = await _run_centroid_lane(db, qdrant, recent_centroid, cfg, "centroid_recent")
+            recent_lane = await _run_centroid_lane(db, qdrant, recent_centroid, cfg, "centroid_recent", recent_keys)
+            recent_created, recent_promoted = recent_lane["created"], recent_lane["promoted"]
 
     # AD-19 — one lane per user-configured mood tag (empty by default), each
     # sliced from the SP-15 mood_tags now populated on discovered points.
     # Purely additive like the recent-taste lane above: a mood with nothing
     # in the taste space yet just contributes 0 candidates this run.
     mood_created = 0
+    mood_promoted = 0
     mood_breakdown: list[str] = []
     for mood in cfg.mood_discovery_lanes or []:
         mood_centroid = await compute_mood_centroid(db, mood)
         if not mood_centroid:
             continue
-        n = await _run_centroid_lane(db, qdrant, mood_centroid, cfg, f"centroid_mood_{_normalize_mood_key(mood)}")
-        mood_created += n
+        mood_lane = await _run_centroid_lane(
+            db, qdrant, mood_centroid, cfg, f"centroid_mood_{_normalize_mood_key(mood)}", recent_keys)
+        mood_created += mood_lane["created"]
+        mood_promoted += mood_lane["promoted"]
+        n = mood_lane["created"] + mood_lane["promoted"]
         if n:
             mood_breakdown.append(f"{n} {mood}")
 
     db.commit()
-    total = created + recent_created + mood_created
-    message = f"{total} new candidate(s)"
+    total_created = created + recent_created + mood_created
+    total_promoted = promoted + recent_promoted + mood_promoted
+    message = f"{total_created} new candidate(s)"
+    if total_promoted:
+        message += f", {total_promoted} auto-promoted"
     extras = []
-    if recent_created:
-        extras.append(f"{recent_created} recent-taste")
+    if recent_created or recent_promoted:
+        extras.append(f"{recent_created + recent_promoted} recent-taste")
     extras.extend(mood_breakdown)
     if extras:
-        message += f" ({created} all-time, {', '.join(extras)})"
-    return {"ok": True, "message": message, "candidates": total}
+        message += f" ({created + promoted} all-time, {', '.join(extras)})"
+    return {"ok": True, "message": message, "candidates": total_created, "promoted": total_promoted}
 
 
 # --- Related-artist graph sync ---------------------------------------------------
@@ -564,6 +637,156 @@ def _effective_auto_add_threshold(cfg: ArtistDiscoverySettings) -> int:
     return 0
 
 
+# --- Related-artist point tracking & candidate gating (shared) -------------------
+# Both run_graph_sync (monitored-Lidarr seeds) and ingest_scrobbles (every taste
+# seed) discover related artists the same way — the only difference is which
+# seeds they start from. Sharing this code means a related artist found via
+# either path accumulates connections onto the exact same Qdrant point, and
+# crosses the same suggest/auto-add thresholds regardless of which lane found
+# it first.
+
+async def _upsert_related_point(qdrant, lastfm, cfg: ArtistDiscoverySettings,
+                                 seed_key: str, rname: str, rmbid: str | None) -> dict[str, Any] | None:
+    """Ensure a Qdrant point exists for a related artist, with seed_key appended
+    to its associated_seed_mbids (deduplicated). Returns {"id", "payload"} with
+    the point's current (post-update) payload, or None if the point couldn't be
+    read/created/updated (fail-soft — caller just skips this candidate)."""
+    rid = qdrant.point_id(rmbid, rname)
+    try:
+        existing = await qdrant.retrieve_points([rid])
+    except Exception as e:
+        logger.warning(f"Artist Discovery: Qdrant retrieve failed for {rname}: {e}")
+        return None
+
+    if existing:
+        payload = dict(existing[0].get("payload") or {})
+        seeds_list = list(payload.get("associated_seed_mbids") or [])
+        if seed_key not in seeds_list:
+            seeds_list.append(seed_key)
+            payload["associated_seed_mbids"] = seeds_list
+            try:
+                await qdrant.set_payload([rid], {"associated_seed_mbids": seeds_list})
+            except Exception as e:
+                logger.warning(f"Artist Discovery: Qdrant set_payload failed for {rname}: {e}")
+        return {"id": rid, "payload": payload}
+
+    try:
+        tags = await lastfm.get_top_tags(rname, rmbid)
+    except Exception:
+        tags = []
+    vector = await _embed_artist(cfg, rname, tags)
+    if not vector:
+        return None
+    payload = {
+        "musicbrainz_id": rmbid or "", "artist_name": rname, "genres": tags,
+        "mood_tags": classify_mood_tags(tags), "era": "", "is_monitored_lidarr": False,
+        "plex_fulfillment": "none", "in_lidarr": False, "in_plex": False,
+        "total_plays_global": 0, "last_played_timestamp": 0, "is_discovered": False,
+        "associated_seed_mbids": [seed_key], "last_related_scan_timestamp": 0,
+    }
+    try:
+        await qdrant.upsert_points([{"id": rid, "vector": vector, "payload": payload}])
+    except Exception as e:
+        logger.warning(f"Artist Discovery: Qdrant upsert failed for {rname}: {e}")
+        return None
+    return {"id": rid, "payload": payload}
+
+
+async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: str,
+                                        seeds_list: list[str], source_label: str,
+                                        auto_add_n: int, recent_n: int,
+                                        seed_artist_name: str | None = None,
+                                        payload: dict | None = None,
+                                        similarity_score: float | None = None,
+                                        row: DiscoveredArtist | None = None) -> dict[str, int]:
+    """Core row creation / in-place promotion, once a caller has already
+    decided this candidate clears its own lane's suggest-worthiness bar
+    (connection count for graph/ingest, cosine similarity for centroid — see
+    _gate_and_create_candidate / _gate_centroid_candidate). `row`, if already
+    looked up by the caller, skips a redundant _find_candidate query."""
+    payload = payload or {}
+    if row is None:
+        row = _find_candidate(db, mbid, name)
+    if row is not None:
+        promoted = 0
+        if row.status == "pending":
+            # New connections keep accumulating after the row was created — keep
+            # a pending row's seed list (and resolved names) current so the card
+            # shows every contributing seed artist (AD-05), and let it cross into
+            # the auto-add band on a later run without a duplicate row.
+            stored = set(json.loads(row.associated_seed_mbids)) if row.associated_seed_mbids else set()
+            if set(seeds_list) != stored:
+                row.associated_seed_mbids = json.dumps(seeds_list)
+                row.seed_artist_names = json.dumps(await _resolve_seed_names(qdrant, seeds_list))
+            if auto_add_n and recent_n >= auto_add_n:
+                result = await add_to_lidarr(db, row.id)
+                if result.get("ok"):
+                    promoted = 1
+        return {"created": 0, "promoted": promoted}  # any prior row (any status) blocks re-creation
+
+    enrichment = await _enrich_candidate(db, mbid, name)
+    genres_list = clean_tags(payload.get("genres")) or clean_tags(enrichment["genres"])
+    cand = DiscoveredArtist(
+        musicbrainz_id=mbid, artist_name=name,
+        genres=json.dumps(genres_list),
+        mood_tags=json.dumps(clean_tags(payload.get("mood_tags"))),
+        era=clean_era(payload.get("era")), source=source_label,
+        associated_seed_mbids=json.dumps(seeds_list) if seeds_list else None,
+        seed_artist_name=seed_artist_name,
+        seed_artist_names=json.dumps(await _resolve_seed_names(qdrant, seeds_list)) if seeds_list else None,
+        similarity_score=similarity_score,
+        status="pending",
+        image_url=enrichment["image_url"], bio=enrichment["bio"],
+        years_active=enrichment["years_active"],
+    )
+    db.add(cand)
+    if auto_add_n and recent_n >= auto_add_n:
+        db.flush()
+        result = await add_to_lidarr(db, cand.id)
+        if result.get("ok"):
+            return {"created": 0, "promoted": 1}
+        return {"created": 1, "promoted": 0}  # left pending if Lidarr add failed
+    return {"created": 1, "promoted": 0}
+
+
+async def _gate_and_create_candidate(db, qdrant, cfg: ArtistDiscoverySettings, recent_keys: set[str], *,
+                                      mbid: str | None, name: str, seeds_list: list[str],
+                                      source_label: str, seed_artist_name: str,
+                                      payload: dict) -> dict[str, int]:
+    """Graph-sync / ingestion-expansion candidates (AD-07): suggest-worthiness
+    IS the connection-count floor (suggest_connection_threshold) — a candidate
+    below it isn't created yet; it can cross the bar on a later run as more
+    seeds connect to it. At/above auto_add_connection_threshold, skips the
+    queue and adds straight to Lidarr."""
+    suggest_n = max(cfg.suggest_connection_threshold, 1)
+    auto_add_n = _effective_auto_add_threshold(cfg)
+    recent_n = _recent_connection_count(seeds_list, recent_keys)
+    row = _find_candidate(db, mbid, name)
+    if row is None and recent_n < suggest_n:
+        return {"created": 0, "promoted": 0}
+    return await _create_or_promote_candidate(
+        db, qdrant, mbid=mbid, name=name, seeds_list=seeds_list, source_label=source_label,
+        auto_add_n=auto_add_n, recent_n=recent_n, seed_artist_name=seed_artist_name,
+        payload=payload, row=row)
+
+
+async def _gate_centroid_candidate(db, qdrant, cfg: ArtistDiscoverySettings, recent_keys: set[str], *,
+                                    mbid: str | None, name: str, source_label: str,
+                                    similarity_score: float | None, payload: dict) -> dict[str, int]:
+    """Centroid-lane candidates: suggest-worthiness is already decided by
+    Qdrant's own score_threshold (similarity_threshold) before this is ever
+    called — connections never suppress a cosine-similarity hit, only upgrade
+    it to an immediate auto-add when the candidate is ALSO well-connected to
+    the taste graph (associated_seed_mbids, populated by the shared
+    _upsert_related_point helper via ingest_scrobbles/run_graph_sync)."""
+    seeds_list = list(payload.get("associated_seed_mbids") or [])
+    auto_add_n = _effective_auto_add_threshold(cfg)
+    recent_n = _recent_connection_count(seeds_list, recent_keys)
+    return await _create_or_promote_candidate(
+        db, qdrant, mbid=mbid, name=name, seeds_list=seeds_list, source_label=source_label,
+        auto_add_n=auto_add_n, recent_n=recent_n, payload=payload, similarity_score=similarity_score)
+
+
 async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     lastfm = _lastfm_client(db)
     if not lastfm:
@@ -578,8 +801,6 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
              if ((s.get("payload") or {}).get("last_related_scan_timestamp") or 0) < cutoff][:5]
 
     recent_keys = await _recently_listened_keys(lastfm, cfg.scrobble_lookback_days)
-    suggest_n = max(cfg.suggest_connection_threshold, 1)
-    auto_add_n = _effective_auto_add_threshold(cfg)
     # Live ownership check (not the possibly-stale Qdrant flags — a related artist
     # can be seen here for the first time ever, with no prior point to have been
     # synced) — an artist already in Plex or in Lidarr (monitored or not) is never
@@ -611,110 +832,15 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                 or rname_norm in plex_names
             if already_owned:
                 continue
-            rid = qdrant.point_id(rmbid, rname)
-            try:
-                existing = await qdrant.retrieve_points([rid])
-            except Exception as e:
-                logger.warning(f"Artist Discovery graph sync: Qdrant retrieve failed for {rname}: {e}")
+            point = await _upsert_related_point(qdrant, lastfm, cfg, seed_mbid or seed_name, rname, rmbid)
+            if point is None:
                 continue
-
-            if existing:
-                epayload = dict(existing[0].get("payload") or {})
-                seeds_list = list(epayload.get("associated_seed_mbids") or [])
-                seed_key = seed_mbid or seed_name
-                if seed_key not in seeds_list:
-                    seeds_list.append(seed_key)
-                    epayload["associated_seed_mbids"] = seeds_list
-                    try:
-                        await qdrant.set_payload([rid], {"associated_seed_mbids": seeds_list})
-                    except Exception as e:
-                        logger.warning(f"Artist Discovery graph sync: Qdrant set_payload failed for {rname}: {e}")
-            else:
-                try:
-                    tags = await lastfm.get_top_tags(rname, rmbid)
-                except Exception:
-                    tags = []
-                vector = await _embed_artist(cfg, rname, tags)
-                if not vector:
-                    continue
-                epayload = {
-                    "musicbrainz_id": rmbid or "", "artist_name": rname, "genres": tags,
-                    "mood_tags": classify_mood_tags(tags), "era": "", "is_monitored_lidarr": False,
-                    "plex_fulfillment": "none", "in_lidarr": False, "in_plex": False,
-                    "total_plays_global": 0,
-                    "last_played_timestamp": 0, "is_discovered": False,
-                    "associated_seed_mbids": [seed_mbid or seed_name],
-                    "last_related_scan_timestamp": 0,
-                }
-                try:
-                    await qdrant.upsert_points([{"id": rid, "vector": vector, "payload": epayload}])
-                except Exception as e:
-                    logger.warning(f"Artist Discovery graph sync: Qdrant upsert failed for {rname}: {e}")
-                    continue
-
-            seeds_list = list(epayload.get("associated_seed_mbids") or [])
-            recent_n = _recent_connection_count(seeds_list, recent_keys)
-            row = _find_candidate(db, rmbid, rname)
-            if row is not None:
-                # New connections keep accumulating after the row was created —
-                # keep a pending row's seed list (and its resolved names) current
-                # so the card can show every contributing artist (AD-05).
-                if row.status == "pending":
-                    stored = set(json.loads(row.associated_seed_mbids)) if row.associated_seed_mbids else set()
-                    if set(seeds_list) != stored:
-                        row.associated_seed_mbids = json.dumps(seeds_list)
-                        row.seed_artist_names = json.dumps(await _resolve_seed_names(qdrant, seeds_list))
-                    # AD-07 — pending row crossed auto-add band → promote in place
-                    if auto_add_n and recent_n >= auto_add_n:
-                        result = await add_to_lidarr(db, row.id)
-                        if result.get("ok"):
-                            promoted += 1
-                continue  # any prior row (any status) blocks re-creation
-            # already_owned was checked before any point/candidate work began above,
-            # so no is_monitored_lidarr re-check is needed here — just the threshold.
-            if recent_n < suggest_n:
-                continue
-            # AD-07 auto-add band: add to Lidarr, no suggested-queue row
-            if auto_add_n and recent_n >= auto_add_n:
-                enrichment = await _enrich_candidate(db, rmbid, rname)
-                genres_list = clean_tags(epayload.get("genres")) or clean_tags(enrichment["genres"])
-                cand = DiscoveredArtist(
-                    musicbrainz_id=rmbid, artist_name=rname,
-                    genres=json.dumps(genres_list),
-                    mood_tags=json.dumps(clean_tags(epayload.get("mood_tags"))),
-                    era=clean_era(epayload.get("era")), source="graph",
-                    associated_seed_mbids=json.dumps(seeds_list),
-                    seed_artist_name=seed_name,
-                    seed_artist_names=json.dumps(await _resolve_seed_names(qdrant, seeds_list)),
-                    status="pending",
-                    image_url=enrichment["image_url"], bio=enrichment["bio"],
-                    years_active=enrichment["years_active"],
-                )
-                db.add(cand)
-                db.flush()
-                result = await add_to_lidarr(db, cand.id)
-                if result.get("ok"):
-                    promoted += 1
-                else:
-                    created += 1  # left pending if Lidarr add failed
-                continue
-            # Suggest band: show in review queue
-            enrichment = await _enrich_candidate(db, rmbid, rname)
-            genres_list = clean_tags(epayload.get("genres")) or clean_tags(enrichment["genres"])
-            cand = DiscoveredArtist(
-                musicbrainz_id=rmbid, artist_name=rname,
-                genres=json.dumps(genres_list),
-                mood_tags=json.dumps(clean_tags(epayload.get("mood_tags"))),
-                era=clean_era(epayload.get("era")), source="graph",
-                associated_seed_mbids=json.dumps(seeds_list),
-                seed_artist_name=seed_name,
-                seed_artist_names=json.dumps(await _resolve_seed_names(qdrant, seeds_list)),
-                status="pending",
-                image_url=enrichment["image_url"], bio=enrichment["bio"],
-                years_active=enrichment["years_active"],
-            )
-            db.add(cand)
-            created += 1
+            seeds_list = list(point["payload"].get("associated_seed_mbids") or [])
+            result = await _gate_and_create_candidate(
+                db, qdrant, cfg, recent_keys, mbid=rmbid, name=rname, seeds_list=seeds_list,
+                source_label="graph", seed_artist_name=seed_name, payload=point["payload"])
+            created += result["created"]
+            promoted += result["promoted"]
 
         try:
             await qdrant.set_payload([seed["id"]], {"last_related_scan_timestamp": int(datetime.utcnow().timestamp())})
@@ -870,8 +996,8 @@ async def run_full_discovery_cycle(db=None, task_id: str | None = None) -> dict[
         tasks.update_task(task_id, message="Enriching candidate images/bios…")
         await re_enrich_missing(db)
         db.commit()
-        found = centroid.get("candidates", 0) + graph.get("candidates", 0)
-        added = graph.get("promoted", 0)
+        found = ingest.get("expanded", 0) + centroid.get("candidates", 0) + graph.get("candidates", 0)
+        added = ingest.get("promoted", 0) + centroid.get("promoted", 0) + graph.get("promoted", 0)
         run.candidates_found = found
         run.candidates_added = added
         run.finished_at = datetime.utcnow()
