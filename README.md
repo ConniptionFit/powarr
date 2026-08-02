@@ -133,7 +133,7 @@ Automation, LLM Assist, Notifications, Security, Music — replaces the separate
 Integrations page). Logs sits below a divider as a utility item. Match Review defaults to a
 card-per-item layout with a table-view toggle for the old dense table.
 
-### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0; UX cleanup + tray + Related Artists v0.48.0; Related Artists filters v0.49.0)
+### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0; UX cleanup + tray + Related Artists v0.48.0; Related Artists filters v0.49.0; candidate-pool fix + auto-add parity v0.87.0)
 Native port of an external n8n taste-mapping pipeline: **Last.fm** scrobble history is embedded
 via a standalone **Ollama** connection (`all-minilm`, independent of the separate LLM Assist
 Ollama connection), mapped into the shared Qdrant `music_affinity_space` collection (configured
@@ -151,8 +151,7 @@ first seed (v0.41.0) — and placeholder "Unknown" genre chips are filtered out.
 the artist to Lidarr (root folder / quality / metadata profile configurable, else Lidarr's first
 available). **v0.42.0 (AD-07):** graph suggest/auto-add uses **dual thresholds** on connections
 to *recently listened* artists only (`scrobble_lookback_days`); below suggest → ignored, suggest
-band → review queue, at/above auto-add (0 = off) → Lidarr with no queue row. Centroid candidates
-always queue. **AD-08:** accepted-artist thumbnails are purged after 30 days (configurable). A
+band → review queue, at/above auto-add (0 = off) → Lidarr with no queue row. **AD-08:** accepted-artist thumbnails are purged after 30 days (configurable). A
 **differential sync** keeps `is_monitored_lidarr` / fulfillment / play-count flags on every
 Qdrant point current without ever deleting a point (soft-delete semantics). **Every discovery
 run — scheduled or Run Now — starts with that differential sync (v0.44.0)**, so the taste
@@ -189,6 +188,20 @@ shows artist photos — Last.fm's search images have been blank/placeholder for 
 keeps its own thumbnail for every artist in your library (Lidarr's poster art, with a Deezer
 fallback for Plex-only artists), refreshed daily and cleaned up automatically when an artist is
 removed from the library.
+
+**v0.87.0 (AD-23, candidate-pool fix + auto-add parity):** the taste-centroid search's candidate
+pool was being starved — ingestion only re-embedded your own top artists as taste seeds, and the
+only thing generating *new* is_discovered=false candidates was the related-artist graph, scoped to
+artists already monitored in Lidarr. Every discovery run now also expands each stale taste seed
+(everyone you actually listen to, not just what's already in Lidarr) via Last.fm's similar-artist
+lookup — the step the original n8n pipeline this module ports from always had. **Auto-add is now
+unified across both lanes**: connection count (how many of your taste-seed/monitored artists a
+candidate is similar to) decides suggest-vs-auto-add for graph *and* ingestion candidates as
+before, and now also upgrades a well-connected **centroid** match straight to Lidarr — a centroid
+hit's cosine-similarity threshold still decides whether it's suggestion-worthy at all, connections
+only ever add an auto-add fast path on top, never suppress a match. Pending candidates gained a
+**sort control** (best match / most connections / newest / name), and every candidate card —
+centroid included — now shows which artist(s) triggered the suggestion whenever that's tracked.
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
 **drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is
