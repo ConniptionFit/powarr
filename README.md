@@ -238,6 +238,19 @@ column as the primary key, enforcing no constraint, and carrying the framework's
 name. Anything you added by hand is left alone, and no data is affected.
 
 
+**Daily shows with unannounced episode titles (v0.90.0):** talk shows, news and other
+daily series are usually grabbed the same day they air, before TVDB has published an episode
+title — so it comes back as literally "TBA" or "TBD". Powarr used to score that as a failed
+title match, which dropped the whole row below the confidence floor and meant it was never even
+offered for review: the download just silently never appeared in the queue. A title that hasn't
+been published yet is now treated as *missing information rather than a mismatch* — Powarr
+ignores it and matches on the air date instead, which is how daily episodes are actually
+identified. This also fixes daily matching in general: the date in a release name was previously
+being misread as an episode number, and nothing compared air dates at all. Dropping the title
+can never create a match on its own — a wrong air date or wrong episode number still fails, and
+an unannounced title with nothing else to go on is reported as unmatchable rather than guessed
+at. Once the real title appears, it's used normally again.
+
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
 **drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is
 on by default and runs **after** the artist DB refresh. All artists are eligible unless

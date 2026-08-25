@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -43,6 +43,33 @@ _SEASON_ONLY_RE = re.compile(r"\b(?:[sS]|[sS]eason[ ._-])(\d{1,2})\b")
 # library series is seriesType=anime and the opt-in setting is on — never
 # affects season-based shows, which always have an S/E or season marker instead.
 _ABSOLUTE_RANGE_RE = re.compile(r"\b(\d{2,4})\s*-\s*(\d{2,4})\b")
+# FI-11 — episode titles the metadata source hasn't published yet. TVDB (and
+# therefore Sonarr) stores a literal "TBA"/"TBD" for an episode whose title
+# isn't public, which is the normal state for a daily series grabbed the same
+# day it airs. Scored naively that placeholder reads as a ~0% title match and
+# drags an otherwise-correct row below low_confidence_floor, so the release is
+# never even offered for review. The title will be filled in later; absence of
+# a title is not evidence of a wrong match, so it is excluded from scoring
+# rather than scored zero. "Episode 12" is included because TVDB uses it the
+# same way for unnamed episodes — and where it *is* a real title it carries no
+# signal a release name could match anyway, while the episode number it names
+# is corroborated by the numeric leg regardless.
+_PLACEHOLDER_EP_TITLE_RE = re.compile(
+    r"^\s*(?:"
+    r"tba|tbd|tbc"
+    r"|to\s*be\s*(?:announced|determined|confirmed)"
+    r"|unknown|untitled|no\s*title"
+    r"|(?:episode|ep|chapter|part)\s*#?\s*\d+"
+    r"|s\d{1,2}\s*e\d{1,3}"
+    r")\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+# Daily-series release naming: "The.Late.Show.2026.08.24.1080p.WEB.h264".
+# Separators are optional so a bare "20260824" also parses. The lookarounds
+# stop it latching onto a longer digit run, and building a real date() below
+# rejects impossible month/day pairs (which is what keeps a "2020.2021" year
+# range from being read as a date).
+_RELEASE_DATE_RE = re.compile(r"(?<!\d)(19|20)(\d{2})[._\-\s]?(\d{2})[._\-\s]?(\d{2})(?!\d)")
 _COMPLETE_RE = re.compile(r"\b(complete|collection|full[ ._-]?series)\b", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 _JUNK_RE = re.compile(
@@ -332,6 +359,13 @@ def _parse_release_numbers(title: str) -> dict:
             is_year_pair = 1900 <= lo <= 2100 and 1900 <= hi <= 2100
             if not is_year_pair and hi > lo and (hi - lo) <= 2000:
                 absolute_range = (lo, hi)
+    # FI-11 — strip a daily-series air date before any number is read out of the
+    # name. "Show.2026.08.24" was otherwise yielding absolute=24 (the day of the
+    # month) and, via the dashed form, an absolute_range of (8, 24) — numbers
+    # that look like episode data but are just the date.
+    if parse_release_date(t) is not None:
+        t = _RELEASE_DATE_RE.sub(" ", t)
+        absolute_range = None
     cleaned = re.sub(r"[._\-\[\]()+]", " ", t)
     cleaned = _SEASON_EP_RE.sub(" ", cleaned)
     cleaned = _JUNK_RE.sub(" ", cleaned)
@@ -460,6 +494,81 @@ def find_corroborating_episodes(candidates: list[dict], triggered_episode_id: in
         if any(e.get("id") == triggered_episode_id for e in eps):
             return eps
     return None
+
+
+def is_placeholder_episode_title(title: str | None) -> bool:
+    """True when an *arr episode title carries no information to match against.
+
+    Either genuinely absent, or one of the literal placeholders the metadata
+    source writes while a title is still unpublished (FI-11). Both mean the
+    same thing for scoring: there is nothing to compare, which is different
+    from having compared and found a mismatch.
+    """
+    t = (title or "").strip()
+    if not t:
+        return True
+    return bool(_PLACEHOLDER_EP_TITLE_RE.match(t))
+
+
+def parse_release_date(title: str | None) -> date | None:
+    """Air date embedded in a daily-series release name, if any.
+
+    Returns the first token that forms a real calendar date, so an impossible
+    pair (a "2020.2021" season range, a resolution) is skipped rather than
+    accepted.
+    """
+    for m in _RELEASE_DATE_RE.finditer(title or ""):
+        try:
+            return date(int(m.group(1) + m.group(2)), int(m.group(3)), int(m.group(4)))
+        except ValueError:
+            continue  # e.g. month 20 — not a date, keep looking
+    return None
+
+
+def _episode_air_date(episode: dict) -> tuple[date | None, bool]:
+    """(air date, came_from_utc) for an *arr episode.
+
+    `airDate` is the series' own local air date, which is what scene release
+    names are built from, so it is preferred. `airDateUtc` is the same instant
+    in UTC and can land on the following day for a late-night show — the flag
+    lets the caller allow a one-day tolerance in that case only.
+    """
+    raw = episode.get("airDate")
+    if raw:
+        try:
+            return date.fromisoformat(str(raw)[:10]), False
+        except ValueError:
+            pass
+    raw = episode.get("airDateUtc")
+    if raw:
+        try:
+            return date.fromisoformat(str(raw)[:10]), True
+        except ValueError:
+            pass
+    return None, False
+
+
+def _airdate_score(rel_date: date | None, episode: dict) -> tuple[float | None, list[str]]:
+    """Air-date corroboration — the daily-series equivalent of season/episode.
+
+    For a daily show the air date *is* the episode's identity (it is what
+    Sonarr itself matches on), and the release name carries a date where a
+    season show would carry SxxEyy. None = nothing to compare.
+    """
+    if rel_date is None:
+        return None, []
+    ep_date, from_utc = _episode_air_date(episode)
+    if ep_date is None:
+        return None, []
+    if ep_date == rel_date:
+        return 1.0, [f"air date {rel_date.isoformat()} matched"]
+    # Only when we had to fall back to the UTC timestamp: a show airing late
+    # evening local time is already the next day in UTC, and the release is
+    # named for the local date.
+    if from_utc and abs((ep_date - rel_date).days) <= 1:
+        return 1.0, [f"air date {rel_date.isoformat()} matched {ep_date.isoformat()} "
+                     f"within a day (episode only carries a UTC timestamp)"]
+    return 0.0, [f"air date mismatch ({rel_date.isoformat()} vs {ep_date.isoformat()})"]
 
 
 def _numeric_se_score(parsed: dict, cand_season, cand_ep) -> tuple[float | None, list[str]]:
@@ -632,10 +741,22 @@ def score_episode_match(raw_title: str, episode: dict, series_type: str,
     (score 0-1, has_numeric_corroboration, human-readable per-variable parts)."""
     parts: list[str] = []
     parsed = _parse_release_numbers(raw_title)
+    # Date digits are already excluded from `parsed` by _parse_release_numbers;
+    # this is the same date read back for air-date corroboration below.
+    rel_date = parse_release_date(raw_title)
 
+    # FI-11 — an unpublished title is missing information, not contrary
+    # information, so it leaves the weighted average entirely instead of
+    # entering it as a zero. title_sim is None for "nothing to compare".
     ep_title = episode.get("title") or ""
-    title_sim = title_similarity(raw_title, ep_title) if ep_title else 0.0
-    if ep_title:
+    if is_placeholder_episode_title(ep_title):
+        title_sim = None
+        parts.append(
+            (f"episode title “{ep_title}” is a placeholder" if ep_title
+             else "episode has no title in the *arr yet")
+            + " — excluded from scoring, matching on the remaining metadata")
+    else:
+        title_sim = title_similarity(raw_title, ep_title)
         parts.append(f"episode title similarity {round(title_sim * 100)}% vs “{ep_title}”")
 
     cand_season = episode.get("seasonNumber")
@@ -678,11 +799,29 @@ def score_episode_match(raw_title: str, episode: dict, series_type: str,
         if numeric is not None:
             numeric_parts.append("no absolute-number mapping in Sonarr — fell back to season/episode")
     else:
-        numeric, numeric_parts = _numeric_se_score(parsed, cand_season, cand_ep)
+        se_score, se_parts = _numeric_se_score(parsed, cand_season, cand_ep)
+        air_score, air_parts = _airdate_score(rel_date, episode)
+        # FI-11 — for a daily series the air date is the episode's identity and
+        # the filename has no SxxEyy to read, so it outranks whatever the S/E
+        # leg made of the release name. For everything else it is a fallback
+        # used only when no episode number could be parsed at all.
+        if air_score is not None and (series_type == "daily" or se_score is None):
+            numeric, numeric_parts = air_score, air_parts
+        else:
+            numeric, numeric_parts = se_score, se_parts
 
     parts.extend(numeric_parts)
     if numeric is None:
+        if title_sim is None:
+            # No title to compare and nothing corroborating it — this is the one
+            # case where excluding the title must not be mistaken for a match.
+            parts.append("no usable episode title and no numeric corroboration — cannot match")
+            return 0.0, False, parts
         return round(title_sim, 3), False, parts
+    if title_sim is None:
+        # Title excluded: the numeric signal carries the score by itself rather
+        # than being averaged against a zero it did nothing to earn.
+        return round(numeric, 3), True, parts
     total = cfg.title_weight + cfg.number_weight
     score = (cfg.title_weight * title_sim + cfg.number_weight * numeric) / (total or 1.0)
     return round(score, 3), True, parts
