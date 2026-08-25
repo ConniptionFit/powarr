@@ -346,6 +346,15 @@ class ArtistDiscoverySettings(BaseModel):
     reads (soft-delete semantics — never deletes points, only flips flags). Qdrant
     connection lives in [[QdrantSettings]] (Settings -> Integrations), not here."""
     enabled: bool = False
+    # AD-24 — embeddings are OPTIONAL. The connection/graph lane is pure Qdrant
+    # payload bookkeeping (associated_seed_mbids) and needs no vectors at all, so
+    # the module stays useful with no Ollama reachable: related-artist points are
+    # written vector-less (Qdrant accepts `"vector": {}`) and still accumulate
+    # seed connections, qualify, and promote. Only the centroid lane — which is
+    # cosine search by definition — stands down. Mirrors [[OllamaSettings]]'s
+    # explicit enabled+host+model shape rather than inferring "off" from a blank
+    # host, so the UI can say so outright.
+    embeddings_enabled: bool = False
     # Standalone Ollama connection for embeddings — deliberately independent of the
     # Local LLM Assist Ollama settings (no fallback/reuse), even if both happen to
     # point at the same host in practice.

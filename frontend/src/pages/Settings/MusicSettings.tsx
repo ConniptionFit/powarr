@@ -6,6 +6,7 @@ import { req } from "../../lib/api";
 
 interface ADSettings {
   enabled: boolean;
+  embeddings_enabled: boolean;
   ollama_host: string;
   embed_model: string;
   max_candidates_per_run: number;
@@ -127,17 +128,31 @@ function ArtistDiscoverySettingsCard() {
 
       <QdrantHint />
 
-      <div className="grid sm:grid-cols-2 gap-3">
-        <label className={labelCls}
-          title="Standalone Ollama connection used only for artist-embedding calls — never shares a host/config with Local LLM Assist, even if both point at the same server.">
-          Ollama host <span className="text-slate-600">(standalone — independent of LLM Assist)</span>
-          <input className={inputCls} value={form.ollama_host || ""} onChange={e => set("ollama_host", e.target.value)} placeholder="http://10.1.1.x:11434" />
+      <div className="border-t border-purple-900/20 pt-4">
+        <label className="flex items-center gap-2 text-sm text-slate-300"
+          title="AD-24 — embeddings are optional. Off, Artist Discovery still runs its connection/graph lane in full: related artists are tracked in Qdrant without vectors and still accumulate seed connections, qualify, and promote. Only the taste-centroid (cosine similarity) lane needs vectors, and it stands down until you turn this back on — at which point missing vectors are backfilled automatically.">
+          <input type="checkbox" checked={form.embeddings_enabled ?? false}
+            onChange={e => set("embeddings_enabled", e.target.checked)} />
+          Use Ollama embeddings <span className="text-slate-600">(optional — enables the taste-centroid lane)</span>
         </label>
-        <label className={labelCls}
-          title="Ollama model that turns an artist's name + tags into the taste vector stored in Qdrant (default all-minilm). Changing this after artists are already tracked can mismatch vector dimensions against existing points — best set once, before first use.">
-          Embedding model
-          <input className={inputCls} value={form.embed_model || ""} onChange={e => set("embed_model", e.target.value)} />
-        </label>
+        {!form.embeddings_enabled && (
+          <p className="mt-2 text-xs text-slate-500">
+            Embeddings are off. Connection-based discovery (related-artist graph) runs normally;
+            taste-centroid similarity is paused.
+          </p>
+        )}
+        <div className={`grid sm:grid-cols-2 gap-3 mt-3 ${form.embeddings_enabled ? "" : "opacity-50"}`}>
+          <label className={labelCls}
+            title="Standalone Ollama connection used only for artist-embedding calls — never shares a host/config with Local LLM Assist, even if both point at the same server.">
+            Ollama host <span className="text-slate-600">(standalone — independent of LLM Assist)</span>
+            <input className={inputCls} disabled={!form.embeddings_enabled} value={form.ollama_host || ""} onChange={e => set("ollama_host", e.target.value)} placeholder="http://10.1.1.x:11434" />
+          </label>
+          <label className={labelCls}
+            title="Ollama model that turns an artist's name + tags into the taste vector stored in Qdrant (default all-minilm). Changing this after artists are already tracked can mismatch vector dimensions against existing points — best set once, before first use.">
+            Embedding model
+            <input className={inputCls} disabled={!form.embeddings_enabled} value={form.embed_model || ""} onChange={e => set("embed_model", e.target.value)} />
+          </label>
+        </div>
       </div>
 
       <div className="border-t border-purple-900/20 pt-4">

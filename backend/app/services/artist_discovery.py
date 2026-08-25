@@ -119,23 +119,35 @@ async def _resolve_seed_names(qdrant, seed_keys: list[str] | None) -> list[str]:
 
 
 def load_settings(db) -> ArtistDiscoverySettings:
-    """Load Artist Discovery settings with AD-07 dual-threshold migration.
+    """Load Artist Discovery settings with AD-07 dual-threshold + AD-24 embeddings
+    migrations.
 
     Pre-v0.42 used a single `auto_add_connection_threshold` as the suggest/qualify
     gate plus a boolean `auto_promote`. New installs: suggest=3, auto_add=0 (off).
     Existing rows without `suggest_connection_threshold` get suggest = old threshold;
     auto_add stays at the old value only when `auto_promote` was on, else 0.
+
+    AD-24: `embeddings_enabled` is new and defaults False, but a pre-v0.88 install
+    that already had an `ollama_host` was, by definition, running with embeddings
+    on — infer True from the configured host so upgrading never silently disables
+    the centroid lane on someone who had it working.
     """
     row = db.query(AppSetting).filter_by(key="artist_discovery").first()
     if not row or not row.value:
         return ArtistDiscoverySettings()
     data = json.loads(row.value)
+    dirty = False
     if "suggest_connection_threshold" not in data:
         old_threshold = int(data.get("auto_add_connection_threshold") or 3)
         data["suggest_connection_threshold"] = old_threshold
         if not data.get("auto_promote"):
             data["auto_add_connection_threshold"] = 0
         # else keep auto_add_connection_threshold at the old value (auto-add at same bar)
+        dirty = True
+    if "embeddings_enabled" not in data:
+        data["embeddings_enabled"] = bool((data.get("ollama_host") or "").strip())
+        dirty = True
+    if dirty:
         row.value = json.dumps(data)
         db.commit()
     return ArtistDiscoverySettings(**data)
@@ -234,13 +246,41 @@ async def _enrich_candidate(db, mbid: str | None, name: str) -> dict[str, Any]:
         return {"image_url": None, "bio": None, "genres": [], "years_active": None}
 
 
+def embeddings_available(cfg: ArtistDiscoverySettings) -> bool:
+    """AD-24 — whether the vector half of the module can run this cycle. False means
+    graph/connection discovery still runs in full; only the centroid lane stands
+    down. Config-level check only (toggle + host present); a host that is set but
+    unreachable degrades the same way at call time, since _embed_artist fail-softs
+    to None and every caller now treats that as "write the point without a vector."
+    """
+    return bool(cfg.embeddings_enabled and (cfg.ollama_host or "").strip())
+
+
 async def _embed_artist(cfg: ArtistDiscoverySettings, name: str, tags: list[str]) -> list[float] | None:
     """Artist Discovery's Ollama connection is fully standalone — it never falls
     back to (or depends on) the separate Local LLM Assist Ollama configuration,
-    even though both may point at the same host in practice."""
+    even though both may point at the same host in practice.
+
+    Returns None when embeddings are disabled/unconfigured/unreachable — callers
+    must treat that as a vector-less write, never as a reason to drop the artist
+    (AD-24)."""
+    if not embeddings_available(cfg):
+        return None
     from app.services import embeddings
     text = f"Artist: {name}. Tags: {', '.join(tags or [])}."
     return await embeddings.embed(cfg.ollama_host, cfg.embed_model, text)
+
+
+def _vector_field(vector: list[float] | None) -> Any:
+    """Qdrant point `vector` value for an upsert. A real vector when we have one,
+    otherwise `{}` — the empty *named-vector map*, which Qdrant accepts as "this
+    point has no vector." The field itself cannot be omitted (the API rejects a
+    point with a missing `vector` outright), and a zero-filled 384-vector would be
+    worse than nothing: it is a real point in cosine space that would surface as a
+    bogus neighbour. Vector-less points scroll, retrieve, and take set_payload
+    normally — they are simply never returned by similarity search, which is
+    exactly the degradation we want for the centroid lane."""
+    return vector if vector else {}
 
 
 def _find_candidate(db, mbid: str | None, name: str) -> DiscoveredArtist | None:
@@ -292,6 +332,7 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     ingested = 0
     expanded = 0
     promoted = 0
+    embedless = 0  # AD-24 — points written this run with no vector
     cap = max(cfg.max_candidates_per_run * 4, 10)
     seeds_expanded = 0
     for a in top_artists:
@@ -315,9 +356,12 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                 tags = await lastfm.get_top_tags(name, mbid)
             except Exception:
                 tags = []
+            # AD-24 — a missing vector no longer drops the seed. The point is
+            # written vector-less so it still exists to hang connections off; if
+            # embeddings come back later, backfill_missing_vectors() fills it in.
             vector = await _embed_artist(cfg, name, tags)
             if not vector:
-                continue
+                embedless += 1
             payload = {
                 "musicbrainz_id": mbid or "",
                 "artist_name": name,
@@ -334,9 +378,19 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
                 "associated_seed_mbids": [],
                 "last_related_scan_timestamp": 0,
                 **payload,
+                # The spread above preserves keys the *sync* lane owns
+                # (in_lidarr/is_monitored_lidarr/plex_fulfillment), but it also
+                # carries the stale copy of the two fields this block exists to
+                # re-derive. Re-assert them: without this, an already-present
+                # point could never be flipped to is_discovered=true — the seed
+                # promotion itself — and its play count stayed frozen at
+                # whatever it was first created with.
+                "is_discovered": True,
+                "total_plays_global": max(int(payload.get("total_plays_global") or 0), plays),
             }
             try:
-                await qdrant.upsert_points([{"id": pid, "vector": vector, "payload": payload}])
+                await qdrant.upsert_points([
+                    {"id": pid, "vector": _vector_field(vector), "payload": payload}])
             except Exception as e:
                 logger.warning(f"Artist Discovery ingest: Qdrant upsert failed for {name}: {e}")
                 continue
@@ -389,7 +443,12 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
         message += f", expanded {expanded} new candidate(s)"
         if promoted:
             message += f", {promoted} auto-promoted"
-    return {"ok": True, "message": message, "ingested": ingested, "expanded": expanded, "promoted": promoted}
+    if embedless:
+        # Say it out loud in the run history — a silently vector-less point pool is
+        # exactly the failure mode AD-24 was written to make visible.
+        message += f" ({embedless} without embeddings)"
+    return {"ok": True, "message": message, "ingested": ingested, "expanded": expanded,
+            "promoted": promoted, "embedless": embedless}
 
 
 # --- Centroid similarity search --------------------------------------------------
@@ -429,7 +488,12 @@ async def compute_taste_centroid(db) -> list[float] | None:
     if not points:
         return None
     points.sort(key=lambda p: (p.get("payload") or {}).get("total_plays_global", 0), reverse=True)
-    vectors = [p["vector"] for p in points[:15] if p.get("vector")]
+    # AD-24 — filter to points that actually carry a vector *before* taking the top
+    # 15, not after. Since vector-less points now legitimately live in the pool, the
+    # old `points[:15]` slice could fill its whole window with them and average
+    # nothing, silently yielding no centroid on a library that has plenty of usable
+    # vectors further down the play-count order.
+    vectors = [p["vector"] for p in points if p.get("vector")][:15]
     return _average_vector(vectors)
 
 
@@ -674,9 +738,12 @@ async def _upsert_related_point(qdrant, lastfm, cfg: ArtistDiscoverySettings,
         tags = await lastfm.get_top_tags(rname, rmbid)
     except Exception:
         tags = []
+    # AD-24 — this is the hot path for the connection/graph lane, and it must not
+    # depend on Ollama. Previously a missing vector returned None here, which
+    # silently discarded the related artist entirely: no point, no connection, no
+    # candidate. Since the graph lane's whole signal is `associated_seed_mbids`
+    # bookkeeping on the payload, a vector-less point serves it perfectly well.
     vector = await _embed_artist(cfg, rname, tags)
-    if not vector:
-        return None
     payload = {
         "musicbrainz_id": rmbid or "", "artist_name": rname, "genres": tags,
         "mood_tags": classify_mood_tags(tags), "era": "", "is_monitored_lidarr": False,
@@ -685,7 +752,8 @@ async def _upsert_related_point(qdrant, lastfm, cfg: ArtistDiscoverySettings,
         "associated_seed_mbids": [seed_key], "last_related_scan_timestamp": 0,
     }
     try:
-        await qdrant.upsert_points([{"id": rid, "vector": vector, "payload": payload}])
+        await qdrant.upsert_points([
+            {"id": rid, "vector": _vector_field(vector), "payload": payload}])
     except Exception as e:
         logger.warning(f"Artist Discovery: Qdrant upsert failed for {rname}: {e}")
         return None
@@ -920,6 +988,81 @@ async def re_enrich_missing(db, limit: int = 25) -> dict[str, Any]:
             "updated": updated, "checked": len(rows)}
 
 
+# --- AD-24 embedding backfill ------------------------------------------------------
+
+async def backfill_missing_vectors(db, cfg: ArtistDiscoverySettings,
+                                   cap: int = 50) -> dict[str, Any]:
+    """Give a vector to points that were written without one while embeddings were
+    unavailable, so they rejoin the centroid lane once Ollama is back.
+
+    No-op unless embeddings are actually configured. Capped per run (default 50)
+    like re_enrich_missing's own backfill — a long-disabled instance catches up over
+    a few cycles instead of holding one run open for hundreds of sequential
+    Ollama/Last.fm calls. Qdrant has no payload-level "vector is null" filter, so
+    the vector-less set is found by scrolling with_vector=True and checking
+    client-side.
+    """
+    if not embeddings_available(cfg):
+        return {"ok": True, "message": "Embeddings disabled — nothing to backfill", "filled": 0}
+    qdrant = _qdrant(db)
+    if not qdrant:
+        return {"ok": False, "message": "Qdrant not configured", "filled": 0}
+    lastfm = _lastfm_client(db)
+
+    filled = 0
+    offset = None
+    pages = 0
+    while pages < 40 and filled < cap:
+        try:
+            points, offset = await qdrant.scroll(limit=256, offset=offset, with_vector=True)
+        except Exception as e:
+            logger.warning(f"Artist Discovery backfill: Qdrant scroll failed: {e}")
+            break
+        pages += 1
+        for p in points:
+            if filled >= cap:
+                break
+            if p.get("vector"):
+                continue
+            payload = p.get("payload") or {}
+            name = (payload.get("artist_name") or "").strip()
+            if not name:
+                continue
+            tags = payload.get("genres") or []
+            if not tags and lastfm:
+                # Points created during an outage may have no tags either (the
+                # Last.fm tag call is best-effort) — refetch once, here, so the
+                # backfilled vector is built from the same text a healthy ingest
+                # would have produced rather than a name-only prompt.
+                try:
+                    tags = await lastfm.get_top_tags(name, payload.get("musicbrainz_id") or None)
+                except Exception:
+                    tags = []
+            vector = await _embed_artist(cfg, name, tags)
+            if not vector:
+                # Host configured but not answering — stop rather than grind through
+                # the whole collection failing on every point.
+                logger.warning("Artist Discovery backfill: embedding failed, stopping early")
+                offset = None
+                break
+            try:
+                await qdrant.update_vectors([{"id": p["id"], "vector": vector}])
+            except Exception as e:
+                logger.warning(f"Artist Discovery backfill: update_vectors failed for {name}: {e}")
+                continue
+            if tags and not payload.get("genres"):
+                try:
+                    await qdrant.set_payload([p["id"]], {
+                        "genres": tags, "mood_tags": classify_mood_tags(tags)})
+                except Exception as e:
+                    logger.warning(f"Artist Discovery backfill: tag set_payload failed for {name}: {e}")
+            filled += 1
+        db.commit()  # same per-page commit rule as run_differential_sync
+        if offset is None:
+            break
+    return {"ok": True, "message": f"Backfilled {filled} vector(s)", "filled": filled}
+
+
 # --- Orchestration -----------------------------------------------------------------
 
 async def run_discovery(db=None) -> dict[str, Any]:
@@ -987,6 +1130,14 @@ async def run_full_discovery_cycle(db=None, task_id: str | None = None) -> dict[
         # above and in generate_candidates() (v0.74.1) — confirmed live (idle-in-
         # transaction sessions on "SELECT app_settings…", health endpoint timing out).
         db.commit()
+        # AD-24 — before the centroid lane, top up any points that were written
+        # vector-less during an embeddings outage. No-op when embeddings are off,
+        # which is the whole point: the graph lane above and below still ran.
+        backfill = {"filled": 0}
+        if embeddings_available(cfg):
+            tasks.update_task(task_id, message="Backfilling missing embeddings…")
+            backfill = await backfill_missing_vectors(db, cfg)
+            db.commit()
         tasks.update_task(task_id, message="Running taste-centroid discovery…")
         centroid = await run_centroid_discovery(db, cfg)
         db.commit()
@@ -1003,9 +1154,15 @@ async def run_full_discovery_cycle(db=None, task_id: str | None = None) -> dict[
         run.finished_at = datetime.utcnow()
         run.message = (f"Synced {sync.get('updated', 0)} point(s), ingested {ingest.get('ingested', 0)}, "
                        f"{found} new candidate(s), {added} auto-promoted")
+        if backfill.get("filled"):
+            run.message += f", backfilled {backfill['filled']} embedding(s)"
+        if not embeddings_available(cfg):
+            # AD-24 — make the degraded mode legible in run history rather than
+            # letting a graph-only cycle read as a fully-healthy one.
+            run.message += " (embeddings off — connection lane only)"
         db.commit()
         return {"ok": True, "message": run.message, "sync": sync, "ingest": ingest,
-                "centroid": centroid, "graph": graph}
+                "centroid": centroid, "graph": graph, "backfill": backfill}
     except Exception as e:
         logger.error(f"Artist Discovery full cycle failed: {e}", exc_info=True)
         run.message = f"Error: {e}"

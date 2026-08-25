@@ -105,6 +105,25 @@ class QdrantIntegration(BaseIntegration):
             r.raise_for_status()
             return True
 
+    async def update_vectors(self, points: list[dict]) -> bool:
+        """PUT /collections/{collection}/points/vectors — set vectors on points that
+        already exist, leaving their payloads untouched. Points are {id, vector}.
+
+        Use this and never a bare `upsert_points([{id, vector}])` to backfill a
+        vector: upsert replaces the whole point, so omitting `payload` there wipes
+        the existing payload (verified against live Qdrant) — which for a
+        vector-less discovery point would destroy the accumulated
+        `associated_seed_mbids` connections that are the entire reason it exists.
+        """
+        if not points:
+            return True
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            r = await client.put(
+                f"{self.url}/collections/{self.collection}/points/vectors",
+                headers=self._headers(), json={"points": points})
+            r.raise_for_status()
+            return True
+
     async def set_payload(self, ids: list[str], payload: dict) -> bool:
         """POST /collections/{collection}/points/payload — merge fields into existing
         points' payloads without touching their vectors (no need to refetch+republish
