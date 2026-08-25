@@ -55,6 +55,21 @@ def update_scoring_weights(weights: ScoringWeights, db: Session = Depends(get_db
     return weights
 
 
+@router.post("/scoring/preview")
+def preview_scoring_weights(weights: ScoringWeights, db: Session = Depends(get_db)):
+    """LIB-09 — dry-run a weight change: what would this do to the suggestion list?
+
+    Read-only. Nothing is saved and no score is written, so it is safe to call
+    while the user is still adjusting sliders. Answers the question the
+    confirmation gate on weight changes implies but could not previously
+    show: how many items cross the threshold, how much space that represents,
+    and which items move the furthest in each direction.
+    """
+    from app.services.scorer import load_scoring_profiles, preview_weight_change
+    return preview_weight_change(db, weights, current=_get_weights(db),
+                                 profiles=load_scoring_profiles(db))
+
+
 @router.get("/scoring-profiles", response_model=ScoringProfiles)
 def get_scoring_profiles(db: Session = Depends(get_db)):
     return _get_json_setting(db, "scoring_profiles", ScoringProfiles)

@@ -161,3 +161,26 @@ class LibraryHealth(BaseModel):
     protections: dict[str, int]
     pending_soft_deletes: int
     ignored_items: int
+
+
+class ScoreFactor(BaseModel):
+    """LIB-08 — one scoring signal's contribution to an item's 0-100 score."""
+    key: str
+    label: str
+    factor: float          # 0-1 strength of this signal for this item
+    weight: float          # configured importance of the signal
+    contribution: float    # points it actually added, out of 100
+    max_contribution: float  # the most it could have added at this weight
+
+
+class ScoreBreakdown(BaseModel):
+    """LIB-08 — the deterministic "why this score?" answer. Always available:
+    it is the same arithmetic the scorer already ran, so unlike the LLM Explain
+    it needs no model configured and cannot be unavailable."""
+    item_id: int
+    title: str
+    score: float
+    factors: list[ScoreFactor]
+    series_watched: bool
+    library_section: Optional[str] = None
+    profile_applied: bool = False  # per-library weight overlay was in effect

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Activity, Copy, DownloadCloud, Image, Link2, Shield, Trash2 } from "lucide-react";
-import { mediaApi, fmtBytes, type LibraryHealth } from "../../lib/api";
+import { mediaApi, fmtBytes, type LibraryHealth, type ReclaimPoint } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
 import ScrollFadeX from "../../components/ScrollFadeX";
 
@@ -10,6 +10,75 @@ import ScrollFadeX from "../../components/ScrollFadeX";
 // Plex/*arr calls). Deliberately no composite 0-100 "health score": score
 // formulas are a confirmation-gated surface in Powarr, and each tile links
 // to the page where the number can actually be acted on instead.
+// LIB-11 — reclaimed space over time. Powarr has always logged every deletion
+// with its size and an indexed timestamp, but surfaced only two aggregates
+// (30-day and all-time), so there was no way to see whether cleanup keeps up
+// with growth. Drawn with plain divs rather than pulling in a charting
+// dependency for one sparkline — the app ships four runtime deps and this
+// doesn't warrant a fifth.
+function ReclaimTrendCard() {
+  const { data } = useQuery({
+    queryKey: ["reclaim-trend", 90],
+    queryFn: () => mediaApi.reclaimTrend(90),
+  });
+  if (!data) return null;
+
+  const peak = Math.max(...data.points.map(p => p.bytes), 0);
+  const active = data.points.filter(p => p.deleted > 0).length;
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-5 mb-6">
+      <div className="flex items-baseline justify-between gap-3 flex-wrap mb-3">
+        <div>
+          <p className="text-slate-400 text-xs uppercase tracking-wider">Space reclaimed — last 90 days</p>
+          <p className="text-white text-lg font-semibold mt-0.5">
+            {fmtBytes(data.total_bytes)}{" "}
+            <span className="text-slate-500 text-sm font-normal">
+              across {data.total_deleted.toLocaleString()} deletion{data.total_deleted === 1 ? "" : "s"}
+            </span>
+          </p>
+        </div>
+        {active > 0 && (
+          <p className="text-slate-500 text-xs">
+            {active} active day{active === 1 ? "" : "s"} · peak {fmtBytes(peak)}
+          </p>
+        )}
+      </div>
+
+      {data.total_deleted === 0 ? (
+        <p className="text-slate-500 text-xs">
+          Nothing has been deleted through Powarr in this window, so there's no trend to plot yet.
+          Deletions made here are logged automatically and will appear.
+        </p>
+      ) : (
+        <>
+          <div className="flex items-end gap-px h-16" role="img"
+               aria-label={`Daily reclaimed space over the last ${data.days} days, totalling ${fmtBytes(data.total_bytes)}`}>
+            {data.points.map(p => <TrendBar key={p.date} point={p} peak={peak} />)}
+          </div>
+          <div className="flex justify-between text-[10px] text-slate-600 mt-1.5">
+            <span>{data.points[0]?.date}</span>
+            <span>{data.points[data.points.length - 1]?.date}</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TrendBar({ point, peak }: { point: ReclaimPoint; peak: number }) {
+  // Zero-days keep a 1px floor so the axis reads as continuous rather than
+  // looking like missing data.
+  const pct = peak > 0 ? (point.bytes / peak) * 100 : 0;
+  return (
+    <div
+      className="flex-1 min-w-0 bg-brand-light/70 hover:bg-brand-light rounded-sm transition-colors"
+      style={{ height: `${Math.max(pct, point.bytes > 0 ? 4 : 1.5)}%` }}
+      title={`${point.date}: ${point.deleted} deleted, ${fmtBytes(point.bytes)}`}
+    />
+  );
+}
+
 export default function Health() {
   const { data, isLoading } = useQuery({
     queryKey: ["library-health"],
@@ -23,6 +92,8 @@ export default function Health() {
       <p className="text-slate-400 text-sm mb-5">
         A snapshot of library upkeep — computed from Powarr's synced data, refreshed by the regular Plex sync.
       </p>
+
+      <ReclaimTrendCard />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
         <Tile

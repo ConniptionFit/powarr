@@ -238,6 +238,30 @@ column as the primary key, enforcing no constraint, and carrying the framework's
 name. Anything you added by hand is left alone, and no data is affected.
 
 
+**Library search actually searches the library (v0.91.0):** the search box on Deletion
+Suggestions used to filter only the rows already on screen — the top 500 by score. On a large
+library that's well under 1% of what matches your filters, so searching for something you
+definitely own would often come back empty, looking exactly like "you don't have this". Search
+now runs against the whole library (title, show/artist name, library, or year), and CSV export
+uses the same search so it matches what you're looking at.
+
+**Why is this scored 87? (v0.91.0):** every item in Deletion Suggestions has a new calculator
+button showing exactly which factors produced its score — watch history, file size, time in the
+library, release age — and how much each one contributed out of its maximum. It's the same
+arithmetic Powarr already used to rank the item, so it's instant and always available; the
+existing LLM "Explain" button is still there for a written opinion, but you no longer need a
+working LLM just to see the maths.
+
+**Preview a scoring change before you commit to it (v0.91.0):** Settings → Scoring has a
+**Preview impact** button that reports what your new weights would do — how many items become
+deletion candidates, how much space that represents, and which items move furthest in each
+direction — without saving anything or changing a single score. Useful before a change that would
+newly qualify items for auto-delete.
+
+**Also new in v0.91.0:** Duplicates can review every confidently-ranked group at once instead of
+one at a time (groups with no file-size signal, like TV shows, still need a manual pick), and
+Library Health shows how much space you've reclaimed per day over the last 90 days.
+
 **Daily shows with unannounced episode titles (v0.90.0):** talk shows, news and other
 daily series are usually grabbed the same day they air, before TVDB has published an episode
 title — so it comes back as literally "TBA" or "TBD". Powarr used to score that as a failed

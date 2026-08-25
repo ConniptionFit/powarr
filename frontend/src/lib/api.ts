@@ -145,6 +145,62 @@ export interface ArrLinkCoverage {
   total: number;
 }
 
+export interface ReclaimPoint {
+  date: string;
+  deleted: number;
+  bytes: number;
+}
+
+export interface ReclaimTrend {
+  days: number;
+  points: ReclaimPoint[];
+  total_deleted: number;
+  total_bytes: number;
+}
+
+export interface ScoringPreviewSide {
+  above_threshold: number;
+  total_size_bytes: number;
+  threshold: number;
+}
+
+export interface ScoringPreviewMover {
+  id: number;
+  title: string;
+  media_type: string;
+  score_before: number;
+  score_after: number;
+}
+
+export interface ScoringPreview {
+  evaluated: number;
+  current: ScoringPreviewSide;
+  proposed: ScoringPreviewSide;
+  newly_above_count: number;
+  newly_below_count: number;
+  newly_above: ScoringPreviewMover[];
+  newly_below: ScoringPreviewMover[];
+}
+
+export interface ScoreFactor {
+  key: string;
+  label: string;
+  factor: number;           // 0-1 strength of this signal for this item
+  weight: number;           // configured importance
+  contribution: number;     // points it actually added, out of 100
+  max_contribution: number; // the most it could have added at this weight
+}
+
+export interface ScoreBreakdown {
+  item_id: number;
+  title: string;
+  score: number;
+  factors: ScoreFactor[];
+  series_watched: boolean;
+  library_section: string | null;
+  profile_applied: boolean;
+}
+
 export interface LibraryHealth {
   by_type: MediaTypeFootprint[];
   arr_link_coverage: ArrLinkCoverage[];
@@ -190,6 +246,12 @@ export const mediaApi = {
   libraries: () => req<string[]>("/media/libraries"),
   duplicates: () => req<DuplicateGroup[]>("/media/duplicates"),
   health: () => req<LibraryHealth>("/media/health"),
+  // LIB-08 — deterministic per-factor "why this score?". Always available:
+  // it is the arithmetic the scorer already ran, so unlike the LLM Explain it
+  // needs no model configured.
+  scoreBreakdown: (id: number) => req<ScoreBreakdown>(`/media/${id}/score-breakdown`),
+  // LIB-11 — reclaimed space per day, from the deletion log Powarr already keeps.
+  reclaimTrend: (days = 90) => req<ReclaimTrend>(`/media/reclaim-trend?days=${days}`),
   restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
   // INT-02 (v0.71.0) — manual *arr ID override, fixing a bad auto-link without a
   // full resync. arrCandidates browses/searches the matching app's library;
@@ -436,6 +498,10 @@ export const settingsApi = {
   getScoring: () => req<ScoringWeights>("/settings/scoring"),
   updateScoring: (w: ScoringWeights) =>
     req<ScoringWeights>("/settings/scoring", { method: "PUT", body: JSON.stringify(w) }),
+  // LIB-09 — dry-run a weight change. Read-only: nothing is saved and no score
+  // is written, so it is safe to call before committing to the change.
+  previewScoring: (w: ScoringWeights) =>
+    req<ScoringPreview>("/settings/scoring/preview", { method: "POST", body: JSON.stringify(w) }),
   getScoringProfiles: () => req<ScoringProfiles>("/settings/scoring-profiles"),
   updateScoringProfiles: (p: ScoringProfiles) =>
     req<ScoringProfiles>("/settings/scoring-profiles", { method: "PUT", body: JSON.stringify(p) }),

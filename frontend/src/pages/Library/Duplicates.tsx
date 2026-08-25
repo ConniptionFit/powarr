@@ -53,6 +53,20 @@ export default function Duplicates() {
 
   const totalReclaimable = groups.reduce((sum, g) => sum + g.reclaimable_bytes, 0);
 
+  // LIB-10 — review every confidently-rankable group at once instead of
+  // clicking through them one at a time. Deliberately scoped to groups with a
+  // real file-size signal: for container types (shows/artists) every member is
+  // 0 bytes, so the "keep" pick there is only a deterministic tie-break and
+  // not something to action in bulk — those still require a manual choice.
+  // This opens the same preview modal a single group does, so protection flags
+  // and *arr cascade warnings still apply; nothing is deleted un-reviewed.
+  const sizedGroups = groups.filter(g => g.has_size_signal);
+  const bulkDeleteIds = sizedGroups.flatMap(g => {
+    const keep = keepId[groupKey(g)] ?? g.suggested_keep_id;
+    return g.items.filter(i => i.id !== keep).map(i => i.id);
+  });
+  const bulkReclaimable = sizedGroups.reduce((sum, g) => sum + g.reclaimable_bytes, 0);
+
   return (
     <div className="p-4 sm:p-8">
       <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
@@ -60,10 +74,22 @@ export default function Duplicates() {
           Same title, multiple copies living separately in Plex — pick what to keep, review, then delete the rest.
         </p>
         {groups.length > 0 && (
-          <p className="text-slate-400 text-sm">
-            {groups.length} group{groups.length === 1 ? "" : "s"} · up to{" "}
-            <span className="text-white font-medium">{fmtBytes(totalReclaimable)}</span> reclaimable
-          </p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <p className="text-slate-400 text-sm">
+              {groups.length} group{groups.length === 1 ? "" : "s"} · up to{" "}
+              <span className="text-white font-medium">{fmtBytes(totalReclaimable)}</span> reclaimable
+            </p>
+            {bulkDeleteIds.length > 0 && (
+              <button
+                onClick={() => setPreviewIds(bulkDeleteIds)}
+                title={`Review the ${bulkDeleteIds.length} extra copies across ${sizedGroups.length} groups that have a file-size signal. Groups without one still need a manual pick.`}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+              >
+                <Trash2 size={14} />
+                Review all {sizedGroups.length} ranked ({fmtBytes(bulkReclaimable)})
+              </button>
+            )}
+          </div>
         )}
       </div>
 

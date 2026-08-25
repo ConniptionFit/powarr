@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -9,11 +9,26 @@ from app.database import get_db
 from app.models.app_setting import AppSetting
 from app.models.deletion_log import DeletionLog
 from app.models.media import MediaItem
-from app.schemas.media import MediaItemOut, MediaStats, DeletionLogOut, DeletionStats, DeletionPreview, DuplicateGroup, LibraryHealth
+from app.schemas.media import MediaItemOut, MediaStats, DeletionLogOut, DeletionStats, DeletionPreview, DuplicateGroup, LibraryHealth, ScoreBreakdown
 from app.schemas.settings import ScoringWeights, CleanupSettings
 from app.services.deleter import propagate_and_delete
 
 router = APIRouter(prefix="/media", tags=["media"])
+
+# LIB-07 — columns list_media will sort by. A whitelist rather than a bare
+# getattr: `getattr(MediaItem, sort_by, MediaItem.score)` only falls back for
+# names that don't exist, so any *other* class attribute resolved and then blew
+# up in order_by — `sort_by=metadata` (SQLAlchemy's MetaData) and
+# `sort_by=risky_delete` (a plain Python property) both returned 500. That is
+# reachable without crafting a URL: the UI persists its sort choice in
+# localStorage and `usePersistedState` does `JSON.parse(raw) as T`, a
+# compile-time cast with no runtime check, so a value stored by an older build
+# is replayed verbatim to the API forever.
+SORTABLE_FIELDS = {
+    "score", "title", "parent_title", "file_size", "added_at", "year",
+    "last_watched_at", "watch_count", "media_type", "library_section",
+    "release_date", "pending_delete_at", "id",
+}
 
 
 def _get_setting(db: Session, key: str, schema):
@@ -28,6 +43,8 @@ def list_media(
     db: Session = Depends(get_db),
     media_type: Optional[str] = Query(None),
     min_score: Optional[float] = Query(None),
+    search: Optional[str] = Query(None, description="Substring match across title, "
+                                                    "parent title, library section and year"),
     ignored: Optional[bool] = Query(False),
     include_protected: bool = Query(False),
     pending: bool = Query(False),  # true = list only items awaiting soft-delete purge
@@ -55,8 +72,30 @@ def list_media(
         q = q.filter(MediaItem.media_type == media_type)
     if min_score is not None:
         q = q.filter(MediaItem.score >= min_score)
+    # LIB-07 — searching server-side rather than filtering the fetched page.
+    # The UI used to filter its own 500-row window client-side, so on this
+    # library the box searched 500 of the 74k rows matching the default
+    # filters and "no results" was indistinguishable from "not in library".
+    # Same fields the client-side filter covered, so behaviour is a superset.
+    # isinstance rather than a plain truthiness check: list_media is also
+    # called as an ordinary function (export_media_csv, tests), and in that
+    # path an unpassed argument is FastAPI's Query() sentinel object rather
+    # than None — truthy, and without .strip().
+    if isinstance(search, str) and search.strip():
+        term = f"%{search.strip()}%"
+        conditions = [
+            MediaItem.title.ilike(term),
+            MediaItem.parent_title.ilike(term),
+            MediaItem.library_section.ilike(term),
+        ]
+        digits = search.strip()
+        if digits.isdigit():
+            conditions.append(MediaItem.year == int(digits))
+        q = q.filter(or_(*conditions))
 
-    col = getattr(MediaItem, sort_by, MediaItem.score)
+    col = getattr(MediaItem, sort_by, None) if sort_by in SORTABLE_FIELDS else None
+    if col is None:
+        col = MediaItem.score
     q = q.order_by(col.desc() if order == "desc" else col.asc())
     return q.offset(offset).limit(limit).all()
 
@@ -131,6 +170,43 @@ def get_stats(db: Session = Depends(get_db)):
     )
 
 
+@router.get("/{item_id}/score-breakdown", response_model=ScoreBreakdown)
+def item_score_breakdown(item_id: int, db: Session = Depends(get_db)):
+    """LIB-08 — why this item scored what it did, per factor.
+
+    Deterministic and always available: this is the arithmetic the scorer
+    already ran, so unlike the LLM "Explain" button it needs no model
+    configured and cannot be unavailable. It also reflects the per-library
+    weight overlay actually applied to this item, not the global defaults —
+    otherwise the numbers wouldn't add up to the score being shown.
+    """
+    from app.services.scorer import (
+        _item_score_dict, _series_watch_index, load_scoring_profiles,
+        score_contributions, weights_for_library,
+    )
+    item = db.query(MediaItem).filter(MediaItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    weights = _get_setting(db, "scoring_weights", ScoringWeights)
+    profiles = load_scoring_profiles(db)
+    eff = weights_for_library(weights, profiles, item.library_section)
+    # Only episodes/tracks inherit a series-level watch signal, and only this
+    # item's own show is needed — not the whole-library aggregate.
+    series_idx = (_series_watch_index(db, only_parent=item.parent_title)
+                  if item.media_type in ("episode", "track") and item.parent_title else {})
+    result = score_contributions(_item_score_dict(item, series_idx), eff)
+    return ScoreBreakdown(
+        item_id=item.id,
+        title=item.title,
+        score=result["score"],
+        factors=result["factors"],
+        series_watched=result["series_watched"],
+        library_section=item.library_section,
+        profile_applied=eff is not weights,
+    )
+
+
 @router.get("/libraries")
 def list_libraries(db: Session = Depends(get_db)) -> list[str]:
     rows = db.query(MediaItem.library_section).distinct().all()
@@ -142,6 +218,7 @@ def export_media_csv(
     db: Session = Depends(get_db),
     media_type: Optional[str] = Query(None),
     min_score: Optional[float] = Query(None),
+    search: Optional[str] = Query(None),
     ignored: Optional[bool] = Query(False),
     include_protected: bool = Query(False),
     pending: bool = Query(False),
@@ -152,7 +229,7 @@ def export_media_csv(
     """CSV of deletion candidates (same filters as list_media; Approved Queue #14)."""
     from app.services.csv_export import streaming_csv, _dt
     items = list_media(
-        db=db, media_type=media_type, min_score=min_score, ignored=ignored,
+        db=db, media_type=media_type, min_score=min_score, search=search, ignored=ignored,
         include_protected=include_protected, pending=pending,
         sort_by=sort_by, order=order, limit=min(limit, 20000), offset=0,
     )
@@ -207,6 +284,47 @@ def deletion_stats(db: Session = Depends(get_db)):
         deleted_30d=count_30d, freed_30d_bytes=int(freed_30d),
         deleted_total=total_count, freed_total_bytes=int(total_freed),
     )
+
+
+@router.get("/reclaim-trend")
+def reclaim_trend(db: Session = Depends(get_db), days: int = Query(90, ge=7, le=365)):
+    """LIB-11 — reclaimed space per day, for the Library Health trend.
+
+    Powarr has always logged every deletion with its size and an indexed
+    timestamp, but only ever reported two aggregate numbers (30-day and
+    all-time), so there was no way to see whether cleanup is keeping up with
+    growth or which weeks did the work. Same day-bucketing approach as the
+    import trends sparkline, including the SQLite/Postgres date-cast split.
+    """
+    from sqlalchemy import cast, Date
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    # Branch on the dialect of the session actually in hand, not on the
+    # configured POWARR_DB_URL: they are the same thing in production, but a
+    # session bound to something else (a test, a one-off script) would
+    # otherwise be handed SQL for the wrong database.
+    is_sqlite = db.get_bind().dialect.name == "sqlite"
+    day_expr = (func.date(DeletionLog.deleted_at) if is_sqlite
+                else cast(DeletionLog.deleted_at, Date))
+    rows = (db.query(day_expr,
+                     func.count(DeletionLog.id),
+                     func.coalesce(func.sum(DeletionLog.file_size), 0))
+            .filter(DeletionLog.deleted_at >= cutoff)
+            .group_by(day_expr).all())
+    by_day = {str(d): {"date": str(d), "deleted": int(c), "bytes": int(b)}
+              for d, c, b in rows if d}
+    # Emit every day in the window, including the zero ones — a sparkline with
+    # gaps silently collapsed would misrepresent the shape of the trend.
+    out = []
+    start = (datetime.utcnow() - timedelta(days=days - 1)).date()
+    for i in range(days):
+        key = str(start + timedelta(days=i))
+        out.append(by_day.get(key, {"date": key, "deleted": 0, "bytes": 0}))
+    return {
+        "days": days,
+        "points": out,
+        "total_deleted": sum(p["deleted"] for p in out),
+        "total_bytes": sum(p["bytes"] for p in out),
+    }
 
 
 @router.post("/preview-delete", response_model=DeletionPreview)

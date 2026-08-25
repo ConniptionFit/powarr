@@ -1,7 +1,8 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3, ShieldAlert, Link2 } from "lucide-react";
+import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3, ShieldAlert, Link2, Calculator } from "lucide-react";
 import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem, type EpisodeDeleteMode } from "../../lib/api";
+import ScoreBreakdownModal from "../../components/ScoreBreakdownModal";
 import { usePersistedState } from "../../lib/usePersistedState";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
@@ -104,9 +105,19 @@ export default function DeletionSuggestions() {
   const [previewIds, setPreviewIds] = useState<number[] | null>(null); // LIB-01 dry-run preview modal
   const [arrLinkItem, setArrLinkItem] = useState<MediaItem | null>(null); // INT-02 manual *arr link fix modal
   const [focusedKey, setFocusedKey] = useState<string | null>(null); // UX-06 keyboard focus (group title or item id)
+  const [breakdownItem, setBreakdownItem] = useState<MediaItem | null>(null);
   const [explainBusy, setExplainBusy] = useState<number | null>(null);
   const [explainMsg, setExplainMsg] = useState<Record<number, string>>({});
   const [streamText, setStreamText] = useState<Record<number, string>>({});
+
+  // LIB-07 — the search term is now sent to the API instead of filtering the
+  // fetched page, so debounce it: every keystroke would otherwise re-query a
+  // 160k-row table. Same 250ms as ArrLinkModal's candidate search.
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const fetchType = mediaType || undefined;
   const params: Record<string, string | number | boolean> = {
@@ -114,6 +125,7 @@ export default function DeletionSuggestions() {
     sort_by: sortBy,
     order,
     limit: 500,
+    ...(debouncedSearch.trim() ? { search: debouncedSearch.trim() } : {}),
     // When show mode is active, always fetch episodes
     ...(showMode === "show" && !mediaType ? { media_type: "episode" } : {}),
     ...(fetchType ? { media_type: fetchType } : {}),
@@ -141,17 +153,11 @@ export default function DeletionSuggestions() {
     if (platformFilter && platformFilter !== "readarr") {
       arr = arr.filter(i => matchesPlatform(i, platformFilter));
     }
-    const q = search.trim().toLowerCase();
-    if (q) {
-      arr = arr.filter(i =>
-        (i.title || "").toLowerCase().includes(q) ||
-        (i.parent_title || "").toLowerCase().includes(q) ||
-        (i.library_section || "").toLowerCase().includes(q) ||
-        String(i.year ?? "").includes(q)
-      );
-    }
+    // Title/year search is applied server-side (LIB-07) — filtering here too
+    // would just re-filter the same rows. The platform filter above stays
+    // client-side: it reads *arr link ids already present on the fetched rows.
     return arr;
-  }, [rawItems, platformFilter, search]);
+  }, [rawItems, platformFilter]);
 
   const isShowMode = showMode === "show" && (!mediaType || mediaType === "episode");
   const showGroups = useMemo(() => {
@@ -389,6 +395,9 @@ export default function DeletionSuggestions() {
             onClick={() => mediaApi.exportCsv({
               min_score: minScore,
               ...(mediaType ? { media_type: mediaType } : {}),
+              // Export what's on screen, search included (LIB-07) — an export
+              // that ignored the active search would be a different list.
+              ...(debouncedSearch.trim() ? { search: debouncedSearch.trim() } : {}),
               limit: 10000,
             })}
             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
@@ -644,6 +653,14 @@ export default function DeletionSuggestions() {
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center gap-2 justify-end">
                             <button
+                              onClick={() => setBreakdownItem(item)}
+                              aria-label={`Score breakdown for ${item.title}`}
+                              title="Why this score? Per-factor breakdown — deterministic, no LLM required"
+                              className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                            >
+                              <Calculator size={15} />
+                            </button>
+                            <button
                               onClick={() => explain(item)}
                               disabled={explainBusy !== null}
                               title={item.llm_rationale
@@ -721,6 +738,10 @@ export default function DeletionSuggestions() {
 
       {arrLinkItem && (
         <ArrLinkModal item={arrLinkItem} onClose={() => setArrLinkItem(null)} />
+      )}
+
+      {breakdownItem && (
+        <ScoreBreakdownModal item={breakdownItem} onClose={() => setBreakdownItem(null)} />
       )}
     </div>
   );

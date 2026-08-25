@@ -5,7 +5,8 @@ import { Skeleton } from "../../../components/Skeleton";
 import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ScoringProfiles,
          type ImportMatchingSettings, type CleanupSettings, type SyncSettings, type NotificationSettings,
          type OllamaSettings, type LlmPolicies, type LlmAppOverride, type LlmLibraryOverride,
-         type LlmScheduleSettings, type BackupSettings, type BackupFile, type SettingsExport } from "../../../lib/api";
+         type LlmScheduleSettings, type BackupSettings, type BackupFile, type SettingsExport,
+         type ScoringPreview, type ScoringPreviewMover } from "../../../lib/api";
 
 export function WeightRow({ label, field, value, onChange, description }: {
   label: string;
@@ -485,6 +486,141 @@ export function ScoringProfilesSection() {
   );
 }
 
+// LIB-09 — what a weight change would actually do, before it is saved.
+// Changing weights silently changes which items are suggested for deletion and,
+// with auto-delete on, which ones go. Weight changes are already
+// confirmation-gated, but there was nothing to confirm against: no way to see
+// that a tweak moves a thousand items across the threshold until after saving
+// had rescored the whole library. Read-only — nothing is written.
+function ScoringPreviewPanel({ weights }: { weights: ScoringWeights }) {
+  const [preview, setPreview] = useState<ScoringPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try {
+      setPreview(await settingsApi.previewScoring(weights));
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const delta = preview ? preview.proposed.above_threshold - preview.current.above_threshold : 0;
+
+  return (
+    <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6 mb-6">
+      <div className="flex items-center justify-between pt-5 pb-3 gap-3 flex-wrap">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Preview Impact</h2>
+          <p className="text-slate-500 text-xs mt-1">
+            See what these weights would do to the deletion-suggestion list before saving.
+            Nothing is written — no scores change until you hit Save &amp; Rescore.
+          </p>
+        </div>
+        <button
+          onClick={run}
+          disabled={busy}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors disabled:opacity-50 flex-shrink-0"
+        >
+          <SlidersHorizontal size={13} />
+          {busy ? "Simulating…" : "Preview impact"}
+        </button>
+      </div>
+
+      {err && <p className="text-xs text-red-400 pb-4">{err}</p>}
+      {busy && !preview && (
+        <p className="text-xs text-slate-500 pb-5">
+          Rescoring every item in memory — a large library takes a few seconds.
+        </p>
+      )}
+
+      {preview && (
+        <div className="pb-5 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="rounded-lg bg-surface border border-purple-900/30 p-3">
+              <p className="text-[11px] uppercase tracking-wider text-slate-500">Now</p>
+              <p className="text-xl font-bold text-white tabular-nums">
+                {preview.current.above_threshold.toLocaleString()}
+              </p>
+              <p className="text-[11px] text-slate-500">{fmtBytes(preview.current.total_size_bytes)}</p>
+            </div>
+            <div className="rounded-lg bg-surface border border-purple-900/30 p-3">
+              <p className="text-[11px] uppercase tracking-wider text-slate-500">With these weights</p>
+              <p className="text-xl font-bold text-white tabular-nums">
+                {preview.proposed.above_threshold.toLocaleString()}
+              </p>
+              <p className="text-[11px] text-slate-500">{fmtBytes(preview.proposed.total_size_bytes)}</p>
+            </div>
+            <div className="rounded-lg bg-surface border border-purple-900/30 p-3">
+              <p className="text-[11px] uppercase tracking-wider text-slate-500">Change</p>
+              <p className={`text-xl font-bold tabular-nums ${
+                delta > 0 ? "text-amber-300" : delta < 0 ? "text-green-300" : "text-slate-300"}`}>
+                {delta > 0 ? "+" : ""}{delta.toLocaleString()}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                suggested for deletion
+              </p>
+            </div>
+          </div>
+
+          {delta > 0 && (
+            <p className="flex items-start gap-2 text-xs text-amber-300/90">
+              <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />
+              <span>
+                {preview.newly_above_count.toLocaleString()} item(s) would newly become deletion
+                candidates. With auto-delete enabled these become eligible without further prompting.
+              </span>
+            </p>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <MoverList
+              title={`Newly suggested (${preview.newly_above_count.toLocaleString()})`}
+              rows={preview.newly_above}
+              tone="text-amber-300"
+            />
+            <MoverList
+              title={`No longer suggested (${preview.newly_below_count.toLocaleString()})`}
+              rows={preview.newly_below}
+              tone="text-green-300"
+            />
+          </div>
+          <p className="text-[11px] text-slate-600">
+            Compared {preview.evaluated.toLocaleString()} items. Lists show the biggest movers only.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MoverList({ title, rows, tone }: {
+  title: string; rows: ScoringPreviewMover[]; tone: string;
+}) {
+  return (
+    <div>
+      <p className={`text-xs font-medium mb-1.5 ${tone}`}>{title}</p>
+      {rows.length === 0 ? (
+        <p className="text-xs text-slate-600">None.</p>
+      ) : (
+        <ul className="space-y-1">
+          {rows.map(r => (
+            <li key={r.id} className="flex items-baseline justify-between gap-3 text-xs">
+              <span className="text-slate-300 truncate">{r.title}</span>
+              <span className="text-slate-500 tabular-nums flex-shrink-0">
+                {r.score_before.toFixed(1)} → <span className="text-slate-300">{r.score_after.toFixed(1)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function ScoringWeightsSection() {
   const { data, isLoading } = useQuery({ queryKey: ["scoring"], queryFn: settingsApi.getScoring });
   const [weights, setWeights] = useState<ScoringWeights | null>(null);
@@ -522,6 +658,8 @@ export function ScoringWeightsSection() {
           <WeightRow key={f.field} {...f} value={weights[f.field] as number} onChange={handleChange} />
         ))}
       </div>
+
+      <ScoringPreviewPanel weights={weights} />
 
       <div className="bg-surface-raised rounded-xl border border-purple-900/30 px-6">
         <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider pt-5 pb-3">Reference Values</h2>
