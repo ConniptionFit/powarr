@@ -8,7 +8,7 @@ from app.database import Base
 class SmartPlaylist(Base):
     __tablename__ = "smart_playlists"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     genre_tag = Column(String, nullable=False, unique=True, index=True)
     title = Column(String, nullable=False)
     plex_playlist_id = Column(String, nullable=True)  # set only after Powarr creates it
@@ -37,7 +37,7 @@ class SmartPlaylist(Base):
 class SmartPlaylistCandidate(Base):
     __tablename__ = "smart_playlist_candidates"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     playlist_id = Column(Integer, ForeignKey("smart_playlists.id"), nullable=False, index=True)
     artist_name = Column(String, nullable=False)
     musicbrainz_id = Column(String, nullable=True)
@@ -51,7 +51,7 @@ class SmartPlaylistRun(Base):
     """Track playlist generation runs for history and diagnostics."""
     __tablename__ = "smart_playlist_runs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     playlist_id = Column(Integer, ForeignKey("smart_playlists.id"), nullable=True, index=True)
     started_at = Column(DateTime, default=datetime.utcnow, index=True)
     completed_at = Column(DateTime, nullable=True)
@@ -67,7 +67,7 @@ class SmartPlaylistTrack(Base):
     """Track actual track additions to playlists for dedup and lifecycle management."""
     __tablename__ = "smart_playlist_tracks"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     playlist_id = Column(Integer, ForeignKey("smart_playlists.id"), nullable=False, index=True)
     plex_key = Column(String, nullable=False, index=True)  # plex_rating_key
     artist_name = Column(String, nullable=False, index=True)

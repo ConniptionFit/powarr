@@ -9,7 +9,7 @@ from app.database import Base
 class FailedImport(Base):
     __tablename__ = "failed_imports"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     source_app = Column(String, nullable=False)  # sonarr | radarr | lidarr
     queue_item_id = Column(String, nullable=True)  # queue record id in the source app
     download_id = Column(String, index=True, nullable=True)  # download client hash — stable dedupe key

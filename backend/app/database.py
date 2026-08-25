@@ -112,6 +112,7 @@ def _migrate():
                     conn.commit()
 
     _ensure_indexes()
+    _drop_redundant_id_indexes()
 
 
 # PERF (v0.89.0) — media_items is by far the largest table (~160k rows in the
@@ -173,3 +174,47 @@ def _ensure_indexes() -> None:
                 except Exception as exc:  # pragma: no cover - defensive
                     conn.rollback()
                     logger.warning("could not create index %s on %s: %s", name, table, exc)
+
+
+def _drop_redundant_id_indexes() -> None:
+    """PERF-01 (v0.89.0, user-approved) — drop the duplicate primary-key indexes.
+
+    Every model used to declare `id = Column(Integer, primary_key=True,
+    index=True)`. A primary key is already indexed, so `index=True` on it built
+    a *second* index over the same column: 15 tables' worth of pure duplication
+    (7.5MB on media_items alone) plus an extra index to maintain on every insert
+    and update. The `index=True` is gone from the models, so `create_all` no
+    longer creates them; this removes the ones existing databases already have.
+
+    This is the one destructive migration in the file, and it is deliberately
+    self-validating rather than a hardcoded name list — it drops an index only
+    when *all* of these hold:
+
+      * the table's primary key is exactly (id), so the pkey already covers it;
+      * the index covers exactly (id) and nothing else;
+      * the index is non-unique, so it enforces no constraint;
+      * it is named `ix_<table>_id`, SQLAlchemy's own generated name.
+
+    Anything a user added by hand fails at least one of those and is left
+    alone. Failures are logged, never fatal: a leftover duplicate index costs a
+    little space, an aborting startup costs the whole app.
+    """
+    inspector = inspect(engine)
+    with engine.connect() as conn:
+        for table in inspector.get_table_names():
+            pk = inspector.get_pk_constraint(table) or {}
+            if list(pk.get("constrained_columns") or []) != ["id"]:
+                continue
+            for ix in inspector.get_indexes(table):
+                name = ix.get("name") or ""
+                if (name != f"ix_{table}_id"
+                        or ix.get("unique")
+                        or list(ix.get("column_names") or []) != ["id"]):
+                    continue
+                try:
+                    conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
+                    conn.commit()
+                    logger.info("dropped redundant primary-key index %s on %s", name, table)
+                except Exception as exc:  # pragma: no cover - defensive
+                    conn.rollback()
+                    logger.warning("could not drop index %s on %s: %s", name, table, exc)

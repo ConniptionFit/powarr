@@ -5,7 +5,7 @@ from app.database import Base
 class Integration(Base):
     __tablename__ = "integrations"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String, unique=True, nullable=False)  # plex | tautulli | sonarr | radarr | lidarr
     url = Column(String, nullable=True)
     api_key = Column(String, nullable=True)  # deprecated for qbittorrent — use username/password

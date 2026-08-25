@@ -7,7 +7,7 @@ from app.database import Base
 class DeletionLog(Base):
     __tablename__ = "deletion_log"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     title = Column(String, nullable=False)
     parent_title = Column(String, nullable=True)
     media_type = Column(String, nullable=False)

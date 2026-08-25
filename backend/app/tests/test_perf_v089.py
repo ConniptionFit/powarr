@@ -7,7 +7,7 @@ single-pass library-health aggregation, and the duplicate finder's tie-break.
 import asyncio
 import unittest
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base, _INDEXES
@@ -86,6 +86,62 @@ class IndexMigrationTests(unittest.TestCase):
         for name, _cols in _INDEXES["media_items"]:
             self.assertIn(name, first, f"{name} was not created")
         self.assertEqual(first, second, "re-running the migration changed the schema")
+
+
+class RedundantIdIndexDropTests(unittest.TestCase):
+    """PERF-01 — the one destructive migration in database.py. It must remove
+    SQLAlchemy's duplicate primary-key indexes and nothing else."""
+
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+
+    def _names(self, table="media_items"):
+        return {ix["name"] for ix in inspect(self.engine).get_indexes(table)}
+
+    def _run(self):
+        import app.database as database
+        original = database.engine
+        database.engine = self.engine
+        try:
+            database._drop_redundant_id_indexes()
+        finally:
+            database.engine = original
+
+    def test_drops_duplicate_pk_index_and_is_idempotent(self):
+        with self.engine.connect() as c:
+            c.execute(text("CREATE INDEX ix_media_items_id ON media_items (id)"))
+            c.commit()
+        self.assertIn("ix_media_items_id", self._names())
+        self._run()
+        self.assertNotIn("ix_media_items_id", self._names())
+        self._run()  # second boot must not raise
+        self.assertNotIn("ix_media_items_id", self._names())
+
+    def test_leaves_unrelated_indexes_alone(self):
+        """A differently-named index on id, a unique one, and a multi-column
+        index all fail at least one of the safety conditions."""
+        with self.engine.connect() as c:
+            c.execute(text("CREATE INDEX my_own_id_idx ON media_items (id)"))
+            c.execute(text("CREATE UNIQUE INDEX ix_media_items_id_u ON media_items (id)"))
+            c.execute(text("CREATE INDEX ix_media_items_id_multi ON media_items (id, title)"))
+            c.commit()
+        before = self._names()
+        self._run()
+        self.assertEqual(before, self._names())
+
+    def test_perf_indexes_survive(self):
+        """The v0.89.0 indexes must not be collateral damage."""
+        import app.database as database
+        original = database.engine
+        database.engine = self.engine
+        try:
+            database._ensure_indexes()
+        finally:
+            database.engine = original
+        self._run()
+        for name, _cols in _INDEXES["media_items"]:
+            self.assertIn(name, self._names(), f"{name} was dropped")
 
 
 class LibraryHealthEquivalenceTests(unittest.TestCase):

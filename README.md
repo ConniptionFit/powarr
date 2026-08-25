@@ -222,14 +222,20 @@ seed could strip the vector it already had. An artist can now gain a vector but 
 **Performance (v0.89.0):** pages that read the media library got substantially quicker on large
 installs. On a 160k-item library the Library Health panel went from **582ms to 125ms**, browsing
 tracks from **66ms to 13ms**, and the duplicate scan from 149ms to 69ms. Three causes: the
-`media_items` table had no indexes on the columns Powarr actually filters by (added automatically
-on first start after upgrade — no action needed, and nothing is ever dropped), Library Health was
+`media_items` table had no indexes on the columns Powarr actually filters by, Library Health was
 counting the same table a dozen separate times instead of once, and every call to an external
 service was opening a fresh connection instead of reusing one. Artist Discovery benefits most from
 that last one, since a single cycle makes hundreds of Qdrant calls. No behaviour or settings
 changed; one cosmetic exception is that when a duplicate group has no file-size signal to rank by
 (TV shows and artists, whose sizes live on their episodes/tracks), the suggested "keep" pick is now
 stable between refreshes instead of varying with database row order.
+
+Index changes apply automatically on first start after upgrade — no action needed. **v0.89.1** also
+removes 15 duplicate indexes: every table was indexing its primary key twice over (once
+automatically, once redundantly), wasting ~8.6MB and slowing every write. This is the one migration
+that deletes something, so it only touches an index it can prove is a duplicate — same single
+column as the primary key, enforcing no constraint, and carrying the framework's own generated
+name. Anything you added by hand is left alone, and no data is affected.
 
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as

@@ -14,7 +14,7 @@ class ArtistThumbnail(Base):
     nothing found) so the refresh doesn't re-search every artist every run."""
     __tablename__ = "artist_thumbnails"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name_key = Column(String, unique=True, index=True, nullable=False)  # _norm_artist() form
     artist_name = Column(String, nullable=False)
     image_url = Column(String, nullable=True)

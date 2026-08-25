@@ -13,7 +13,7 @@ class DiscoveredArtist(Base):
     blocks re-creating a pending row for it — a rejected candidate never resurfaces."""
     __tablename__ = "discovered_artists"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     musicbrainz_id = Column(String, nullable=True, index=True)
     artist_name = Column(String, nullable=False, index=True)
     genres = Column(Text, nullable=True)  # JSON list
@@ -42,7 +42,7 @@ class ArtistDiscoveryRun(Base):
     """History/diagnostics for a discovery-cycle or sync run."""
     __tablename__ = "artist_discovery_runs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     run_type = Column(String, nullable=False)  # ingest|centroid|graph|sync|full
     started_at = Column(DateTime, default=datetime.utcnow, index=True)
     finished_at = Column(DateTime, nullable=True)

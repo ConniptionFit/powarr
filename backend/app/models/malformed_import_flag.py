@@ -13,7 +13,7 @@ class MalformedImportFlag(Base):
     rewrites the library. See services/malformed_audit.py."""
     __tablename__ = "malformed_import_flags"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     source_app = Column(String, nullable=False)
     matched_id = Column(Integer, nullable=True)
     matched_title = Column(String, nullable=True)

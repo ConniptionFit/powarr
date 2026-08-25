@@ -5,7 +5,7 @@ from app.database import Base
 class MediaItem(Base):
     __tablename__ = "media_items"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     plex_rating_key = Column(String, unique=True, index=True, nullable=False)
     title = Column(String, nullable=False)
     year = Column(Integer, nullable=True)

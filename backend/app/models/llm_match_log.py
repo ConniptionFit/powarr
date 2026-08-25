@@ -12,7 +12,7 @@ from app.database import Base
 class LlmMatchLog(Base):
     __tablename__ = "llm_match_log"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     failed_import_id = Column(Integer, nullable=True, index=True)
     site = Column(String, nullable=True)  # scan | rescore

@@ -12,7 +12,7 @@ class ArtistAddLog(Base):
     remains the review-queue bookkeeping for the Discovery flow specifically."""
     __tablename__ = "artist_add_log"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     artist_name = Column(String, nullable=False)
     musicbrainz_id = Column(String, nullable=True)
     source = Column(String, nullable=False)  # discovery | related
