@@ -88,10 +88,15 @@ def library_health(db: Session = Depends(get_db)):
 def get_stats(db: Session = Depends(get_db)):
     weights = _get_setting(db, "scoring_weights", ScoringWeights)
 
-    total = db.query(MediaItem).count()
-    total_size = db.query(func.sum(MediaItem.file_size)).scalar() or 0
+    # PERF (v0.89.0): one pass for the library totals instead of a count()
+    # scan and a sum() scan over the same rows.
+    total, total_size = db.query(
+        func.count(MediaItem.id), func.coalesce(func.sum(MediaItem.file_size), 0)
+    ).one()
     cleanup = _get_setting(db, "cleanup", CleanupSettings)
-    candidates_q = db.query(MediaItem).filter(
+    candidates_q = db.query(
+        func.count(MediaItem.id), func.coalesce(func.sum(MediaItem.file_size), 0)
+    ).filter(
         MediaItem.score >= weights.min_score_threshold,
         MediaItem.ignored.is_(False),
         MediaItem.pending_delete_at.is_(None),
@@ -105,8 +110,9 @@ def get_stats(db: Session = Depends(get_db)):
     )
     if cleanup.excluded_libraries:
         candidates_q = candidates_q.filter(~MediaItem.library_section.in_(cleanup.excluded_libraries))
-    candidates = candidates_q.all()
-    savings = sum(c.file_size for c in candidates)
+    # Aggregate in SQL rather than hydrating every candidate row just to count
+    # them and add up one column.
+    candidate_count, savings = candidates_q.one()
 
     last_synced = None
     row = db.query(AppSetting).filter_by(key="last_synced").first()
@@ -119,7 +125,7 @@ def get_stats(db: Session = Depends(get_db)):
     return MediaStats(
         total_items=total,
         total_size_bytes=total_size,
-        candidates_above_threshold=len(candidates),
+        candidates_above_threshold=candidate_count,
         potential_savings_bytes=savings,
         last_synced=last_synced,
     )

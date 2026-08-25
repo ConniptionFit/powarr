@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.88.1", docs_url="/api/docs", openapi_url=None)
+app = FastAPI(title="Powarr", version="0.89.0", docs_url="/api/docs", openapi_url=None)
 
 # Paths that stay reachable without a session: the auth flow itself, the
 # health endpoint (Docker healthcheck probes from inside the container), and
@@ -80,6 +80,9 @@ async def shutdown():
     for task in (_poller_task, _maintenance_task):
         if task:
             task.cancel()
+    # Release the pooled HTTP client's keep-alive connections (v0.89.0).
+    from app.integrations.base import close_shared_client
+    await close_shared_client()
 
 
 def _seed_integrations():

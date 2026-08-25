@@ -1,6 +1,10 @@
+import logging
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 connect_args = {"check_same_thread": False} if settings.is_sqlite else {}
 
@@ -106,3 +110,66 @@ def _migrate():
                     else:
                         conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {col_type}"))
                     conn.commit()
+
+    _ensure_indexes()
+
+
+# PERF (v0.89.0) — media_items is by far the largest table (~160k rows in the
+# live install) and shipped with indexes on id and plex_rating_key only, so
+# every filtered read of it was a full scan. These cover the filter shapes the
+# code actually issues (see the per-index notes). Deliberately NOT a blanket
+# index-every-column: each index is write amplification on the Plex sync that
+# rewrites this table wholesale, so each one below has to earn its place.
+#
+# Purely additive, like the column migrations above — an index is never a data
+# change, and IF NOT EXISTS is supported by both PostgreSQL and SQLite.
+# Whole-table aggregates (library health) still seq-scan by design; that is the
+# correct plan for them and none of these is meant to serve it.
+_INDEXES: dict[str, list[tuple[str, str]]] = {
+    "media_items": [
+        # media_type gates nearly every read. Highly selective for the
+        # top-level types (movie/show/artist/album together are ~2% of rows),
+        # which is exactly what the duplicate finder and per-type views scan.
+        ("ix_media_items_media_type", "(media_type)"),
+        # Track -> parent artist lookups (artist detail, playlist generation).
+        ("ix_media_items_parent_title", "(parent_title)"),
+        # Deletion suggestions and the score-sorted list views: filter by
+        # media_type, order by score. This is the one index here with a real
+        # write cost — scorer's age/decay factors are day-granular, so nearly
+        # every row's score changes once a day, and an indexed score column
+        # makes those sync updates non-HOT (a HOT update is only possible when
+        # no indexed column changed). Kept anyway because the read side is
+        # user-facing and the win is large: sorting 116k tracks by score goes
+        # from a ~66ms seq-scan-and-sort to ~0.4ms, on every browse, against a
+        # few extra seconds on a nightly background sync.
+        ("ix_media_items_type_score", "(media_type, score)"),
+        # The scheduler polls the soft-delete purge on a timer and it matches
+        # almost nothing, so this stays cheap and answers from the index.
+        ("ix_media_items_pending_delete", "(pending_delete_at)"),
+    ],
+}
+
+
+def _ensure_indexes() -> None:
+    """Create the perf indexes if absent.
+
+    Failures are logged, never fatal: a missing index means a slow app, but a
+    startup that aborts on one means no app at all — and this runs on every
+    boot against a database the user may have altered by hand.
+    """
+    inspector = inspect(engine)
+    with engine.connect() as conn:
+        for table, specs in _INDEXES.items():
+            if not inspector.has_table(table):
+                continue
+            existing = {ix["name"] for ix in inspector.get_indexes(table)}
+            for name, cols in specs:
+                if name in existing:
+                    continue
+                try:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} {cols}"))
+                    conn.commit()
+                    logger.info("created index %s on %s", name, table)
+                except Exception as exc:  # pragma: no cover - defensive
+                    conn.rollback()
+                    logger.warning("could not create index %s on %s: %s", name, table, exc)

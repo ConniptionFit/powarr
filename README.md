@@ -219,6 +219,18 @@ the mode outright rather than reporting a graph-only cycle as fully healthy. **v
 regression found while verifying the v0.88.0 deploy: promoting an already-tracked artist to a taste
 seed could strip the vector it already had. An artist can now gain a vector but never lose one.
 
+**Performance (v0.89.0):** pages that read the media library got substantially quicker on large
+installs. On a 160k-item library the Library Health panel went from **582ms to 125ms**, browsing
+tracks from **66ms to 13ms**, and the duplicate scan from 149ms to 69ms. Three causes: the
+`media_items` table had no indexes on the columns Powarr actually filters by (added automatically
+on first start after upgrade — no action needed, and nothing is ever dropped), Library Health was
+counting the same table a dozen separate times instead of once, and every call to an external
+service was opening a fresh connection instead of reusing one. Artist Discovery benefits most from
+that last one, since a single cycle makes hundreds of Qdrant calls. No behaviour or settings
+changed; one cosmetic exception is that when a duplicate group has no file-size signal to rank by
+(TV shows and artists, whose sizes live on their episodes/tracks), the suggested "keep" pick is now
+stable between refreshes instead of varying with database row order.
+
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
 **drafts** until Approve (auto-create off by default); **auto-update** of approved playlists is

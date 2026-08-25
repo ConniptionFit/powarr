@@ -8,9 +8,7 @@ import hashlib
 import uuid
 from typing import Any
 
-import httpx
-
-from app.integrations.base import BaseIntegration
+from app.integrations.base import BaseIntegration, shared_async_client
 
 
 class QdrantIntegration(BaseIntegration):
@@ -30,11 +28,11 @@ class QdrantIntegration(BaseIntegration):
 
     async def test_connection(self) -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                r = await client.get(f"{self.url}/collections/{self.collection}",
-                                     headers=self._headers())
-                r.raise_for_status()
-                return {"ok": True, "message": "Connected", "version": None}
+            client = shared_async_client()
+            r = await client.get(f"{self.url}/collections/{self.collection}",
+                                 headers=self._headers(), timeout=10)
+            r.raise_for_status()
+            return {"ok": True, "message": "Connected", "version": None}
         except Exception as e:
             return {"ok": False, "message": str(e), "version": None}
 
@@ -52,13 +50,13 @@ class QdrantIntegration(BaseIntegration):
         if offset is not None:
             body["offset"] = offset
 
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            r = await client.post(
-                f"{self.url}/collections/{self.collection}/points/scroll",
-                headers=self._headers(), json=body)
-            r.raise_for_status()
-            data = r.json().get("result") or {}
-            return data.get("points") or [], data.get("next_page_offset")
+        client = shared_async_client()
+        r = await client.post(
+            f"{self.url}/collections/{self.collection}/points/scroll",
+            headers=self._headers(), json=body, timeout=30)
+        r.raise_for_status()
+        data = r.json().get("result") or {}
+        return data.get("points") or [], data.get("next_page_offset")
 
     async def scroll_monitored_artists(self, *, limit: int = 256,
                                        offset: Any = None,
@@ -86,24 +84,24 @@ class QdrantIntegration(BaseIntegration):
         """POST /collections/{collection}/points — fetch specific points by id."""
         if not ids:
             return []
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            r = await client.post(
-                f"{self.url}/collections/{self.collection}/points",
-                headers=self._headers(),
-                json={"ids": ids, "with_payload": True, "with_vector": with_vector})
-            r.raise_for_status()
-            return r.json().get("result") or []
+        client = shared_async_client()
+        r = await client.post(
+            f"{self.url}/collections/{self.collection}/points",
+            headers=self._headers(),
+            json={"ids": ids, "with_payload": True, "with_vector": with_vector}, timeout=30)
+        r.raise_for_status()
+        return r.json().get("result") or []
 
     async def upsert_points(self, points: list[dict]) -> bool:
         """PUT /collections/{collection}/points — points are {id, vector, payload} dicts."""
         if not points:
             return True
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            r = await client.put(
-                f"{self.url}/collections/{self.collection}/points",
-                headers=self._headers(), json={"points": points})
-            r.raise_for_status()
-            return True
+        client = shared_async_client()
+        r = await client.put(
+            f"{self.url}/collections/{self.collection}/points",
+            headers=self._headers(), json={"points": points}, timeout=60)
+        r.raise_for_status()
+        return True
 
     async def update_vectors(self, points: list[dict]) -> bool:
         """PUT /collections/{collection}/points/vectors — set vectors on points that
@@ -117,12 +115,12 @@ class QdrantIntegration(BaseIntegration):
         """
         if not points:
             return True
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            r = await client.put(
-                f"{self.url}/collections/{self.collection}/points/vectors",
-                headers=self._headers(), json={"points": points})
-            r.raise_for_status()
-            return True
+        client = shared_async_client()
+        r = await client.put(
+            f"{self.url}/collections/{self.collection}/points/vectors",
+            headers=self._headers(), json={"points": points}, timeout=60)
+        r.raise_for_status()
+        return True
 
     async def set_payload(self, ids: list[str], payload: dict) -> bool:
         """POST /collections/{collection}/points/payload — merge fields into existing
@@ -130,12 +128,12 @@ class QdrantIntegration(BaseIntegration):
         the 384-dim vector just to flip a flag or append a seed mbid)."""
         if not ids:
             return True
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            r = await client.post(
-                f"{self.url}/collections/{self.collection}/points/payload",
-                headers=self._headers(), json={"payload": payload, "points": ids})
-            r.raise_for_status()
-            return True
+        client = shared_async_client()
+        r = await client.post(
+            f"{self.url}/collections/{self.collection}/points/payload",
+            headers=self._headers(), json={"payload": payload, "points": ids}, timeout=30)
+        r.raise_for_status()
+        return True
 
     async def search(self, vector: list[float], *, limit: int = 10,
                      score_threshold: float | None = None,
@@ -154,12 +152,12 @@ class QdrantIntegration(BaseIntegration):
             filt["must_not"] = must_not
         if filt:
             body["filter"] = filt
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            r = await client.post(
-                f"{self.url}/collections/{self.collection}/points/search",
-                headers=self._headers(), json=body)
-            r.raise_for_status()
-            return r.json().get("result") or []
+        client = shared_async_client()
+        r = await client.post(
+            f"{self.url}/collections/{self.collection}/points/search",
+            headers=self._headers(), json=body, timeout=30)
+        r.raise_for_status()
+        return r.json().get("result") or []
 
     @staticmethod
     def point_id(mbid: str | None, name: str) -> str:
@@ -172,11 +170,11 @@ class QdrantIntegration(BaseIntegration):
     async def get_collection_info(self) -> dict[str, Any]:
         """Get collection metadata and statistics."""
         try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                r = await client.get(
-                    f"{self.url}/collections/{self.collection}",
-                    headers=self._headers())
-                r.raise_for_status()
-                return r.json().get("result") or {}
+            client = shared_async_client()
+            r = await client.get(
+                f"{self.url}/collections/{self.collection}",
+                headers=self._headers(), timeout=10)
+            r.raise_for_status()
+            return r.json().get("result") or {}
         except Exception as e:
             return {"error": str(e)}
