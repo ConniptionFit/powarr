@@ -345,11 +345,14 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
         plays = int(a.get("playcount") or 0)
         pid = qdrant.point_id(mbid, name)
         try:
-            existing = await qdrant.retrieve_points([pid])
+            # with_vector=True so an existing vector can be carried through the
+            # upsert below — see the _vector_field call there.
+            existing = await qdrant.retrieve_points([pid], with_vector=True)
         except Exception as e:
             logger.warning(f"Artist Discovery ingest: Qdrant retrieve failed for {name}: {e}")
             continue
         payload = (existing[0].get("payload") or {}) if existing else {}
+        existing_vector = (existing[0].get("vector") if existing else None) or None
 
         if not payload.get("is_discovered") and ingested < cap:
             try:
@@ -361,7 +364,13 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             # embeddings come back later, backfill_missing_vectors() fills it in.
             vector = await _embed_artist(cfg, name, tags)
             if not vector:
-                embedless += 1
+                # This branch re-upserts points that may ALREADY exist (a graph
+                # candidate being promoted to a taste seed), and upsert replaces
+                # the whole point — so falling through with no vector would strip
+                # a stored one. Never downgrade an existing point to vector-less.
+                vector = existing_vector
+                if not vector:
+                    embedless += 1
             payload = {
                 "musicbrainz_id": mbid or "",
                 "artist_name": name,

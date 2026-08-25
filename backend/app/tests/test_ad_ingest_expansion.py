@@ -33,7 +33,9 @@ class _FakeQdrant:
     def __init__(self, points=None):
         self._points = {p["id"]: p for p in (points or [])}
 
-    async def retrieve_points(self, ids):
+    async def retrieve_points(self, ids, with_vector=False):
+        # with_vector mirrors the real QdrantIntegration signature — ingest passes
+        # it (AD-24) so an existing vector can be carried through its upsert.
         return [self._points[i] for i in ids if i in self._points]
 
     async def upsert_points(self, points):

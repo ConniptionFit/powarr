@@ -60,6 +60,10 @@ class _FakeQdrant:
         return list(self._points.values()), None
 
 
+async def _aslist(items):
+    return items
+
+
 class _FakeLastfm:
     async def get_top_tags(self, artist, mbid=None):
         return ["metalcore"]
@@ -123,6 +127,53 @@ class RelatedPointWithoutEmbeddingsTests(unittest.IsolatedAsyncioTestCase):
             await _upsert_related_point(qdrant, _FakeLastfm(), cfg, "seed", "A", "m")
         pid = QdrantIntegration.point_id("m", "A")
         self.assertEqual(qdrant._points[pid]["vector"], [0.1, 0.2])
+
+
+class IngestPreservesExistingVectorTests(unittest.IsolatedAsyncioTestCase):
+    """Regression (caught on the live instance after the first v0.88.0 deploy):
+    ingest re-upserts points that may already exist — a graph candidate being
+    promoted to a taste seed — and a Qdrant upsert replaces the WHOLE point. With
+    embeddings down, writing `"vector": {}` there stripped the vector off four
+    pre-existing points. An existing vector must always be carried through."""
+
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.db = sessionmaker(bind=self.engine)()
+
+    def tearDown(self):
+        self.db.close()
+
+    async def _run_ingest(self, qdrant, cfg):
+        from app.services.artist_discovery import ingest_scrobbles
+        lastfm = _FakeLastfm()
+        lastfm.get_top_artists = lambda limit=200: _aslist(
+            [{"name": "Existing", "mbid": "m-existing", "playcount": "40"}])
+        lastfm.get_similar_artists = lambda artist, mbid=None, limit=15: _aslist([])
+        lastfm.get_recent_tracks = lambda from_ts=None, limit=200: _aslist([])
+        with patch("app.services.artist_discovery._qdrant", return_value=qdrant), \
+             patch("app.services.artist_discovery._lastfm_client", return_value=lastfm), \
+             patch("app.services.artist_discovery._lidarr_artist_index", return_value=({}, {})), \
+             patch("app.services.artist_discovery._plex_artist_names", return_value=set()):
+            return await ingest_scrobbles(self.db, cfg)
+
+    async def test_existing_vector_survives_ingest_with_embeddings_off(self):
+        pid = QdrantIntegration.point_id("m-existing", "Existing")
+        qdrant = _FakeQdrant([{"id": pid, "vector": [0.4, 0.6], "payload": {
+            "musicbrainz_id": "m-existing", "artist_name": "Existing",
+            "is_discovered": False, "associated_seed_mbids": ["s1"],
+            "total_plays_global": 5}}])
+        await self._run_ingest(qdrant, ArtistDiscoverySettings())  # embeddings off
+        self.assertEqual(qdrant._points[pid]["vector"], [0.4, 0.6],
+                         "an existing vector must never be stripped by a vector-less upsert")
+        self.assertEqual(qdrant._points[pid]["payload"]["associated_seed_mbids"], ["s1"])
+
+    async def test_brand_new_artist_still_written_vectorless(self):
+        qdrant = _FakeQdrant()
+        await self._run_ingest(qdrant, ArtistDiscoverySettings())
+        pid = QdrantIntegration.point_id("m-existing", "Existing")
+        self.assertIn(pid, qdrant._points)
+        self.assertEqual(qdrant._points[pid]["vector"], {})
 
 
 class CentroidWithVectorlessPointsTests(unittest.IsolatedAsyncioTestCase):
