@@ -133,7 +133,7 @@ Automation, LLM Assist, Notifications, Security, Music — replaces the separate
 Integrations page). Logs sits below a divider as a utility item. Match Review defaults to a
 card-per-item layout with a table-view toggle for the old dense table.
 
-### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0; UX cleanup + tray + Related Artists v0.48.0; Related Artists filters v0.49.0; candidate-pool fix + auto-add parity v0.87.0; optional embeddings v0.88.0)
+### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0; UX cleanup + tray + Related Artists v0.48.0; Related Artists filters v0.49.0; candidate-pool fix + auto-add parity v0.87.0; optional embeddings v0.88.0–v0.88.1)
 Native port of an external n8n taste-mapping pipeline: **Last.fm** scrobble history is optionally
 embedded via a standalone **Ollama** connection (`all-minilm`, independent of the separate LLM
 Assist Ollama connection — see "Ollama is optional" below), mapped into the shared Qdrant
@@ -215,7 +215,9 @@ host configured keep it on). With it off, discovery runs normally and artists ar
 vectors — only the **taste-centroid similarity** lane pauses, since cosine search is the one thing
 that genuinely requires them. Turn it back on and every artist tracked during the gap gets its
 vector filled in automatically over the next few cycles, connections intact. Run history states
-the mode outright rather than reporting a graph-only cycle as fully healthy.
+the mode outright rather than reporting a graph-only cycle as fully healthy. **v0.88.1** fixes a
+regression found while verifying the v0.88.0 deploy: promoting an already-tracked artist to a taste
+seed could strip the vector it already had. An artist can now gain a vector but never lose one.
 
 
 **Smart Playlists (v0.42.0; track selection refined v0.47.0):** new Plex playlists stay as
