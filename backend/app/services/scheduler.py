@@ -356,6 +356,8 @@ async def maintenance_loop():
                 llm_match_log.maintain(db)
             finally:
                 db.close()
+                from app.services.plex_sync import trim_memory
+                trim_memory()
         except asyncio.CancelledError:
             logger.info("Maintenance scheduler stopped")
             raise

@@ -148,6 +148,14 @@ _INDEXES: dict[str, list[tuple[str, str]]] = {
         # almost nothing, so this stays cheap and answers from the index.
         ("ix_media_items_pending_delete", "(pending_delete_at)"),
     ],
+    "failed_imports": [
+        # PERF-03 (v0.93.0) — Match Review triage queries, status counts, and poller
+        # backlog checks filter by status and order by created_at. Highly selective
+        # since ~82% of rows are closed_external while triage only inspects open statuses.
+        ("ix_failed_imports_status_created", "(status, created_at)"),
+        # Poller queue reconciliation checks still-in-queue rows scoped by source_app.
+        ("ix_failed_imports_source_status", "(source_app, status)"),
+    ],
 }
 
 

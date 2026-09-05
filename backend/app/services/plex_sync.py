@@ -29,6 +29,15 @@ def _set_setting(db, key: str, value: str) -> None:
     row.value = value
 
 
+def trim_memory() -> None:
+    """PERF-04 (v0.93.0) — Return freed heap pages back to the OS via glibc malloc_trim."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
 def _series_index_from_payload(items: list[dict], existing_by_key: dict) -> dict[str, dict]:
     """Build parent_title → {watched, last} from the incoming sync payload plus
     any already-stored rows (covers episodes not in this payload page)."""
@@ -119,6 +128,8 @@ async def run_plex_sync(db) -> dict:
 
         _set_setting(db, "last_synced", datetime.utcnow().isoformat())
         db.commit()
+        db.expunge_all()
+        trim_memory()
 
         cleanup = _get_setting(db, "cleanup", CleanupSettings)
         protected = 0
@@ -158,6 +169,8 @@ async def run_plex_sync(db) -> dict:
             logger.warning(f"arr-link failed (non-fatal): {e}")
             linked = {}
 
+        db.expunge_all()
+        trim_memory()
         tasks.finish_task(task_id, "done", f"Synced {upserted} item(s)")
         return {"synced": upserted, "protected": protected,
                 "watch_protected": watch_protected, "seeding_protected": seeding_protected,

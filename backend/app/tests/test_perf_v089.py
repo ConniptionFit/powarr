@@ -83,8 +83,10 @@ class IndexMigrationTests(unittest.TestCase):
         finally:
             database.engine = original
 
-        for name, _cols in _INDEXES["media_items"]:
-            self.assertIn(name, first, f"{name} was not created")
+        for table, specs in _INDEXES.items():
+            current = {ix["name"] for ix in inspect(engine).get_indexes(table)}
+            for name, _cols in specs:
+                self.assertIn(name, current, f"{name} on {table} was not created")
         self.assertEqual(first, second, "re-running the migration changed the schema")
 
 
