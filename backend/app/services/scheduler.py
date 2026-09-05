@@ -94,6 +94,8 @@ async def _scheduled_llm_run(db) -> None:
     if remaining == 0:
         return
     from app.services import llm_assist
+    if llm_assist.breaker_open():
+        return  # Circuit breaker is open — skip pass quietly until cooldown expires
     if llm_assist.slot_active():
         return  # an on-demand run (or a previous scheduled pass) is active — try next cycle
     if cfg.scan_imports:

@@ -77,11 +77,14 @@ def record_result(ok: bool, latency_ms: int, error: str = "",
     _stats["last_error_at"] = time.time()
     if _breaker_threshold and _stats["consecutive_failures"] >= _breaker_threshold \
             and not breaker_open(now):
-        _stats["breaker_open_until"] = now + _breaker_cooldown_s
+        extra_streak = _stats["consecutive_failures"] - _breaker_threshold
+        multiplier = min(2 ** min(extra_streak, 4), 12)
+        effective_cooldown = min(_breaker_cooldown_s * multiplier, 7200.0)
+        _stats["breaker_open_until"] = now + effective_cooldown
         _stats["breaker_trips"] += 1
         logger.warning(
             f"LLM circuit breaker opened after {_stats['consecutive_failures']} consecutive "
-            f"failures — pausing LLM calls for {_breaker_cooldown_s / 60:.0f} min")
+            f"failures — pausing LLM calls for {effective_cooldown / 60:.0f} min")
 
 
 def reset_breaker() -> None:
@@ -632,7 +635,7 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
     if not base or not model:
         return None
     if breaker_open():
-        logger.info("LLM assist skipped: circuit breaker is open")
+        logger.debug("LLM assist skipped: circuit breaker is open")
         return None
     max_tokens, timeout, temperature = resolve_inference(
         model_size, verbose, temperature=temperature,
@@ -715,7 +718,7 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
     if not base or not model:
         return
     if breaker_open():
-        logger.info("LLM stream skipped: circuit breaker is open")
+        logger.debug("LLM stream skipped: circuit breaker is open")
         return
     max_tokens, timeout, temperature = resolve_inference(
         model_size, verbose, temperature=temperature,

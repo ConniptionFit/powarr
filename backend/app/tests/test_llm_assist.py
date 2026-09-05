@@ -672,6 +672,19 @@ class TestCircuitBreaker(unittest.TestCase):
         self.assertTrue(llm_assist.breaker_open(1000.0 + 599))
         self.assertFalse(llm_assist.breaker_open(1000.0 + 601))
 
+    def test_exponential_backoff_on_repeated_breaker_trips(self):
+        # Initial threshold trip (3 failures) -> 1x cooldown (600s)
+        for _ in range(3):
+            llm_assist.record_result(False, 100, "boom", now=1000.0)
+        self.assertTrue(llm_assist.breaker_open(1000.0 + 599))
+        self.assertFalse(llm_assist.breaker_open(1000.0 + 601))
+
+        # Cooldown expires, next failure occurs at t=1601 (consecutive_failures = 4)
+        llm_assist.record_result(False, 100, "boom", now=1601.0)
+        # Extra streak = 1 -> 2x multiplier (1200s cooldown)
+        self.assertTrue(llm_assist.breaker_open(1601.0 + 1199))
+        self.assertFalse(llm_assist.breaker_open(1601.0 + 1201))
+
     def test_success_resets_streak_and_closes(self):
         for _ in range(3):
             llm_assist.record_result(False, 100, "boom", now=1000.0)
