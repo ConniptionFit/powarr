@@ -830,6 +830,7 @@ async def _upsert_related_point(qdrant, lastfm, cfg: ArtistDiscoverySettings,
 async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: str,
                                         seeds_list: list[str], source_label: str,
                                         auto_add_n: int, recent_n: int,
+                                        auto_add_all_time_n: int = 0,
                                         seed_artist_name: str | None = None,
                                         payload: dict | None = None,
                                         similarity_score: float | None = None,
@@ -857,7 +858,12 @@ async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: st
             if set(seeds_list) != stored:
                 row.associated_seed_mbids = json.dumps(seeds_list)
                 row.seed_artist_names = json.dumps(await _resolve_seed_names(qdrant, seeds_list))
-            if auto_add_n and recent_n >= auto_add_n:
+            all_time_n = len(seeds_list)
+            qualifies_for_auto_add = (
+                (auto_add_n > 0 and recent_n >= auto_add_n) or
+                (auto_add_all_time_n > 0 and all_time_n >= auto_add_all_time_n)
+            )
+            if qualifies_for_auto_add:
                 result = await add_to_lidarr(db, row.id)
                 if result.get("ok"):
                     promoted = 1
@@ -915,7 +921,12 @@ async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: st
         years_active=enrichment["years_active"],
     )
     db.add(cand)
-    if auto_add_n and recent_n >= auto_add_n:
+    all_time_n = len(seeds_list)
+    qualifies_for_auto_add = (
+        (auto_add_n > 0 and recent_n >= auto_add_n) or
+        (auto_add_all_time_n > 0 and all_time_n >= auto_add_all_time_n)
+    )
+    if qualifies_for_auto_add:
         db.flush()
         result = await add_to_lidarr(db, cand.id)
         if result.get("ok"):
@@ -931,17 +942,19 @@ async def _gate_and_create_candidate(db, qdrant, cfg: ArtistDiscoverySettings, r
     """Graph-sync / ingestion-expansion candidates (AD-07): suggest-worthiness
     IS the connection-count floor (suggest_connection_threshold) — a candidate
     below it isn't created yet; it can cross the bar on a later run as more
-    seeds connect to it. At/above auto_add_connection_threshold, skips the
-    queue and adds straight to Lidarr."""
+    seeds connect to it. At/above auto_add thresholds (recent or all-time),
+    skips the queue and adds straight to Lidarr."""
     suggest_n = max(cfg.suggest_connection_threshold, 1)
     auto_add_n = _effective_auto_add_threshold(cfg)
+    auto_add_all_time_n = cfg.auto_add_all_time_threshold or 0
     recent_n = _recent_connection_count(seeds_list, recent_keys)
     row = _find_candidate(db, mbid, name)
     if row is None and recent_n < suggest_n:
         return {"created": 0, "promoted": 0}
     return await _create_or_promote_candidate(
         db, qdrant, mbid=mbid, name=name, seeds_list=seeds_list, source_label=source_label,
-        auto_add_n=auto_add_n, recent_n=recent_n, seed_artist_name=seed_artist_name,
+        auto_add_n=auto_add_n, recent_n=recent_n, auto_add_all_time_n=auto_add_all_time_n,
+        seed_artist_name=seed_artist_name,
         payload=payload, row=row, require_mbid=cfg.require_musicbrainz_id,
         filter_youtube=cfg.filter_youtube_channels,
         blocked_channels=cfg.blocked_channels,
@@ -959,10 +972,12 @@ async def _gate_centroid_candidate(db, qdrant, cfg: ArtistDiscoverySettings, rec
     _upsert_related_point helper via ingest_scrobbles/run_graph_sync)."""
     seeds_list = list(payload.get("associated_seed_mbids") or [])
     auto_add_n = _effective_auto_add_threshold(cfg)
+    auto_add_all_time_n = cfg.auto_add_all_time_threshold or 0
     recent_n = _recent_connection_count(seeds_list, recent_keys)
     return await _create_or_promote_candidate(
         db, qdrant, mbid=mbid, name=name, seeds_list=seeds_list, source_label=source_label,
-        auto_add_n=auto_add_n, recent_n=recent_n, payload=payload, similarity_score=similarity_score,
+        auto_add_n=auto_add_n, recent_n=recent_n, auto_add_all_time_n=auto_add_all_time_n,
+        payload=payload, similarity_score=similarity_score,
         require_mbid=cfg.require_musicbrainz_id,
         filter_youtube=cfg.filter_youtube_channels,
         blocked_channels=cfg.blocked_channels,
@@ -2073,22 +2088,51 @@ async def get_candidate_insights(db, candidate_id: int) -> dict[str, Any] | None
     else:
         recent_conn_count = all_time_conn_count
 
-    auto_add_threshold = _effective_auto_add_threshold(cfg)
+    recent_thresh = _effective_auto_add_threshold(cfg)
+    all_time_thresh = cfg.auto_add_all_time_threshold or 0
     suggest_threshold = max(cfg.suggest_connection_threshold, 1)
     lookback_days = cfg.scrobble_lookback_days
 
-    if auto_add_threshold == 0:
-        auto_add_eligible = False
-        auto_add_reason = "Auto-add is disabled in Settings (manual review required)."
-    elif recent_conn_count >= auto_add_threshold:
-        auto_add_eligible = True
-        auto_add_reason = f"Met {recent_conn_count}/{auto_add_threshold} recent connections in the last {lookback_days}d required for auto-add."
-    else:
-        auto_add_eligible = False
-        diff = auto_add_threshold - recent_conn_count
+    recent_eligible = bool(recent_thresh > 0 and recent_conn_count >= recent_thresh)
+    all_time_eligible = bool(all_time_thresh > 0 and all_time_conn_count >= all_time_thresh)
+    auto_add_eligible = recent_eligible or all_time_eligible
+
+    # Compute progress ratios
+    recent_ratio = (recent_conn_count / recent_thresh) if recent_thresh > 0 else 0.0
+    all_time_ratio = (all_time_conn_count / all_time_thresh) if all_time_thresh > 0 else 0.0
+    auto_add_progress = max(recent_ratio, all_time_ratio) if (recent_thresh > 0 or all_time_thresh > 0) else 0.0
+
+    if recent_eligible and all_time_eligible:
         auto_add_reason = (
-            f"Requires {auto_add_threshold} recent connections in the last {lookback_days}d to auto-add. "
-            f"Currently has {recent_conn_count} recent ({all_time_conn_count} all-time) — needs {diff} more in the lookback window."
+            f"Met both criteria for auto-add: {recent_conn_count}/{recent_thresh} recent connections ({lookback_days}d) "
+            f"and {all_time_conn_count}/{all_time_thresh} all-time connections."
+        )
+    elif recent_eligible:
+        auto_add_reason = f"Met {recent_conn_count}/{recent_thresh} recent connections in the last {lookback_days}d required for auto-add."
+    elif all_time_eligible:
+        auto_add_reason = f"Met {all_time_conn_count}/{all_time_thresh} all-time connections required for auto-add."
+    elif recent_thresh == 0 and all_time_thresh == 0:
+        auto_add_reason = "Auto-add is disabled in Settings (manual review required)."
+    elif recent_thresh > 0 and all_time_thresh > 0:
+        recent_pct = round(recent_ratio * 100)
+        all_time_pct = round(all_time_ratio * 100)
+        auto_add_reason = (
+            f"Requires {recent_thresh} recent connections in {lookback_days}d (currently {recent_conn_count}, {recent_pct}%) "
+            f"or {all_time_thresh} all-time connections (currently {all_time_conn_count}, {all_time_pct}%) to auto-add."
+        )
+    elif recent_thresh > 0:
+        diff = recent_thresh - recent_conn_count
+        recent_pct = round(recent_ratio * 100)
+        auto_add_reason = (
+            f"Requires {recent_thresh} recent connections in the last {lookback_days}d to auto-add. "
+            f"Currently has {recent_conn_count} recent ({all_time_conn_count} all-time) — {recent_pct}% progress (needs {diff} more in the lookback window)."
+        )
+    else:  # only all_time_thresh > 0
+        diff = all_time_thresh - all_time_conn_count
+        all_time_pct = round(all_time_ratio * 100)
+        auto_add_reason = (
+            f"Requires {all_time_thresh} all-time connections to auto-add. "
+            f"Currently has {all_time_conn_count} all-time ({recent_conn_count} recent) — {all_time_pct}% progress (needs {diff} more all-time connections)."
         )
 
     gate = {
@@ -2102,8 +2146,11 @@ async def get_candidate_insights(db, candidate_id: int) -> dict[str, Any] | None
         "recent_connections": recent_conn_count,
         "lookback_days": lookback_days,
         "suggest_threshold": suggest_threshold,
-        "auto_add_threshold": auto_add_threshold,
+        "auto_add_threshold": recent_thresh,
+        "auto_add_recent_threshold": recent_thresh,
+        "auto_add_all_time_threshold": all_time_thresh,
         "auto_add_eligible": auto_add_eligible,
+        "auto_add_progress": round(auto_add_progress, 4),
         "auto_add_reason": auto_add_reason,
     }
 

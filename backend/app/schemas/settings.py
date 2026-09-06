@@ -373,7 +373,10 @@ class ArtistDiscoverySettings(BaseModel):
     # (Qdrant associated_seed_mbids filtered by scrobble_lookback_days). Example
     # band: suggest=3, auto_add=5 — numbers are configurable; auto_add=0 disables.
     suggest_connection_threshold: int = 3
-    auto_add_connection_threshold: int = 0  # 0 = auto-add disabled (safe default)
+    auto_add_connection_threshold: int = 0  # 0 = recent auto-add disabled (safe default)
+    # AD-32 — optional all-time connection threshold for auto-adding artists:
+    # 0 = disabled. At or above this all-time connection count, candidate skips queue and adds to Lidarr.
+    auto_add_all_time_threshold: int = 0
     related_artists_refresh_days: int = 30  # re-scan a seed's similar artists after this many days
     similarity_threshold: float = 0.75  # cosine score floor for centroid-search candidates
     scrobble_lookback_days: int = 30  # AD-07 — window for "recently listened" seed filter

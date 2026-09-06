@@ -32,7 +32,7 @@ class CandidateOut(BaseModel):
     associated_seed_mbids: list[str] = []
     seed_artist_name: Optional[str] = None
     seed_artist_names: list[str] = []
-    status: str
+    status: str = "pending"
     lidarr_artist_id: Optional[int] = None
     created_at: Optional[datetime] = None
     image_url: Optional[str] = None
@@ -41,6 +41,7 @@ class CandidateOut(BaseModel):
     connection_count: int = 0
     all_time_connections: int = 0
     recent_connections: int = 0
+    auto_add_progress: float = 0.0
     is_low_metadata: bool = False
 
 
@@ -65,7 +66,10 @@ class GateInsight(BaseModel):
     lookback_days: int = 30
     suggest_threshold: int = 0
     auto_add_threshold: int = 0
+    auto_add_recent_threshold: int = 0
+    auto_add_all_time_threshold: int = 0
     auto_add_eligible: bool = False
+    auto_add_progress: float = 0.0
     auto_add_reason: str
 
 
@@ -99,17 +103,69 @@ class CandidateInsightsOut(BaseModel):
 
 
 def _match_rating_key(row: DiscoveredArtist) -> tuple[bool, float, int]:
-    """Best-match-first ranking. Centroid rows carry a real 0-1 similarity score
-    (the % shown in the UI) and always outrank graph rows, which have no
-    comparable score — sorted among themselves by connection count instead of
-    inventing a cross-scale conversion. `sort(reverse=True)` on this tuple wants
-    True > False and higher numbers first, which lines up with "best match" for
-    every field, so a single sort call handles both groups."""
+    """Legacy helper for ranking raw rows by similarity score or raw connection count."""
     connections = len(json.loads(row.associated_seed_mbids)) if row.associated_seed_mbids else 0
     return (row.similarity_score is not None, row.similarity_score or 0.0, connections)
 
 
-def _candidate_out(row: DiscoveredArtist, recent_keys: set[str] | None = None, has_lastfm: bool = False) -> CandidateOut:
+def _candidate_best_match_key(cand: CandidateOut, cfg: ArtistDiscoverySettings) -> tuple:
+    """AD-32: Unified Best-Match ranking based on active criteria.
+    Ensures that the candidates closest to meeting the active auto-add criteria are at the top.
+
+    Rule:
+    1. If either auto-add threshold is active (recent > 0 or all-time > 0):
+       - Candidates are ranked by proximity to auto-adding:
+         max(recent_connections / recent_thresh, all_time_connections / all_time_thresh).
+         Example: 8/10 all-time (80%) > 2/3 recent (66.7%) > 6/10 all-time (60%) > 0% auto-add.
+       - Tie-breakers:
+         a. secondary ratio sum (r_ratio + a_ratio) to favor candidates with connections on both axes
+         b. cosine similarity_score (for centroid matches)
+         c. recent_connections count
+         d. all_time_connections count
+         e. created_at timestamp (newest first)
+    2. If neither auto-add threshold is active (auto-add disabled):
+       - Sorting is based on the active suggestion criteria:
+         Centroid similarity score (0.0 to 1.0) and suggest connection progress
+         (recent_connections / suggest_connection_threshold).
+       - Candidates with 0 recent connections are not artificially pushed to the top based on
+         inactive all-time counts.
+    """
+    recent_thresh = service._effective_auto_add_threshold(cfg)
+    all_time_thresh = cfg.auto_add_all_time_threshold or 0
+    created_ts = cand.created_at.timestamp() if cand.created_at else 0.0
+
+    if recent_thresh > 0 or all_time_thresh > 0:
+        r_ratio = (cand.recent_connections / recent_thresh) if recent_thresh > 0 else 0.0
+        a_ratio = (cand.all_time_connections / all_time_thresh) if all_time_thresh > 0 else 0.0
+        auto_add_progress = max(r_ratio, a_ratio)
+        sim = cand.similarity_score or 0.0
+        return (
+            auto_add_progress,
+            (r_ratio + a_ratio),
+            sim,
+            cand.recent_connections,
+            cand.all_time_connections,
+            created_ts,
+        )
+    else:
+        suggest_thresh = max(cfg.suggest_connection_threshold, 1)
+        suggest_progress = cand.recent_connections / suggest_thresh
+        sim = cand.similarity_score or 0.0
+        is_centroid = cand.similarity_score is not None
+        return (
+            is_centroid,
+            sim,
+            suggest_progress,
+            cand.recent_connections,
+            cand.all_time_connections,
+            created_ts,
+        )
+
+
+def _candidate_out(row: DiscoveredArtist,
+                   recent_keys: set[str] | None = None,
+                   has_lastfm: bool = False,
+                   cfg: ArtistDiscoverySettings | None = None) -> CandidateOut:
     # clean_tags/clean_era also run at candidate creation — re-applying here
     # covers rows stored before the placeholder filtering existed (AD-06).
     genres = service.clean_tags(json.loads(row.genres) if row.genres else [])
@@ -126,6 +182,15 @@ def _candidate_out(row: DiscoveredArtist, recent_keys: set[str] | None = None, h
     else:
         recent_conn = conn_count
 
+    auto_add_progress = 0.0
+    if cfg:
+        recent_thresh = service._effective_auto_add_threshold(cfg)
+        all_time_thresh = cfg.auto_add_all_time_threshold or 0
+        r_ratio = (recent_conn / recent_thresh) if recent_thresh > 0 else 0.0
+        a_ratio = (conn_count / all_time_thresh) if all_time_thresh > 0 else 0.0
+        if recent_thresh > 0 or all_time_thresh > 0:
+            auto_add_progress = max(r_ratio, a_ratio)
+
     return CandidateOut(
         id=row.id, musicbrainz_id=row.musicbrainz_id, artist_name=row.artist_name,
         genres=genres,
@@ -140,6 +205,7 @@ def _candidate_out(row: DiscoveredArtist, recent_keys: set[str] | None = None, h
         connection_count=conn_count,
         all_time_connections=conn_count,
         recent_connections=recent_conn,
+        auto_add_progress=round(auto_add_progress, 4),
         is_low_metadata=is_low,
     )
 
@@ -197,11 +263,13 @@ async def list_candidates(status: str = Query("pending"),
     if source:
         q = q.filter_by(source=source)
     # created_at desc first so _match_rating_key's stable sort breaks ties
-    # (equal score, or equal connection count) by newest-first, same as before.
     rows = q.order_by(DiscoveredArtist.created_at.desc()).limit(500).all()
-    rows.sort(key=_match_rating_key, reverse=True)
+    cfg = service.load_settings(db)
     recent_keys, has_lastfm = await service.get_cached_recent_keys_and_status(db)
-    return [_candidate_out(r, recent_keys=recent_keys, has_lastfm=has_lastfm) for r in rows]
+    candidates = [_candidate_out(r, recent_keys=recent_keys, has_lastfm=has_lastfm, cfg=cfg) for r in rows]
+    # Sort candidates by proximity to active auto-add criteria (AD-32)
+    candidates.sort(key=lambda c: _candidate_best_match_key(c, cfg), reverse=True)
+    return candidates
 
 
 @router.get("/candidates/{candidate_id}", response_model=CandidateOut)
@@ -209,8 +277,9 @@ async def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
     row = db.query(DiscoveredArtist).filter_by(id=candidate_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Candidate not found")
+    cfg = service.load_settings(db)
     recent_keys, has_lastfm = await service.get_cached_recent_keys_and_status(db)
-    return _candidate_out(row, recent_keys=recent_keys, has_lastfm=has_lastfm)
+    return _candidate_out(row, recent_keys=recent_keys, has_lastfm=has_lastfm, cfg=cfg)
 
 
 @router.get("/candidates/{candidate_id}/insights", response_model=CandidateInsightsOut)

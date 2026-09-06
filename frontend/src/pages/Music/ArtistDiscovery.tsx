@@ -49,6 +49,7 @@ interface Candidate {
   connection_count?: number;
   all_time_connections?: number;
   recent_connections?: number;
+  auto_add_progress?: number;
   is_low_metadata?: boolean;
 }
 
@@ -59,8 +60,45 @@ function connectionCount(c: Candidate): number {
   return c.connection_count ?? Math.max(c.associated_seed_mbids.length, c.seed_artist_names.length);
 }
 
+/**
+ * ARCHITECTURAL SPECIFICATION: CANDIDATE SORTING BY "BEST MATCH"
+ * 
+ * "Best Match" sorting MUST always order candidates by how close they are to satisfying
+ * the active auto-add criteria, NOT by arbitrary all-time connection counts or legacy match criteria.
+ * 
+ * Auto-add proximity formula:
+ *   recent_ratio = recent_connections / auto_add_recent_threshold (if auto_add_recent_threshold > 0 else 0)
+ *   all_time_ratio = all_time_connections / auto_add_all_time_threshold (if auto_add_all_time_threshold > 0 else 0)
+ *   auto_add_progress = max(recent_ratio, all_time_ratio)
+ * 
+ * The server computes `auto_add_progress` and sorts by it.
+ * If client-side re-sorting is triggered (e.g. after filtering or re-selecting options), client-side "match" sorting
+ * respects `auto_add_progress` descending, then similarity_score descending, then recent_connections descending,
+ * then all_time_connections descending.
+ * 
+ * ANY FUTURE CHANGES TO ARTIST DISCOVERY SORTING MUST MAINTAIN THIS AUTO-ADD PROXIMITY PRIORITY.
+ */
 function sortCandidates(list: Candidate[], sortBy: CandidateSort): Candidate[] {
-  if (sortBy === "match") return list; // server order, left as-is
+  if (sortBy === "match") {
+    const sorted = [...list];
+    sorted.sort((a, b) => {
+      // 1. auto_add_progress descending (proximity to active auto-add threshold)
+      const progDiff = (b.auto_add_progress ?? 0) - (a.auto_add_progress ?? 0);
+      if (Math.abs(progDiff) > 1e-6) return progDiff;
+
+      // 2. similarity_score descending (cosine similarity from centroid / vector search)
+      const simDiff = (b.similarity_score ?? 0) - (a.similarity_score ?? 0);
+      if (Math.abs(simDiff) > 1e-6) return simDiff;
+
+      // 3. recent connections descending
+      const recDiff = (b.recent_connections ?? 0) - (a.recent_connections ?? 0);
+      if (recDiff !== 0) return recDiff;
+
+      // 4. all-time connections descending
+      return (b.all_time_connections ?? connectionCount(b)) - (a.all_time_connections ?? connectionCount(a));
+    });
+    return sorted;
+  }
   const sorted = [...list];
   if (sortBy === "name") {
     sorted.sort((a, b) => a.artist_name.localeCompare(b.artist_name));
@@ -212,6 +250,19 @@ function getLaneBadge(c: Candidate) {
 }
 
 function getScorePill(c: Candidate) {
+  if (c.auto_add_progress !== undefined && c.auto_add_progress > 0) {
+    const pct = Math.round(c.auto_add_progress * 100);
+    const color =
+      pct >= 80
+        ? "bg-emerald-950/80 text-emerald-300 border border-emerald-700/50"
+        : "bg-purple-950/80 text-purple-300 border border-purple-700/50";
+    const allTime = c.all_time_connections ?? connectionCount(c);
+    const recent = c.recent_connections ?? 0;
+    return {
+      label: `${pct}% Match (${recent} Recent · ${allTime} All-Time)`,
+      className: color,
+    };
+  }
   if (c.similarity_score != null) {
     const pct = Math.round(c.similarity_score * 100);
     const color =

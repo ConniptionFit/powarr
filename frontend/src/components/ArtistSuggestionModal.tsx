@@ -44,6 +44,9 @@ export interface GateInsight {
   lookback_days?: number;
   suggest_threshold: number;
   auto_add_threshold: number;
+  auto_add_recent_threshold?: number;
+  auto_add_all_time_threshold?: number;
+  auto_add_progress?: number;
   auto_add_eligible: boolean;
   auto_add_reason: string;
 }
@@ -369,9 +372,15 @@ export default function ArtistSuggestionModal({
                       <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
                         Recent Match ({data.gate.lookback_days ?? 30}d Lookback)
                       </span>
-                      <span className={`text-[11px] px-1.5 py-0.5 rounded font-semibold ${(data.gate.recent_connections ?? 0) >= (data.gate.auto_add_threshold || 1) ? "bg-emerald-900/60 text-emerald-200" : "bg-slate-800 text-slate-400"}`}>
-                        {data.gate.recent_connections ?? 0} / {data.gate.auto_add_threshold} for auto-add
-                      </span>
+                      {((data.gate.auto_add_recent_threshold ?? data.gate.auto_add_threshold) > 0) ? (
+                        <span className={`text-[11px] px-1.5 py-0.5 rounded font-semibold ${(data.gate.recent_connections ?? 0) >= (data.gate.auto_add_recent_threshold ?? data.gate.auto_add_threshold) ? "bg-emerald-900/60 text-emerald-200" : "bg-slate-800 text-slate-400"}`}>
+                          {data.gate.recent_connections ?? 0} / {data.gate.auto_add_recent_threshold ?? data.gate.auto_add_threshold} for auto-add
+                        </span>
+                      ) : (
+                        <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold bg-slate-800 text-slate-400">
+                          Review Only
+                        </span>
+                      )}
                     </div>
                     <div className="mt-1 flex items-baseline gap-1.5">
                       <span className="text-lg font-bold text-white">{data.gate.recent_connections ?? 0}</span>
@@ -379,14 +388,20 @@ export default function ArtistSuggestionModal({
                     </div>
                   </div>
 
-                  <div className="p-2.5 rounded-lg border bg-surface/60 border-purple-900/30 text-purple-300">
+                  <div className={`p-2.5 rounded-lg border ${(data.gate.auto_add_all_time_threshold && (data.gate.all_time_connections ?? data.gate.connection_count) >= data.gate.auto_add_all_time_threshold) ? "bg-emerald-950/30 border-emerald-800/40 text-emerald-300" : "bg-surface/60 border-purple-900/30 text-purple-300"}`}>
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
                         All-Time Match (Taste Graph)
                       </span>
-                      <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold bg-purple-950/70 text-purple-300 border border-purple-800/40">
-                        Total Graph
-                      </span>
+                      {data.gate.auto_add_all_time_threshold && data.gate.auto_add_all_time_threshold > 0 ? (
+                        <span className={`text-[11px] px-1.5 py-0.5 rounded font-semibold ${(data.gate.all_time_connections ?? data.gate.connection_count) >= data.gate.auto_add_all_time_threshold ? "bg-emerald-900/60 text-emerald-200" : "bg-purple-950/70 text-purple-300 border border-purple-800/40"}`}>
+                          {data.gate.all_time_connections ?? data.gate.connection_count} / {data.gate.auto_add_all_time_threshold} for auto-add
+                        </span>
+                      ) : (
+                        <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold bg-purple-950/70 text-purple-300 border border-purple-800/40">
+                          Total Graph
+                        </span>
+                      )}
                     </div>
                     <div className="mt-1 flex items-baseline gap-1.5">
                       <span className="text-lg font-bold text-white">{data.gate.all_time_connections ?? data.gate.connection_count}</span>
@@ -400,6 +415,11 @@ export default function ArtistSuggestionModal({
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                       <Layers size={13} className="text-purple-400" /> Auto-Add Gate Status
+                      {data.gate.auto_add_progress != null && data.gate.auto_add_progress > 0 && (
+                        <span className="text-[11px] text-purple-300 font-normal">
+                          ({Math.round(data.gate.auto_add_progress * 100)}% progress)
+                        </span>
+                      )}
                     </span>
                     {data.gate.auto_add_eligible ? (
                       <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-700/50 flex items-center gap-1">
@@ -407,7 +427,7 @@ export default function ArtistSuggestionModal({
                       </span>
                     ) : (
                       <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-700/50">
-                        Review Queue (Needs Recent Seeds)
+                        Review Queue (Pending Threshold)
                       </span>
                     )}
                   </div>

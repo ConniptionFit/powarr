@@ -13,6 +13,7 @@ interface ADSettings {
   related_artists_limit: number;
   suggest_connection_threshold: number;
   auto_add_connection_threshold: number;
+  auto_add_all_time_threshold?: number;
   related_artists_refresh_days: number;
   similarity_threshold: number;
   scrobble_lookback_days: number;
@@ -397,13 +398,23 @@ function ArtistDiscoverySettingsCard() {
           </span>
         </label>
         <label className={labelCls}
-          title="Minimum recently-listened connection count to skip the review queue and add straight to Lidarr. 0 disables auto-add entirely — everything above the suggest threshold just queues instead.">
-          Auto-add threshold (graph)
+          title="Minimum recently-listened connection count to skip the review queue and add straight to Lidarr. 0 disables recent auto-add entirely.">
+          Auto-add threshold (recent)
           <input type="number" min="0" className={inputCls}
             value={form.auto_add_connection_threshold ?? 0}
-            onChange={e => set("auto_add_connection_threshold", parseInt(e.target.value))} />
+            onChange={e => set("auto_add_connection_threshold", parseInt(e.target.value) || 0)} />
           <span className="block text-[10px] text-slate-600 mt-0.5">
-            0 = off. At/above this count → Lidarr, skip suggested queue
+            0 = off. At/above this recent count → Lidarr, skip queue
+          </span>
+        </label>
+        <label className={labelCls}
+          title="Minimum all-time library connection count to skip the review queue and add straight to Lidarr, regardless of recent listening. 0 disables all-time auto-add.">
+          Auto-add threshold (all-time)
+          <input type="number" min="0" className={inputCls}
+            value={form.auto_add_all_time_threshold ?? 0}
+            onChange={e => set("auto_add_all_time_threshold", parseInt(e.target.value) || 0)} />
+          <span className="block text-[10px] text-slate-600 mt-0.5">
+            0 = off. At/above this all-time count → Lidarr, skip queue
           </span>
         </label>
         <label className={labelCls}
