@@ -41,9 +41,11 @@ class SharedAsyncClientTests(unittest.TestCase):
             c = shared_async_client()
             # Do not close: leaving it behind is what proves the next loop
             # builds its own rather than inheriting this dead one.
-            return id(c)
+            return c
 
-        self.assertNotEqual(asyncio.run(go()), asyncio.run(go()))
+        c1 = asyncio.run(go())
+        c2 = asyncio.run(go())
+        self.assertIsNot(c1, c2)
 
     def test_closed_client_is_replaced(self):
         async def go():
