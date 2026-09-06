@@ -136,9 +136,19 @@ def get_settings(db: Session = Depends(get_db)):
 
 
 @router.put("/settings", response_model=ArtistDiscoverySettings)
-def put_settings(body: ArtistDiscoverySettings, db: Session = Depends(get_db)):
+async def put_settings(body: ArtistDiscoverySettings,
+                       purge_no_mbid: bool = Query(False, description="Purge items without MusicBrainz ID immediately"),
+                       db: Session = Depends(get_db)):
     service.save_settings(db, body)
+    if purge_no_mbid:
+        await service.purge_artists_without_mbid(db)
     return body
+
+
+@router.post("/purge-no-mbid")
+async def purge_no_mbid(db: Session = Depends(get_db)):
+    """Purge candidates and unowned Qdrant points lacking a MusicBrainz ID (AD-28)."""
+    return await service.purge_artists_without_mbid(db)
 
 
 @router.get("/stats")

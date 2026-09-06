@@ -383,6 +383,10 @@ class ArtistDiscoverySettings(BaseModel):
     sync_interval_hours: int = 1  # differential sync: Lidarr/Last.fm stats -> Qdrant
     # AD-08 — purge image_url on accepted rows after this many days (0 = never).
     thumbnail_retention_days: int = 30
+    # AD-28 — Require MusicBrainz ID: do not log or suggest artists with no
+    # MusicBrainz ID (filters out invalid scrobbles such as YouTube videos, podcasts,
+    # and creators). Changing this setting allows purging existing items without MBID.
+    require_musicbrainz_id: bool = False
     # AD-17 — second discovery lane seeded from recently-listened artists
     # (reuses scrobble_lookback_days, the same "recent" window AD-07 already
     # established) alongside the existing all-time most-played centroid, so

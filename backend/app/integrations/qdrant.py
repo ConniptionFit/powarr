@@ -135,6 +135,17 @@ class QdrantIntegration(BaseIntegration):
         r.raise_for_status()
         return True
 
+    async def delete_points(self, ids: list[str]) -> bool:
+        """POST /collections/{collection}/points/delete — delete points by ID."""
+        if not ids:
+            return True
+        client = shared_async_client()
+        r = await client.post(
+            f"{self.url}/collections/{self.collection}/points/delete",
+            headers=self._headers(), json={"points": ids}, timeout=30)
+        r.raise_for_status()
+        return True
+
     async def search(self, vector: list[float], *, limit: int = 10,
                      score_threshold: float | None = None,
                      must: list[dict] | None = None,

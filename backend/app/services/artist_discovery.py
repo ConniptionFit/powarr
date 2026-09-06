@@ -342,6 +342,12 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
         if not name:
             continue
         mbid = (a.get("mbid") or "").strip() or None
+        if cfg.require_musicbrainz_id and not mbid:
+            if lidarr_by_name and _norm_artist(name) in lidarr_by_name:
+                mbid = lidarr_by_name[_norm_artist(name)].get("foreignArtistId") or None
+            if not mbid:
+                logger.debug(f"Artist Discovery ingest: skipping seed '{name}' without MusicBrainz ID (require_musicbrainz_id=True)")
+                continue
         plays = int(a.get("playcount") or 0)
         pid = qdrant.point_id(mbid, name)
         try:
@@ -424,6 +430,8 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             if not rname:
                 continue
             rmbid = (r.get("mbid") or "").strip() or None
+            if cfg.require_musicbrainz_id and not rmbid:
+                continue
             rname_norm = _norm_artist(rname)
             already_owned = bool(lidarr_by_mbid.get(rmbid) or lidarr_by_name.get(rname_norm)) \
                 or rname_norm in plex_names
@@ -775,7 +783,8 @@ async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: st
                                         seed_artist_name: str | None = None,
                                         payload: dict | None = None,
                                         similarity_score: float | None = None,
-                                        row: DiscoveredArtist | None = None) -> dict[str, int]:
+                                        row: DiscoveredArtist | None = None,
+                                        require_mbid: bool = False) -> dict[str, int]:
     """Core row creation / in-place promotion, once a caller has already
     decided this candidate clears its own lane's suggest-worthiness bar
     (connection count for graph/ingest, cosine similarity for centroid — see
@@ -802,6 +811,13 @@ async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: st
         return {"created": 0, "promoted": promoted}  # any prior row (any status) blocks re-creation
 
     enrichment = await _enrich_candidate(db, mbid, name)
+    if not mbid and enrichment.get("musicbrainz_id"):
+        mbid = enrichment["musicbrainz_id"]
+
+    if require_mbid and not (mbid and mbid.strip()):
+        logger.info(f"Artist Discovery: skipping candidate '{name}' without MusicBrainz ID (require_musicbrainz_id=True)")
+        return {"created": 0, "promoted": 0}
+
     genres_list = clean_tags(payload.get("genres")) or clean_tags(enrichment["genres"])
     cand = DiscoveredArtist(
         musicbrainz_id=mbid, artist_name=name,
@@ -844,7 +860,7 @@ async def _gate_and_create_candidate(db, qdrant, cfg: ArtistDiscoverySettings, r
     return await _create_or_promote_candidate(
         db, qdrant, mbid=mbid, name=name, seeds_list=seeds_list, source_label=source_label,
         auto_add_n=auto_add_n, recent_n=recent_n, seed_artist_name=seed_artist_name,
-        payload=payload, row=row)
+        payload=payload, row=row, require_mbid=cfg.require_musicbrainz_id)
 
 
 async def _gate_centroid_candidate(db, qdrant, cfg: ArtistDiscoverySettings, recent_keys: set[str], *,
@@ -861,7 +877,8 @@ async def _gate_centroid_candidate(db, qdrant, cfg: ArtistDiscoverySettings, rec
     recent_n = _recent_connection_count(seeds_list, recent_keys)
     return await _create_or_promote_candidate(
         db, qdrant, mbid=mbid, name=name, seeds_list=seeds_list, source_label=source_label,
-        auto_add_n=auto_add_n, recent_n=recent_n, payload=payload, similarity_score=similarity_score)
+        auto_add_n=auto_add_n, recent_n=recent_n, payload=payload, similarity_score=similarity_score,
+        require_mbid=cfg.require_musicbrainz_id)
 
 
 async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
@@ -904,6 +921,8 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             if not rname:
                 continue
             rmbid = (r.get("mbid") or "").strip() or None
+            if cfg.require_musicbrainz_id and not rmbid:
+                continue
             rname_norm = _norm_artist(rname)
             already_owned = bool(lidarr_by_mbid.get(rmbid) or lidarr_by_name.get(rname_norm)) \
                 or rname_norm in plex_names
@@ -951,6 +970,72 @@ def purge_stale_thumbnails(db, retention_days: int | None = None) -> int:
         db.commit()
         logger.info(f"Artist Discovery: purged thumbnails on {len(rows)} accepted artist(s) older than {days}d")
     return len(rows)
+
+
+# --- AD-28 Purge non-MusicBrainz items ---------------------------------------------
+
+async def purge_artists_without_mbid(db) -> dict[str, Any]:
+    """Purge candidates and unowned Qdrant points lacking a MusicBrainz ID (AD-28).
+    Filters out invalid scrobbles such as YouTube videos, podcasts, and creators.
+    Accepted candidates in Lidarr have their MBIDs backfilled if available in Lidarr."""
+    cands = (db.query(DiscoveredArtist)
+             .filter((DiscoveredArtist.musicbrainz_id.is_(None)) | (DiscoveredArtist.musicbrainz_id == ""))
+             .all())
+    lidarr = _lidarr_client(db)
+    purged_db = 0
+    backfilled_db = 0
+
+    for cand in cands:
+        if cand.status == "accepted" and lidarr:
+            try:
+                results = await lidarr.lookup_artist(cand.artist_name)
+                match = results[0] if results else None
+                if match and match.get("foreignArtistId"):
+                    cand.musicbrainz_id = match["foreignArtistId"]
+                    backfilled_db += 1
+                    continue
+            except Exception as e:
+                logger.debug(f"Artist Discovery purge: failed to lookup MBID for accepted {cand.artist_name}: {e}")
+        db.delete(cand)
+        purged_db += 1
+
+    if purged_db or backfilled_db:
+        db.commit()
+        logger.info(f"Artist Discovery: purged {purged_db} candidate(s) without MBID ({backfilled_db} accepted backfilled)")
+
+    # Also clean up Qdrant points with no MBID that are not owned in Lidarr
+    purged_qdrant = 0
+    qdrant = _qdrant(db)
+    if qdrant:
+        try:
+            offset = None
+            to_delete: list[str] = []
+            while True:
+                points, offset = await qdrant.scroll(limit=256, offset=offset)
+                for p in points:
+                    payload = p.get("payload") or {}
+                    mbid = (payload.get("musicbrainz_id") or "").strip()
+                    in_lidarr = bool(payload.get("in_lidarr"))
+                    if not mbid and not in_lidarr:
+                        to_delete.append(p["id"])
+                if not offset:
+                    break
+            if to_delete:
+                for i in range(0, len(to_delete), 256):
+                    chunk = to_delete[i:i + 256]
+                    await qdrant.delete_points(chunk)
+                purged_qdrant = len(to_delete)
+                logger.info(f"Artist Discovery: purged {purged_qdrant} point(s) without MBID from Qdrant")
+        except Exception as e:
+            logger.warning(f"Artist Discovery: Qdrant purge of non-MBID points failed: {e}")
+
+    return {
+        "ok": True,
+        "purged_candidates": purged_db,
+        "backfilled_accepted": backfilled_db,
+        "purged_qdrant_points": purged_qdrant,
+        "message": f"Purged {purged_db} candidate(s) and {purged_qdrant} non-music Qdrant point(s) without MusicBrainz ID",
+    }
 
 
 # --- Re-enrichment backfill --------------------------------------------------------
@@ -1725,8 +1810,12 @@ async def get_stats(db) -> dict[str, Any]:
         except Exception:
             tracked = None
     last_run = db.query(ArtistDiscoveryRun).order_by(ArtistDiscoveryRun.started_at.desc()).first()
+    without_mbid = db.query(DiscoveredArtist).filter(
+        (DiscoveredArtist.musicbrainz_id.is_(None)) | (DiscoveredArtist.musicbrainz_id == "")
+    ).count()
     return {
         "pending": pending, "accepted": accepted, "rejected": rejected,
+        "without_mbid": without_mbid,
         "tracked_artists": tracked,
         "last_run_at": last_run.started_at.isoformat() if last_run else None,
         "last_run_message": last_run.message if last_run else None,

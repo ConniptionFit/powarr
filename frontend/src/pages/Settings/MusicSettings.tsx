@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Compass, ListMusic, Info } from "lucide-react";
+import { Compass, ListMusic, Info, Trash2 } from "lucide-react";
 import { req } from "../../lib/api";
 
 interface ADSettings {
@@ -18,6 +18,7 @@ interface ADSettings {
   scrobble_lookback_days: number;
   auto_promote: boolean;
   thumbnail_retention_days: number;
+  require_musicbrainz_id?: boolean;
   recent_taste_lane_enabled: boolean;
   mood_discovery_lanes: string[];
   root_folder_path: string;
@@ -105,6 +106,8 @@ function ArtistDiscoverySettingsCard() {
   const { data: profiles } = useQuery({ queryKey: ["ad-profiles"], queryFn: () => req<LidarrProfiles>("/artist-discovery/lidarr/profiles") });
   const [draft, setDraft] = useState<Partial<ADSettings> | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [purgeMsg, setPurgeMsg] = useState<string | null>(null);
+  const [showPurgePrompt, setShowPurgePrompt] = useState(false);
   const form = draft ?? settings ?? null;
 
   const saveMut = useMutation({
@@ -113,8 +116,29 @@ function ArtistDiscoverySettingsCard() {
     onError: (e: Error) => setMsg(e.message),
   });
 
+  const purgeMut = useMutation({
+    mutationFn: () => req<{ ok: boolean; message: string; purged_candidates: number; purged_qdrant_points: number }>("/artist-discovery/purge-no-mbid", { method: "POST" }),
+    onSuccess: (data) => {
+      setPurgeMsg(data.message || "Purge complete");
+      setShowPurgePrompt(false);
+      qc.invalidateQueries({ queryKey: ["ad-settings"] });
+      qc.invalidateQueries({ queryKey: ["ad-candidates"] });
+      qc.invalidateQueries({ queryKey: ["ad-stats"] });
+    },
+    onError: (e: Error) => setPurgeMsg(e.message),
+  });
+
   const set = <K extends keyof ADSettings>(k: K, v: ADSettings[K]) =>
     setDraft(prev => ({ ...(prev ?? settings ?? {}), [k]: v }));
+
+  const handleRequireMbidToggle = (checked: boolean) => {
+    set("require_musicbrainz_id", checked);
+    if (checked) {
+      setShowPurgePrompt(true);
+    } else {
+      setShowPurgePrompt(false);
+    }
+  };
 
   if (!form) return null;
 
@@ -168,6 +192,60 @@ function ArtistDiscoverySettingsCard() {
           <input className={inputCls} value={(form.mood_discovery_lanes || []).join(", ")}
             onChange={e => set("mood_discovery_lanes", e.target.value.split(",").map(m => m.trim()).filter(Boolean))} />
         </label>
+      </div>
+
+      <div className="border-t border-purple-900/20 pt-4 space-y-3">
+        <label className="flex items-center gap-2 text-sm text-slate-300"
+          title="AD-28 — Exclude artists with no MusicBrainz ID. Filters out invalid scrobbles from YouTube videos, podcasts, and creator content so they are never logged or suggested.">
+          <input
+            type="checkbox"
+            checked={form.require_musicbrainz_id ?? false}
+            onChange={e => handleRequireMbidToggle(e.target.checked)}
+          />
+          Require MusicBrainz ID <span className="text-slate-500">(filter YouTube/podcast creator noise)</span>
+        </label>
+        <p className="text-xs text-slate-500 leading-relaxed">
+          Do not log or suggest artists lacking a verified MusicBrainz ID. Prevents YouTube video titles and creator channels (e.g. PyroLIVE, podcasts, stream clips) from polluting taste centroids, discovery seeds, or the suggestion queue.
+        </p>
+
+        {showPurgePrompt && (
+          <div className="p-3 bg-brand/10 border border-brand/30 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-brand-light">
+            <span>
+              You enabled <strong>Require MusicBrainz ID</strong>. Would you like to purge existing items without a MusicBrainz ID from the database now?
+            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => purgeMut.mutate()}
+                disabled={purgeMut.isPending}
+                className="px-2.5 py-1 rounded bg-brand hover:bg-brand-dark text-white font-medium transition-colors disabled:opacity-50"
+              >
+                {purgeMut.isPending ? "Purging..." : "Purge Existing Now"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPurgePrompt(false)}
+                className="px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 pt-1">
+          <button
+            type="button"
+            onClick={() => purgeMut.mutate()}
+            disabled={purgeMut.isPending}
+            className="px-3 py-1.5 rounded-lg border border-red-900/40 bg-red-950/20 hover:bg-red-900/30 text-red-300 text-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            title="Purge existing candidates and unowned points from the database that lack a MusicBrainz ID"
+          >
+            <Trash2 size={13} />
+            {purgeMut.isPending ? "Purging..." : "Purge items without MusicBrainz ID"}
+          </button>
+          {purgeMsg && <span className="text-xs text-slate-400">{purgeMsg}</span>}
+        </div>
       </div>
 
       <div className="border-t border-purple-900/20 pt-4 grid sm:grid-cols-3 gap-3">

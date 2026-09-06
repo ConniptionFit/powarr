@@ -36,6 +36,10 @@ async def enrich(lidarr, mbid: str | None, name: str) -> dict[str, Any]:
                 image_url = _lidarr_image(match.get("images") or [])
                 bio = (match.get("overview") or "").strip() or None
                 genres = match.get("genres") or []
+                if not mbid and match.get("foreignArtistId"):
+                    from app.services.artist_discovery import _norm_artist
+                    if _norm_artist(match.get("artistName") or "") == _norm_artist(name):
+                        mbid = match.get("foreignArtistId")
         except Exception as e:
             logger.debug(f"Artist enrichment: Lidarr lookup failed for {name}: {e}")
 
@@ -75,4 +79,4 @@ async def enrich(lidarr, mbid: str | None, name: str) -> dict[str, Any]:
         from app.integrations import deezer
         image_url = await deezer.search_artist_image(name)
 
-    return {"image_url": image_url, "bio": bio, "genres": genres, "years_active": years_active}
+    return {"image_url": image_url, "bio": bio, "genres": genres, "years_active": years_active, "musicbrainz_id": mbid}
