@@ -39,6 +39,8 @@ class CandidateOut(BaseModel):
     bio: Optional[str] = None
     years_active: Optional[str] = None
     connection_count: int = 0
+    all_time_connections: int = 0
+    recent_connections: int = 0
     is_low_metadata: bool = False
 
 
@@ -48,6 +50,7 @@ class SeedInsight(BaseModel):
     plays_in_library: int = 0
     in_lidarr: bool = False
     shared_genres: list[str] = []
+    is_recent: bool = False
 
 
 class GateInsight(BaseModel):
@@ -57,6 +60,9 @@ class GateInsight(BaseModel):
     similarity_score: Optional[float] = None
     similarity_percent: Optional[int] = None
     connection_count: int = 0
+    all_time_connections: int = 0
+    recent_connections: int = 0
+    lookback_days: int = 30
     suggest_threshold: int = 0
     auto_add_threshold: int = 0
     auto_add_eligible: bool = False
@@ -103,7 +109,7 @@ def _match_rating_key(row: DiscoveredArtist) -> tuple[bool, float, int]:
     return (row.similarity_score is not None, row.similarity_score or 0.0, connections)
 
 
-def _candidate_out(row: DiscoveredArtist) -> CandidateOut:
+def _candidate_out(row: DiscoveredArtist, recent_keys: set[str] | None = None, has_lastfm: bool = False) -> CandidateOut:
     # clean_tags/clean_era also run at candidate creation — re-applying here
     # covers rows stored before the placeholder filtering existed (AD-06).
     genres = service.clean_tags(json.loads(row.genres) if row.genres else [])
@@ -113,6 +119,12 @@ def _candidate_out(row: DiscoveredArtist) -> CandidateOut:
         seed_names = [row.seed_artist_name]
     conn_count = max(len(seed_mbids), len(seed_names))
     is_low = (not row.musicbrainz_id) and (len(genres) == 0)
+
+    seeds_to_check = seed_names if seed_names else seed_mbids
+    if has_lastfm and recent_keys is not None:
+        recent_conn = sum(1 for s in seeds_to_check if s and (s in recent_keys or service._norm_artist(s) in recent_keys))
+    else:
+        recent_conn = conn_count
 
     return CandidateOut(
         id=row.id, musicbrainz_id=row.musicbrainz_id, artist_name=row.artist_name,
@@ -126,6 +138,8 @@ def _candidate_out(row: DiscoveredArtist) -> CandidateOut:
         lidarr_artist_id=row.lidarr_artist_id, created_at=row.created_at,
         image_url=row.image_url, bio=row.bio, years_active=row.years_active,
         connection_count=conn_count,
+        all_time_connections=conn_count,
+        recent_connections=recent_conn,
         is_low_metadata=is_low,
     )
 
@@ -176,9 +190,9 @@ async def run_sync(db: Session = Depends(get_db)):
 
 
 @router.get("/candidates", response_model=list[CandidateOut])
-def list_candidates(status: str = Query("pending"),
-                    source: Optional[str] = None,
-                    db: Session = Depends(get_db)):
+async def list_candidates(status: str = Query("pending"),
+                          source: Optional[str] = None,
+                          db: Session = Depends(get_db)):
     q = db.query(DiscoveredArtist).filter_by(status=status)
     if source:
         q = q.filter_by(source=source)
@@ -186,15 +200,17 @@ def list_candidates(status: str = Query("pending"),
     # (equal score, or equal connection count) by newest-first, same as before.
     rows = q.order_by(DiscoveredArtist.created_at.desc()).limit(500).all()
     rows.sort(key=_match_rating_key, reverse=True)
-    return [_candidate_out(r) for r in rows]
+    recent_keys, has_lastfm = await service.get_cached_recent_keys_and_status(db)
+    return [_candidate_out(r, recent_keys=recent_keys, has_lastfm=has_lastfm) for r in rows]
 
 
 @router.get("/candidates/{candidate_id}", response_model=CandidateOut)
-def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
+async def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
     row = db.query(DiscoveredArtist).filter_by(id=candidate_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Candidate not found")
-    return _candidate_out(row)
+    recent_keys, has_lastfm = await service.get_cached_recent_keys_and_status(db)
+    return _candidate_out(row, recent_keys=recent_keys, has_lastfm=has_lastfm)
 
 
 @router.get("/candidates/{candidate_id}/insights", response_model=CandidateInsightsOut)

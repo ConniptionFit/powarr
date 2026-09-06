@@ -29,6 +29,7 @@ export interface SeedInsight {
   plays_in_library: number;
   in_lidarr: boolean;
   shared_genres: string[];
+  is_recent?: boolean;
 }
 
 export interface GateInsight {
@@ -38,6 +39,9 @@ export interface GateInsight {
   similarity_score?: number | null;
   similarity_percent?: number | null;
   connection_count: number;
+  all_time_connections?: number;
+  recent_connections?: number;
+  lookback_days?: number;
   suggest_threshold: number;
   auto_add_threshold: number;
   auto_add_eligible: boolean;
@@ -332,7 +336,7 @@ export default function ArtistSuggestionModal({
               )}
 
               {/* Lane & Match Engine Card */}
-              <div className="p-4 rounded-xl bg-surface-raised/70 border border-purple-900/30 space-y-3">
+              <div className="p-4 rounded-xl bg-surface-raised/70 border border-purple-900/30 space-y-3.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <span className="p-1.5 rounded-lg bg-purple-950/60 border border-purple-800/40">
@@ -344,18 +348,11 @@ export default function ArtistSuggestionModal({
                     </div>
                   </div>
 
-                  {data.gate.similarity_percent != null ? (
-                    <div className="flex items-center gap-2 bg-emerald-950/40 border border-emerald-800/50 px-3 py-1.5 rounded-lg">
-                      <span className="text-xs text-emerald-400 font-medium">Affinity Score:</span>
-                      <span className="text-base font-bold text-emerald-300">
+                  {data.gate.similarity_percent != null && (
+                    <div className="flex items-center gap-2 bg-purple-950/40 border border-purple-800/50 px-3 py-1.5 rounded-lg">
+                      <span className="text-xs text-purple-400 font-medium">Affinity Score:</span>
+                      <span className="text-base font-bold text-purple-300">
                         {data.gate.similarity_percent}%
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 bg-cyan-950/40 border border-cyan-800/50 px-3 py-1.5 rounded-lg">
-                      <span className="text-xs text-cyan-400 font-medium">Connections:</span>
-                      <span className="text-base font-bold text-cyan-300">
-                        {data.gate.connection_count}
                       </span>
                     </div>
                   )}
@@ -365,13 +362,58 @@ export default function ArtistSuggestionModal({
                   {data.gate.lane_description}
                 </p>
 
-                {/* Automation Gate Proximity */}
-                <div className="pt-2 border-t border-purple-900/20 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-                  <span className="flex items-center gap-1.5">
-                    <Layers size={13} className="text-purple-400" />
-                    Auto-Add Status:
-                  </span>
-                  <span className="text-slate-300">{data.gate.auto_add_reason}</span>
+                {/* Match Comparison: Recent vs All-Time */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                  <div className={`p-2.5 rounded-lg border ${(data.gate.recent_connections ?? 0) > 0 ? "bg-emerald-950/30 border-emerald-800/40 text-emerald-300" : "bg-slate-900/50 border-slate-800 text-slate-400"}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
+                        Recent Match ({data.gate.lookback_days ?? 30}d Lookback)
+                      </span>
+                      <span className={`text-[11px] px-1.5 py-0.5 rounded font-semibold ${(data.gate.recent_connections ?? 0) >= (data.gate.auto_add_threshold || 1) ? "bg-emerald-900/60 text-emerald-200" : "bg-slate-800 text-slate-400"}`}>
+                        {data.gate.recent_connections ?? 0} / {data.gate.auto_add_threshold} for auto-add
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-baseline gap-1.5">
+                      <span className="text-lg font-bold text-white">{data.gate.recent_connections ?? 0}</span>
+                      <span className="text-xs text-slate-400">recent connection{(data.gate.recent_connections ?? 0) === 1 ? "" : "s"}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg border bg-surface/60 border-purple-900/30 text-purple-300">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
+                        All-Time Match (Taste Graph)
+                      </span>
+                      <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold bg-purple-950/70 text-purple-300 border border-purple-800/40">
+                        Total Graph
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-baseline gap-1.5">
+                      <span className="text-lg font-bold text-white">{data.gate.all_time_connections ?? data.gate.connection_count}</span>
+                      <span className="text-xs text-slate-400">total seed connection{(data.gate.all_time_connections ?? data.gate.connection_count) === 1 ? "" : "s"}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Automation Gate Proximity & Explanation */}
+                <div className="pt-2.5 border-t border-purple-900/20 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                      <Layers size={13} className="text-purple-400" /> Auto-Add Gate Status
+                    </span>
+                    {data.gate.auto_add_eligible ? (
+                      <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-700/50 flex items-center gap-1">
+                        <Check size={11} /> Auto-Add Eligible
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-700/50">
+                        Review Queue (Needs Recent Seeds)
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed bg-surface/50 p-2.5 rounded-lg border border-purple-900/20">
+                    {data.gate.auto_add_reason}
+                  </p>
                 </div>
               </div>
 
@@ -385,19 +427,30 @@ export default function ArtistSuggestionModal({
                     {data.seeds.map((s) => (
                       <div
                         key={s.name}
-                        className="p-3 rounded-xl bg-surface-raised/40 border border-purple-900/25 flex flex-col justify-between"
+                        className="p-3 rounded-xl bg-surface-raised/40 border border-purple-900/25 flex flex-col justify-between gap-2"
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <span className="font-semibold text-white text-xs truncate">
+                          <span className="font-semibold text-white text-xs truncate" title={s.name}>
                             {s.name}
                           </span>
-                          {s.in_lidarr && (
-                            <span className="text-[10px] bg-teal-950/60 text-teal-300 border border-teal-800/40 px-1.5 py-0.5 rounded">
-                              Lidarr
-                            </span>
-                          )}
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            {s.is_recent ? (
+                              <span className="text-[10px] bg-emerald-950/70 text-emerald-300 border border-emerald-800/40 px-1.5 py-0.5 rounded font-medium" title={`Scrobbled in last ${data.gate.lookback_days ?? 30} days`}>
+                                Recent ({data.gate.lookback_days ?? 30}d)
+                              </span>
+                            ) : (
+                              <span className="text-[10px] bg-slate-800/90 text-slate-400 border border-slate-700/60 px-1.5 py-0.5 rounded font-medium" title="In library taste graph, not scrobbled recently">
+                                All-Time Seed
+                              </span>
+                            )}
+                            {s.in_lidarr && (
+                              <span className="text-[10px] bg-teal-950/60 text-teal-300 border border-teal-800/40 px-1.5 py-0.5 rounded">
+                                Lidarr
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+                        <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
                           <span>
                             {s.plays_in_library > 0 ? (
                               <span className="text-purple-300 font-medium">

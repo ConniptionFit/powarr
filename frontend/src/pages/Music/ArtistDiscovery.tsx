@@ -47,6 +47,8 @@ interface Candidate {
   bio: string | null;
   years_active: string | null;
   connection_count?: number;
+  all_time_connections?: number;
+  recent_connections?: number;
   is_low_metadata?: boolean;
 }
 
@@ -126,20 +128,22 @@ const api = {
     }),
 };
 
-function seedConnectionSuffix(c: Pick<Candidate, "seed_artist_name" | "seed_artist_names" | "associated_seed_mbids">): string {
+function seedConnectionSuffix(c: Candidate | Pick<Candidate, "seed_artist_name" | "seed_artist_names" | "associated_seed_mbids">): string {
   const names = c.seed_artist_names.length > 0
     ? c.seed_artist_names
     : c.seed_artist_name ? [c.seed_artist_name] : [];
-  const conn = Math.max(c.associated_seed_mbids.length, names.length);
+  const conn = (c as Candidate).all_time_connections ?? Math.max(c.associated_seed_mbids.length, names.length);
+  const recent = (c as Candidate).recent_connections;
   if (conn === 0) return "";
+  const matchStr = recent !== undefined ? `${recent} recent · ${conn} all-time` : `${conn} connection${conn === 1 ? "" : "s"}`;
   if (names.length === 0) {
-    return ` — similar to ${conn} artist${conn === 1 ? "" : "s"} already in your library`;
+    return ` — similar to artists in your library (${matchStr})`;
   }
   const listed = names.slice(0, 4).join(", ") + (names.length > 4 ? ` +${names.length - 4} more` : "");
-  return ` — similar to ${listed} (${conn} connection${conn === 1 ? "" : "s"})`;
+  return ` — similar to ${listed} (${matchStr})`;
 }
 
-function whySuggested(c: Pick<Candidate, "source" | "similarity_score" | "seed_artist_name" | "seed_artist_names" | "associated_seed_mbids">): string {
+function whySuggested(c: Candidate | Pick<Candidate, "source" | "similarity_score" | "seed_artist_name" | "seed_artist_names" | "associated_seed_mbids">): string {
   if (c.source === "centroid" || c.source === "centroid_recent" || c.source.startsWith("centroid_mood_")) {
     const pct = c.similarity_score != null ? `${Math.round(c.similarity_score * 100)}% match to` : "Close match to";
     let profile = "your overall taste profile, built from your most-played artists";
@@ -154,12 +158,14 @@ function whySuggested(c: Pick<Candidate, "source" | "similarity_score" | "seed_a
   const names = c.seed_artist_names.length > 0
     ? c.seed_artist_names
     : c.seed_artist_name ? [c.seed_artist_name] : [];
-  const conn = Math.max(c.associated_seed_mbids.length, names.length, 1);
+  const conn = (c as Candidate).all_time_connections ?? Math.max(c.associated_seed_mbids.length, names.length, 1);
+  const recent = (c as Candidate).recent_connections;
+  const matchStr = recent !== undefined ? `${recent} recent · ${conn} all-time` : `${conn} connection${conn === 1 ? "" : "s"}`;
   if (names.length === 0) {
-    return `Similar to ${conn} artist${conn === 1 ? "" : "s"} already in your library`;
+    return `Similar to artists in your library (${matchStr})`;
   }
   const listed = names.slice(0, 4).join(", ") + (names.length > 4 ? ` +${names.length - 4} more` : "");
-  return `Similar to ${listed} — ${conn} connection${conn === 1 ? "" : "s"} to artists in your library`;
+  return `Similar to ${listed} (${matchStr})`;
 }
 
 function getLaneBadge(c: Candidate) {
@@ -217,10 +223,15 @@ function getScorePill(c: Candidate) {
       className: color,
     };
   }
-  const conn = connectionCount(c);
+  const allTime = c.all_time_connections ?? connectionCount(c);
+  const recent = c.recent_connections ?? 0;
+  const color =
+    recent > 0
+      ? "bg-emerald-950/80 text-emerald-300 border border-emerald-700/50"
+      : "bg-slate-800/80 text-slate-300 border border-slate-700/50";
   return {
-    label: `${conn} Connection${conn === 1 ? "" : "s"}`,
-    className: "bg-cyan-950/80 text-cyan-300 border border-cyan-700/50",
+    label: `${recent} Recent · ${allTime} All-Time`,
+    className: color,
   };
 }
 

@@ -12,7 +12,8 @@ from app.database import Base
 from app.integrations import deezer
 from app.models.artist_discovery import DiscoveredArtist
 from app.models.media import MediaItem
-from app.services.artist_discovery import get_candidate_insights
+from app.schemas.settings import ArtistDiscoverySettings
+from app.services.artist_discovery import get_candidate_insights, save_settings
 
 
 def _db():
@@ -104,6 +105,43 @@ class TestCandidateInsights(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Missing MusicBrainz ID", insights["warning"])
         self.assertEqual(insights["gate"]["lane"], "ingest")
         self.assertIsNone(insights["gate"]["similarity_percent"])
+
+    async def test_recent_and_all_time_connections_distinction(self):
+        db = _db()
+        save_settings(db, ArtistDiscoverySettings(auto_add_connection_threshold=3, scrobble_lookback_days=30))
+        cand = DiscoveredArtist(
+            artist_name="Texas in July",
+            musicbrainz_id="b10bbbfc-cf9e-42e0-be17-e2c3e1d52350",
+            source="graph",
+            similarity_score=None,
+            genres=json.dumps(["metalcore"]),
+            seed_artist_names=json.dumps(["For the Fallen Dreams", "No Bragging Rights", "Within the Ruins"]),
+            associated_seed_mbids=json.dumps(["m1", "m2", "m3"]),
+            status="pending",
+        )
+        db.add(cand)
+        db.commit()
+
+        # Mock get_cached_recent_keys_and_status to return 1 recent match out of 3
+        with patch("app.services.artist_discovery.get_cached_recent_keys_and_status", new_callable=AsyncMock) as mock_recent, \
+             patch("app.integrations.deezer.get_artist_top_tracks", new_callable=AsyncMock) as mock_top:
+            mock_recent.return_value = ({"within the ruins"}, True)
+            mock_top.return_value = []
+            insights = await get_candidate_insights(db, cand.id)
+
+        self.assertIsNotNone(insights)
+        gate = insights["gate"]
+        self.assertEqual(gate["all_time_connections"], 3)
+        self.assertEqual(gate["recent_connections"], 1)
+        self.assertFalse(gate["auto_add_eligible"])
+        self.assertIn("Requires 3 recent connections", gate["auto_add_reason"])
+        self.assertIn("1 recent (3 all-time)", gate["auto_add_reason"])
+
+        # Check seeds have is_recent flag accurately set
+        seeds = {s["name"]: s["is_recent"] for s in insights["seeds"]}
+        self.assertTrue(seeds["Within the Ruins"])
+        self.assertFalse(seeds["For the Fallen Dreams"])
+        self.assertFalse(seeds["No Bragging Rights"])
 
 
 class TestDeezerTopTracks(unittest.IsolatedAsyncioTestCase):

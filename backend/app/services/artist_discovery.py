@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -706,6 +707,39 @@ async def _recently_listened_keys(lastfm, lookback_days: int, blocked_channels: 
             keys.add(name)
             keys.add(_norm_artist(name))
     return keys
+
+
+_RECENT_KEYS_CACHE: tuple[float, int, set[str], bool] | None = None
+
+
+async def get_cached_recent_keys_and_status(db, ttl_seconds: int = 60) -> tuple[set[str], bool]:
+    """Return (recent_keys, has_lastfm) with a 60s TTL cache so list_candidates and
+    candidate insight endpoints do not hit Last.fm API on every single request."""
+    global _RECENT_KEYS_CACHE
+    cfg = load_settings(db)
+    lb = cfg.scrobble_lookback_days
+    now = time.time()
+    if _RECENT_KEYS_CACHE is not None:
+        cache_time, cache_lb, keys, has_lfm = _RECENT_KEYS_CACHE
+        if now - cache_time < ttl_seconds and cache_lb == lb:
+            return keys, has_lfm
+
+    lastfm_row = db.query(Integration).filter_by(name="lastfm", enabled=True).first()
+    if not lastfm_row:
+        _RECENT_KEYS_CACHE = (now, lb, set(), False)
+        return set(), False
+
+    try:
+        from app.api.v1.integrations import _get_client
+        lastfm = _get_client(lastfm_row)
+        keys = await _recently_listened_keys(lastfm, lb, blocked_channels=cfg.blocked_channels)
+        _RECENT_KEYS_CACHE = (now, lb, keys, True)
+        return keys, True
+    except Exception as e:
+        logger.debug(f"Artist Discovery: failed to fetch recent scrobble keys: {e}")
+        if _RECENT_KEYS_CACHE is not None:
+            return _RECENT_KEYS_CACHE[2], _RECENT_KEYS_CACHE[3]
+        return set(), True
 
 
 def _recent_connection_count(seeds_list: list[str], recent_keys: set[str]) -> int:
@@ -2029,21 +2063,33 @@ async def get_candidate_insights(db, candidate_id: int) -> dict[str, Any] | None
 
     sim_score = row.similarity_score
     sim_pct = round(sim_score * 100) if sim_score is not None else None
-    conn_count = max(len(seed_mbids), len(seed_names))
+    all_time_conn_count = max(len(seed_mbids), len(seed_names))
+    conn_count = all_time_conn_count
+
+    recent_keys, has_lastfm = await get_cached_recent_keys_and_status(db)
+    seeds_to_check = seed_names if seed_names else seed_mbids
+    if has_lastfm:
+        recent_conn_count = sum(1 for s in seeds_to_check if s and (s in recent_keys or _norm_artist(s) in recent_keys))
+    else:
+        recent_conn_count = all_time_conn_count
 
     auto_add_threshold = _effective_auto_add_threshold(cfg)
     suggest_threshold = max(cfg.suggest_connection_threshold, 1)
+    lookback_days = cfg.scrobble_lookback_days
 
     if auto_add_threshold == 0:
         auto_add_eligible = False
         auto_add_reason = "Auto-add is disabled in Settings (manual review required)."
-    elif conn_count >= auto_add_threshold:
+    elif recent_conn_count >= auto_add_threshold:
         auto_add_eligible = True
-        auto_add_reason = f"Met {conn_count}/{auto_add_threshold} connections required for auto-add."
+        auto_add_reason = f"Met {recent_conn_count}/{auto_add_threshold} recent connections in the last {lookback_days}d required for auto-add."
     else:
         auto_add_eligible = False
-        diff = auto_add_threshold - conn_count
-        auto_add_reason = f"Has {conn_count}/{auto_add_threshold} required connections (needs {diff} more to auto-add)."
+        diff = auto_add_threshold - recent_conn_count
+        auto_add_reason = (
+            f"Requires {auto_add_threshold} recent connections in the last {lookback_days}d to auto-add. "
+            f"Currently has {recent_conn_count} recent ({all_time_conn_count} all-time) — needs {diff} more in the lookback window."
+        )
 
     gate = {
         "lane": source,
@@ -2051,7 +2097,10 @@ async def get_candidate_insights(db, candidate_id: int) -> dict[str, Any] | None
         "lane_description": lane_desc,
         "similarity_score": sim_score,
         "similarity_percent": sim_pct,
-        "connection_count": conn_count,
+        "connection_count": all_time_conn_count,
+        "all_time_connections": all_time_conn_count,
+        "recent_connections": recent_conn_count,
+        "lookback_days": lookback_days,
         "suggest_threshold": suggest_threshold,
         "auto_add_threshold": auto_add_threshold,
         "auto_add_eligible": auto_add_eligible,
@@ -2112,12 +2161,17 @@ async def get_candidate_insights(db, candidate_id: int) -> dict[str, Any] | None
         s_genres = seed_genres_map.get(s_norm, [])
         all_seed_genres.update(g.lower() for g in s_genres)
         shared_with_seed = [g for g in genres if g.lower() in [sg.lower() for sg in s_genres]]
+        is_recent_seed = bool(
+            (s_name in recent_keys or s_norm in recent_keys or _norm_artist(s_name) in recent_keys)
+            if has_lastfm else True
+        )
         seeds_out.append({
             "name": s_name,
             "musicbrainz_id": None,
             "plays_in_library": seed_plays.get(s_norm, 0),
             "in_lidarr": _norm_artist(s_name) in lidarr_names,
             "shared_genres": shared_with_seed,
+            "is_recent": is_recent_seed,
         })
 
     shared_genres = [g for g in genres if g.lower() in all_seed_genres]
