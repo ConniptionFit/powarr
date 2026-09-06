@@ -138,10 +138,13 @@ def get_settings(db: Session = Depends(get_db)):
 @router.put("/settings", response_model=ArtistDiscoverySettings)
 async def put_settings(body: ArtistDiscoverySettings,
                        purge_no_mbid: bool = Query(False, description="Purge items without MusicBrainz ID immediately"),
+                       purge_non_music: bool = Query(False, description="Purge non-music YouTube channels immediately"),
                        db: Session = Depends(get_db)):
     service.save_settings(db, body)
     if purge_no_mbid:
         await service.purge_artists_without_mbid(db)
+    if purge_non_music:
+        await service.purge_non_music_artists(db)
     return body
 
 
@@ -149,6 +152,12 @@ async def put_settings(body: ArtistDiscoverySettings,
 async def purge_no_mbid(db: Session = Depends(get_db)):
     """Purge candidates and unowned Qdrant points lacking a MusicBrainz ID (AD-28)."""
     return await service.purge_artists_without_mbid(db)
+
+
+@router.post("/purge-non-music")
+async def purge_non_music(db: Session = Depends(get_db)):
+    """Purge non-music YouTube channels, podcasts, and creators (AD-29)."""
+    return await service.purge_non_music_artists(db)
 
 
 @router.get("/stats")

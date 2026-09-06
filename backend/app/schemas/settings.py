@@ -339,6 +339,13 @@ class SmartPlaylistSettings(BaseModel):
     related_artist_seeds: dict[str, str] = {}
 
 
+DEFAULT_BLOCKED_CHANNELS: list[str] = [
+    "Funhaus", "astrogoblin", "BroughtYouThisThing", "PyroLIVE", "Inside Games",
+    "Dr Insanity", "Explore With Us", "Nexpo", "RedLetterMedia", "OneyPlays",
+    "Internet Today", "Mythical Kitchen", "Corridor Crew", "Signified B Sides",
+]
+
+
 class ArtistDiscoverySettings(BaseModel):
     """Artist Discovery — native port of the n8n Music Curator (Last.fm scrobbles →
     Ollama embeddings → Qdrant taste-centroid similarity + related-artist graph →
@@ -387,6 +394,13 @@ class ArtistDiscoverySettings(BaseModel):
     # MusicBrainz ID (filters out invalid scrobbles such as YouTube videos, podcasts,
     # and creators). Changing this setting allows purging existing items without MBID.
     require_musicbrainz_id: bool = False
+    # AD-29 — Filter YouTube Channels & Non-Music Scrobbles:
+    # Detects and prevents YouTube channels, creators, and podcasts from polluting
+    # taste seeds and candidate suggestions, with false-positive protections for
+    # musicians who operate YouTube channels.
+    filter_youtube_channels: bool = True
+    blocked_channels: list[str] = list(DEFAULT_BLOCKED_CHANNELS)
+    require_seed_library_grounding: bool = True
     # AD-17 — second discovery lane seeded from recently-listened artists
     # (reuses scrobble_lookback_days, the same "recent" window AD-07 already
     # established) alongside the existing all-time most-played centroid, so

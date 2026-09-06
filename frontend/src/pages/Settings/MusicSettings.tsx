@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Compass, ListMusic, Info, Trash2 } from "lucide-react";
+import { Compass, ListMusic, Info, Trash2, Plus, X } from "lucide-react";
 import { req } from "../../lib/api";
 
 interface ADSettings {
@@ -19,6 +19,9 @@ interface ADSettings {
   auto_promote: boolean;
   thumbnail_retention_days: number;
   require_musicbrainz_id?: boolean;
+  filter_youtube_channels?: boolean;
+  blocked_channels?: string[];
+  require_seed_library_grounding?: boolean;
   recent_taste_lane_enabled: boolean;
   mood_discovery_lanes: string[];
   root_folder_path: string;
@@ -127,6 +130,34 @@ function ArtistDiscoverySettingsCard() {
     },
     onError: (e: Error) => setPurgeMsg(e.message),
   });
+
+  const purgeNonMusicMut = useMutation({
+    mutationFn: () => req<{ ok: boolean; message: string; purged_candidates: number; purged_qdrant_points: number }>("/artist-discovery/purge-non-music", { method: "POST" }),
+    onSuccess: (data) => {
+      setPurgeMsg(data.message || "Non-music purge complete");
+      qc.invalidateQueries({ queryKey: ["ad-settings"] });
+      qc.invalidateQueries({ queryKey: ["ad-candidates"] });
+      qc.invalidateQueries({ queryKey: ["ad-stats"] });
+    },
+    onError: (e: Error) => setPurgeMsg(e.message),
+  });
+
+  const [newChannel, setNewChannel] = useState("");
+
+  const addBlockedChannel = () => {
+    const trimmed = newChannel.trim();
+    if (!trimmed) return;
+    const current = form?.blocked_channels || [];
+    if (!current.some(c => c.toLowerCase() === trimmed.toLowerCase())) {
+      set("blocked_channels", [...current, trimmed]);
+    }
+    setNewChannel("");
+  };
+
+  const removeBlockedChannel = (channel: string) => {
+    const current = form?.blocked_channels || [];
+    set("blocked_channels", current.filter(c => c.toLowerCase() !== channel.toLowerCase()));
+  };
 
   const set = <K extends keyof ADSettings>(k: K, v: ADSettings[K]) =>
     setDraft(prev => ({ ...(prev ?? settings ?? {}), [k]: v }));
@@ -245,6 +276,94 @@ function ArtistDiscoverySettingsCard() {
             {purgeMut.isPending ? "Purging..." : "Purge items without MusicBrainz ID"}
           </button>
           {purgeMsg && <span className="text-xs text-slate-400">{purgeMsg}</span>}
+        </div>
+      </div>
+
+      <div className="border-t border-purple-900/20 pt-4 space-y-3">
+        <label className="flex items-center gap-2 text-sm text-slate-300"
+          title="AD-29 — Detect and filter out non-music YouTube channels, gaming channels, and podcasts from polluting taste seeds and suggestion candidates. Protects genuine musicians who have YouTube channels against false positives.">
+          <input
+            type="checkbox"
+            checked={form.filter_youtube_channels ?? true}
+            onChange={e => set("filter_youtube_channels", e.target.checked)}
+          />
+          Filter YouTube Channels & Podcasts <span className="text-slate-500">(AD-29)</span>
+        </label>
+        <p className="text-xs text-slate-500 leading-relaxed">
+          Prevents non-music channels (e.g. Funhaus, astrogoblin, BroughtYouThisThing, PyroLIVE) from becoming taste seeds or suggestion candidates. Genuine musicians with YouTube channels (e.g. Joji, Bo Burnham, Pomplamoose) are shielded via streaming links and music genres.
+        </p>
+
+        <label className="flex items-center gap-2 text-sm text-slate-300 pt-1"
+          title="AD-29 — Require candidates to have at least one verified library/monitored seed. Prevents suggestions spawned solely from non-music channels.">
+          <input
+            type="checkbox"
+            checked={form.require_seed_library_grounding ?? true}
+            onChange={e => set("require_seed_library_grounding", e.target.checked)}
+          />
+          Require Verified Seed Grounding <span className="text-slate-500">(block suggestions derived solely from non-music seeds)</span>
+        </label>
+
+        <div className="pt-2">
+          <label className={labelCls}>
+            Blocked Channels & Non-Music Creators
+            <span className="text-slate-500 block text-[11px] mt-0.5">
+              Specific channel or creator names to block from taste space and candidate generation.
+            </span>
+          </label>
+          <div className="flex flex-wrap gap-1.5 mt-2 mb-2">
+            {(form.blocked_channels || []).map(channel => (
+              <span
+                key={channel}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface border border-purple-900/30 text-xs text-slate-200"
+              >
+                {channel}
+                <button
+                  type="button"
+                  onClick={() => removeBlockedChannel(channel)}
+                  className="hover:text-red-400 transition-colors"
+                  title={`Remove ${channel}`}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 mt-2 max-w-md">
+            <input
+              type="text"
+              className={inputCls}
+              placeholder="Add channel name (e.g. ChannelName)"
+              value={newChannel}
+              onChange={e => setNewChannel(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addBlockedChannel();
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={addBlockedChannel}
+              className="mt-1 px-3 py-1.5 rounded-lg bg-surface border border-purple-900/40 hover:bg-purple-950/40 text-slate-200 text-xs flex items-center gap-1 transition-colors shrink-0"
+            >
+              <Plus size={13} />
+              Add
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 pt-2">
+          <button
+            type="button"
+            onClick={() => purgeNonMusicMut.mutate()}
+            disabled={purgeNonMusicMut.isPending}
+            className="px-3 py-1.5 rounded-lg border border-red-900/40 bg-red-950/20 hover:bg-red-900/30 text-red-300 text-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            title="Purge candidates and Qdrant points matching the blocked channels list or non-music detector"
+          >
+            <Trash2 size={13} />
+            {purgeNonMusicMut.isPending ? "Purging..." : "Purge YouTube Channels & Non-Music Items"}
+          </button>
         </div>
       </div>
 

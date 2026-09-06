@@ -348,6 +348,13 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             if not mbid:
                 logger.debug(f"Artist Discovery ingest: skipping seed '{name}' without MusicBrainz ID (require_musicbrainz_id=True)")
                 continue
+        if cfg.filter_youtube_channels:
+            from app.services.youtube_filter import is_non_music_channel
+            in_lib = bool((lidarr_by_mbid and mbid in lidarr_by_mbid) or (lidarr_by_name and _norm_artist(name) in lidarr_by_name))
+            is_nm, reason = is_non_music_channel(name, mbid=mbid, in_library=in_lib, blocked_channels=cfg.blocked_channels)
+            if is_nm:
+                logger.debug(f"Artist Discovery ingest: skipping non-music seed '{name}' ({reason})")
+                continue
         plays = int(a.get("playcount") or 0)
         pid = qdrant.point_id(mbid, name)
         try:
@@ -432,6 +439,11 @@ async def ingest_scrobbles(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             rmbid = (r.get("mbid") or "").strip() or None
             if cfg.require_musicbrainz_id and not rmbid:
                 continue
+            if cfg.filter_youtube_channels:
+                from app.services.youtube_filter import is_non_music_channel
+                is_nm, _ = is_non_music_channel(rname, mbid=rmbid, blocked_channels=cfg.blocked_channels)
+                if is_nm:
+                    continue
             rname_norm = _norm_artist(rname)
             already_owned = bool(lidarr_by_mbid.get(rmbid) or lidarr_by_name.get(rname_norm)) \
                 or rname_norm in plex_names
@@ -663,7 +675,7 @@ async def run_centroid_discovery(db, cfg: ArtistDiscoverySettings) -> dict[str, 
 
 # --- Related-artist graph sync ---------------------------------------------------
 
-async def _recently_listened_keys(lastfm, lookback_days: int) -> set[str]:
+async def _recently_listened_keys(lastfm, lookback_days: int, blocked_channels: list[str] | None = None) -> set[str]:
     """AD-07 — set of seed keys (MBID and/or normalized name) heard within the
     scrobble lookback window. Connection counts for suggest/auto-add use only
     these keys — not every monitored Lidarr artist."""
@@ -684,6 +696,10 @@ async def _recently_listened_keys(lastfm, lookback_days: int) -> set[str]:
         else:
             name = str(artist).strip()
             mbid = None
+        if blocked_channels:
+            from app.services.youtube_filter import is_name_in_blocked_channels
+            if is_name_in_blocked_channels(name, blocked_channels):
+                continue
         if mbid:
             keys.add(mbid)
         if name:
@@ -784,7 +800,10 @@ async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: st
                                         payload: dict | None = None,
                                         similarity_score: float | None = None,
                                         row: DiscoveredArtist | None = None,
-                                        require_mbid: bool = False) -> dict[str, int]:
+                                        require_mbid: bool = False,
+                                        filter_youtube: bool = True,
+                                        blocked_channels: list[str] | None = None,
+                                        require_seed_grounding: bool = True) -> dict[str, int]:
     """Core row creation / in-place promotion, once a caller has already
     decided this candidate clears its own lane's suggest-worthiness bar
     (connection count for graph/ingest, cosine similarity for centroid — see
@@ -817,6 +836,35 @@ async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: st
     if require_mbid and not (mbid and mbid.strip()):
         logger.info(f"Artist Discovery: skipping candidate '{name}' without MusicBrainz ID (require_musicbrainz_id=True)")
         return {"created": 0, "promoted": 0}
+
+    if filter_youtube:
+        from app.services.youtube_filter import is_non_music_channel
+        lidarr = _lidarr_client(db)
+        lidarr_data = None
+        if lidarr:
+            try:
+                term = f"lidarr:{mbid}" if mbid else name
+                res = await lidarr.lookup_artist(term)
+                if res:
+                    lidarr_data = res[0]
+            except Exception:
+                pass
+        genres_for_check = clean_tags(payload.get("genres")) or clean_tags(enrichment.get("genres"))
+        is_nm, reason = is_non_music_channel(
+            name, mbid=mbid, tags=genres_for_check, bio=enrichment.get("bio"),
+            lidarr_artist_data=lidarr_data, blocked_channels=blocked_channels,
+        )
+        if is_nm:
+            logger.info(f"Artist Discovery: skipping non-music candidate '{name}' ({reason})")
+            return {"created": 0, "promoted": 0}
+
+    if require_seed_grounding and seeds_list:
+        from app.services.youtube_filter import is_name_in_blocked_channels
+        valid_seeds = [s for s in seeds_list if not is_name_in_blocked_channels(s, blocked_channels)]
+        if not valid_seeds and similarity_score is None:
+            logger.info(f"Artist Discovery: skipping candidate '{name}' — all seeds are blocked non-music channels")
+            return {"created": 0, "promoted": 0}
+        seeds_list = valid_seeds
 
     genres_list = clean_tags(payload.get("genres")) or clean_tags(enrichment["genres"])
     cand = DiscoveredArtist(
@@ -860,7 +908,10 @@ async def _gate_and_create_candidate(db, qdrant, cfg: ArtistDiscoverySettings, r
     return await _create_or_promote_candidate(
         db, qdrant, mbid=mbid, name=name, seeds_list=seeds_list, source_label=source_label,
         auto_add_n=auto_add_n, recent_n=recent_n, seed_artist_name=seed_artist_name,
-        payload=payload, row=row, require_mbid=cfg.require_musicbrainz_id)
+        payload=payload, row=row, require_mbid=cfg.require_musicbrainz_id,
+        filter_youtube=cfg.filter_youtube_channels,
+        blocked_channels=cfg.blocked_channels,
+        require_seed_grounding=cfg.require_seed_library_grounding)
 
 
 async def _gate_centroid_candidate(db, qdrant, cfg: ArtistDiscoverySettings, recent_keys: set[str], *,
@@ -878,7 +929,10 @@ async def _gate_centroid_candidate(db, qdrant, cfg: ArtistDiscoverySettings, rec
     return await _create_or_promote_candidate(
         db, qdrant, mbid=mbid, name=name, seeds_list=seeds_list, source_label=source_label,
         auto_add_n=auto_add_n, recent_n=recent_n, payload=payload, similarity_score=similarity_score,
-        require_mbid=cfg.require_musicbrainz_id)
+        require_mbid=cfg.require_musicbrainz_id,
+        filter_youtube=cfg.filter_youtube_channels,
+        blocked_channels=cfg.blocked_channels,
+        require_seed_grounding=cfg.require_seed_library_grounding)
 
 
 async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
@@ -894,7 +948,8 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
     stale = [s for s in seeds
              if ((s.get("payload") or {}).get("last_related_scan_timestamp") or 0) < cutoff][:5]
 
-    recent_keys = await _recently_listened_keys(lastfm, cfg.scrobble_lookback_days)
+    recent_keys = await _recently_listened_keys(lastfm, cfg.scrobble_lookback_days,
+                                                 cfg.blocked_channels if cfg.filter_youtube_channels else None)
     # Live ownership check (not the possibly-stale Qdrant flags — a related artist
     # can be seen here for the first time ever, with no prior point to have been
     # synced) — an artist already in Plex or in Lidarr (monitored or not) is never
@@ -923,6 +978,11 @@ async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
             rmbid = (r.get("mbid") or "").strip() or None
             if cfg.require_musicbrainz_id and not rmbid:
                 continue
+            if cfg.filter_youtube_channels:
+                from app.services.youtube_filter import is_non_music_channel
+                is_nm, _ = is_non_music_channel(rname, mbid=rmbid, blocked_channels=cfg.blocked_channels)
+                if is_nm:
+                    continue
             rname_norm = _norm_artist(rname)
             already_owned = bool(lidarr_by_mbid.get(rmbid) or lidarr_by_name.get(rname_norm)) \
                 or rname_norm in plex_names
@@ -1035,6 +1095,103 @@ async def purge_artists_without_mbid(db) -> dict[str, Any]:
         "backfilled_accepted": backfilled_db,
         "purged_qdrant_points": purged_qdrant,
         "message": f"Purged {purged_db} candidate(s) and {purged_qdrant} non-music Qdrant point(s) without MusicBrainz ID",
+    }
+
+
+# --- AD-29 Purge non-music YouTube channels / podcasts -----------------------------
+
+async def purge_non_music_artists(db) -> dict[str, Any]:
+    """AD-29: Purge non-music YouTube channels, podcasts, and creators from
+    candidates and Qdrant. Preserves accepted artists already in Lidarr library."""
+    cfg = load_settings(db)
+    lidarr = _lidarr_client(db)
+    qdrant = _qdrant(db)
+    from app.services.youtube_filter import is_non_music_channel, is_name_in_blocked_channels
+
+    cands = db.query(DiscoveredArtist).all()
+    purged_cands = 0
+    preserved_cands = 0
+
+    for cand in cands:
+        if cand.status == "accepted" and cand.lidarr_artist_id:
+            preserved_cands += 1
+            continue
+
+        genres = json.loads(cand.genres) if cand.genres else []
+        is_blocked = is_name_in_blocked_channels(cand.artist_name, cfg.blocked_channels)
+        is_nm = False
+        reason = "blocked"
+        if is_blocked:
+            is_nm = True
+        else:
+            lidarr_data = None
+            if lidarr and cand.musicbrainz_id:
+                try:
+                    res = await lidarr.lookup_artist(f"lidarr:{cand.musicbrainz_id}")
+                    if res:
+                        lidarr_data = res[0]
+                except Exception:
+                    pass
+            is_nm, reason = is_non_music_channel(
+                cand.artist_name, mbid=cand.musicbrainz_id, tags=genres,
+                bio=cand.bio, lidarr_artist_data=lidarr_data, blocked_channels=cfg.blocked_channels
+            )
+
+        # Also check seed grounding: if all seeds are blocked channels
+        seeds = json.loads(cand.associated_seed_mbids) if cand.associated_seed_mbids else []
+        if seeds and not is_nm:
+            valid_seeds = [s for s in seeds if not is_name_in_blocked_channels(s, cfg.blocked_channels)]
+            if not valid_seeds and cand.similarity_score is None:
+                is_nm = True
+                reason = "all_seeds_blocked_non_music"
+            elif len(valid_seeds) != len(seeds):
+                cand.associated_seed_mbids = json.dumps(valid_seeds)
+                if qdrant:
+                    cand.seed_artist_names = json.dumps(await _resolve_seed_names(qdrant, valid_seeds))
+
+        if is_nm:
+            logger.info(f"Artist Discovery purge: deleting non-music candidate '{cand.artist_name}' ({reason})")
+            db.delete(cand)
+            purged_cands += 1
+
+    if purged_cands:
+        db.commit()
+        logger.info(f"Artist Discovery: purged {purged_cands} non-music candidate(s)")
+
+    # Purge non-music points from Qdrant
+    purged_qdrant = 0
+    if qdrant:
+        try:
+            offset = None
+            to_delete: list[str] = []
+            while True:
+                points, offset = await qdrant.scroll(limit=256, offset=offset)
+                for p in points:
+                    payload = p.get("payload") or {}
+                    p_name = (payload.get("artist_name") or "").strip()
+                    in_lidarr = bool(payload.get("in_lidarr"))
+                    if in_lidarr:
+                        continue
+                    if is_name_in_blocked_channels(p_name, cfg.blocked_channels):
+                        to_delete.append(p["id"])
+                    elif cfg.require_musicbrainz_id and not payload.get("musicbrainz_id"):
+                        to_delete.append(p["id"])
+                if not offset:
+                    break
+            if to_delete:
+                for i in range(0, len(to_delete), 256):
+                    chunk = to_delete[i:i + 256]
+                    await qdrant.delete_points(chunk)
+                purged_qdrant = len(to_delete)
+                logger.info(f"Artist Discovery: purged {purged_qdrant} non-music point(s) from Qdrant")
+        except Exception as e:
+            logger.warning(f"Artist Discovery: Qdrant non-music purge failed: {e}")
+
+    return {
+        "ok": True,
+        "purged_candidates": purged_cands,
+        "purged_qdrant_points": purged_qdrant,
+        "message": f"Purged {purged_cands} non-music candidate(s) and {purged_qdrant} vector space point(s)",
     }
 
 
@@ -1813,9 +1970,13 @@ async def get_stats(db) -> dict[str, Any]:
     without_mbid = db.query(DiscoveredArtist).filter(
         (DiscoveredArtist.musicbrainz_id.is_(None)) | (DiscoveredArtist.musicbrainz_id == "")
     ).count()
+    from app.services.youtube_filter import is_name_in_blocked_channels
+    pending_cands = db.query(DiscoveredArtist).filter_by(status="pending").all()
+    blocked_candidates = sum(1 for c in pending_cands if is_name_in_blocked_channels(c.artist_name, cfg.blocked_channels))
     return {
         "pending": pending, "accepted": accepted, "rejected": rejected,
         "without_mbid": without_mbid,
+        "blocked_candidates": blocked_candidates,
         "tracked_artists": tracked,
         "last_run_at": last_run.started_at.isoformat() if last_run else None,
         "last_run_message": last_run.message if last_run else None,
