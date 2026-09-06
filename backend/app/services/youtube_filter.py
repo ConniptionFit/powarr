@@ -102,6 +102,8 @@ def has_music_genres(genres: list[str] | None) -> bool:
         return False
     for g in genres:
         g_clean = (g or "").lower()
+        if any(kw in g_clean for kw in MUSIC_GENRE_KEYWORDS):
+            return True
         for token in re.split(r"[\s\-_/]+", g_clean):
             if token in MUSIC_GENRE_KEYWORDS:
                 return True
