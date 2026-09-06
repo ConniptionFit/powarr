@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   X,
@@ -14,9 +14,12 @@ import {
   AlertTriangle,
   Flame,
   Volume2,
+  Volume1,
+  VolumeX,
   Layers,
-  ArrowUpRight,
   Disc3,
+  Square,
+  Loader2,
 } from "lucide-react";
 import { req } from "../lib/api";
 
@@ -79,10 +82,10 @@ function laneIcon(lane: string) {
   return <Sparkles size={14} className="text-brand-light" />;
 }
 
-function formatDuration(secs: number) {
-  if (!secs) return "0:30";
+function formatTime(secs: number) {
+  if (isNaN(secs) || secs < 0) return "0:00";
   const m = Math.floor(secs / 60);
-  const s = secs % 60;
+  const s = Math.floor(secs % 60);
   return `${m}:${s < 10 ? "0" : ""}${s}`;
 }
 
@@ -106,52 +109,153 @@ export default function ArtistSuggestionModal({
     queryFn: () => req<CandidateInsights>(`/artist-discovery/candidates/${candidateId}/insights`),
   });
 
-  const [playingTrackId, setPlayingTrackId] = useState<number | null>(null);
+  const [activeTrack, setActiveTrack] = useState<TrackPreview | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(30);
+  const [volume, setVolume] = useState(0.8);
+  const [isMuted, setIsMuted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Stop audio on unmount or track change
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-    };
+  const stopAudio = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current.onplay = null;
+      audioRef.current.onpause = null;
+      audioRef.current.onwaiting = null;
+      audioRef.current.onplaying = null;
+      audioRef.current.ontimeupdate = null;
+      audioRef.current.onended = null;
+      audioRef.current.onerror = null;
+      audioRef.current = null;
+    }
+    setIsPlaying(false);
+    setIsBuffering(false);
+    setCurrentTime(0);
   }, []);
 
-  const togglePlay = (track: TrackPreview) => {
+  const handleClose = useCallback(() => {
+    stopAudio();
+    onClose();
+  }, [stopAudio, onClose]);
+
+  // Stop audio on unmount
+  useEffect(() => {
+    return () => {
+      stopAudio();
+    };
+  }, [stopAudio]);
+
+  const togglePlay = useCallback((track: TrackPreview) => {
     if (!track.preview) return;
 
-    if (playingTrackId === track.id) {
+    // If same track is already loaded
+    if (activeTrack && (activeTrack.id === track.id || activeTrack.preview === track.preview)) {
       if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
+        if (isPlaying) {
+          audioRef.current.pause();
+        } else {
+          setIsBuffering(true);
+          audioRef.current.play().catch(() => {
+            setIsPlaying(false);
+            setIsBuffering(false);
+          });
+        }
       }
-      setPlayingTrackId(null);
       return;
     }
 
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
+    // New track selected
+    stopAudio();
+    setActiveTrack(track);
+    setIsBuffering(true);
+    setCurrentTime(0);
+    setDuration(30);
 
     const audio = new Audio(track.preview);
-    audio.volume = 0.8;
-    audio.play().catch(() => {
-      setPlayingTrackId(null);
-    });
-    audio.onended = () => {
-      setPlayingTrackId(null);
-      audioRef.current = null;
+    audio.volume = isMuted ? 0 : volume;
+
+    audio.onplay = () => {
+      setIsPlaying(true);
+      setIsBuffering(false);
     };
+    audio.onpause = () => {
+      setIsPlaying(false);
+    };
+    audio.onwaiting = () => {
+      setIsBuffering(true);
+    };
+    audio.onplaying = () => {
+      setIsBuffering(false);
+      setIsPlaying(true);
+    };
+    audio.ontimeupdate = () => {
+      setCurrentTime(audio.currentTime);
+      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+        setDuration(audio.duration);
+      }
+    };
+    audio.onended = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+    };
+    audio.onerror = () => {
+      setIsPlaying(false);
+      setIsBuffering(false);
+    };
+
     audioRef.current = audio;
-    setPlayingTrackId(track.id ?? null);
+    audio.play().catch(() => {
+      setIsPlaying(false);
+      setIsBuffering(false);
+    });
+  }, [activeTrack, isPlaying, isMuted, volume, stopAudio]);
+
+  const handleSeek = (time: number) => {
+    setCurrentTime(time);
+    if (audioRef.current) {
+      audioRef.current.currentTime = time;
+    }
   };
+
+  const handleVolumeChange = (newVol: number) => {
+    setVolume(newVol);
+    setIsMuted(false);
+    if (audioRef.current) {
+      audioRef.current.volume = newVol;
+    }
+  };
+
+  const toggleMute = () => {
+    const next = !isMuted;
+    setIsMuted(next);
+    if (audioRef.current) {
+      audioRef.current.volume = next ? 0 : volume;
+    }
+  };
+
+  // Keyboard shortcuts: Space toggles play/pause, Escape closes modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && activeTrack) {
+        const target = e.target as HTMLElement;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+        e.preventDefault();
+        togglePlay(activeTrack);
+      } else if (e.code === "Escape") {
+        handleClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeTrack, togglePlay, handleClose]);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-4 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         className="w-full max-w-2xl bg-[#141424] border border-purple-900/40 rounded-2xl shadow-2xl max-h-[90vh] flex flex-col overflow-hidden"
@@ -189,7 +293,7 @@ export default function ArtistSuggestionModal({
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             aria-label="Close"
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
           >
@@ -370,47 +474,134 @@ export default function ArtistSuggestionModal({
                     No preview tracks available for this artist.
                   </p>
                 ) : (
-                  <div className="space-y-1.5">
-                    {data.top_tracks.map((t) => {
-                      const isPlaying = playingTrackId === t.id;
+                  <div className="space-y-2">
+                    {data.top_tracks.map((t, idx) => {
+                      const isThisTrack = activeTrack && (activeTrack.id === t.id || activeTrack.preview === t.preview);
+                      const isThisPlaying = isThisTrack && isPlaying;
+                      const isThisBuffering = isThisTrack && isBuffering;
+                      const progressPercent = isThisTrack && duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+
                       return (
                         <div
-                          key={t.id ?? t.title}
-                          className={`p-2.5 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
-                            isPlaying
-                              ? "bg-purple-950/40 border-purple-600/60 text-white"
-                              : "bg-surface-raised/40 border-purple-900/25 hover:bg-surface-raised/70 text-slate-300"
+                          key={t.id ?? `${t.title}-${idx}`}
+                          onClick={() => t.preview && togglePlay(t)}
+                          className={`p-3 rounded-xl border flex flex-col gap-2 transition-all cursor-pointer relative overflow-hidden ${
+                            isThisPlaying
+                              ? "bg-purple-950/60 border-brand shadow-lg shadow-purple-950/50 text-white ring-1 ring-brand/50"
+                              : isThisTrack
+                              ? "bg-purple-950/30 border-purple-700/50 text-slate-200"
+                              : "bg-surface-raised/40 border-purple-900/25 hover:bg-surface-raised/70 text-slate-300 hover:border-purple-800/40"
                           }`}
                         >
-                          <div className="flex items-center gap-3 min-w-0">
-                            {t.preview ? (
-                              <button
-                                onClick={() => togglePlay(t)}
-                                aria-label={isPlaying ? "Pause preview" : "Play preview"}
-                                className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-transform active:scale-95 ${
-                                  isPlaying
-                                    ? "bg-brand text-white shadow-lg shadow-purple-900/50"
-                                    : "bg-purple-900/40 text-purple-300 hover:bg-purple-800/60"
-                                }`}
-                              >
-                                {isPlaying ? <Pause size={14} /> : <Play size={14} className="ml-0.5" />}
-                              </button>
-                            ) : (
-                              <div className="w-8 h-8 rounded-lg bg-surface/50 text-slate-600 flex items-center justify-center shrink-0">
-                                <Music2 size={14} />
+                          {/* Background progress fill on active track */}
+                          {isThisTrack && (
+                            <div
+                              className="absolute bottom-0 left-0 top-0 bg-brand/10 pointer-events-none transition-all duration-150"
+                              style={{ width: `${progressPercent}%` }}
+                            />
+                          )}
+
+                          <div className="flex items-center justify-between gap-3 relative z-10">
+                            <div className="flex items-center gap-3 min-w-0">
+                              {t.preview ? (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    togglePlay(t);
+                                  }}
+                                  title={isThisPlaying ? "Pause preview (Space)" : "Play 30s preview (Space)"}
+                                  aria-label={isThisPlaying ? "Pause preview" : "Play preview"}
+                                  className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-all active:scale-95 ${
+                                    isThisPlaying
+                                      ? "bg-brand text-white shadow-md shadow-brand/40"
+                                      : isThisTrack
+                                      ? "bg-purple-800/80 text-purple-200"
+                                      : "bg-purple-900/40 text-purple-300 hover:bg-purple-800/60 hover:text-white"
+                                  }`}
+                                >
+                                  {isThisBuffering ? (
+                                    <Loader2 size={16} className="animate-spin text-brand-light" />
+                                  ) : isThisPlaying ? (
+                                    <Pause size={16} />
+                                  ) : (
+                                    <Play size={16} className="ml-0.5" />
+                                  )}
+                                </button>
+                              ) : (
+                                <div className="w-9 h-9 rounded-xl bg-surface/50 text-slate-600 flex items-center justify-center shrink-0">
+                                  <Music2 size={16} />
+                                </div>
+                              )}
+
+                              {t.album_cover && (
+                                <img
+                                  src={t.album_cover}
+                                  alt={t.title}
+                                  className={`w-9 h-9 rounded-lg object-cover shrink-0 border border-purple-900/30 shadow-sm ${
+                                    isThisPlaying ? "ring-2 ring-brand-light ring-offset-1 ring-offset-[#141424]" : ""
+                                  }`}
+                                />
+                              )}
+
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <p className="text-xs font-semibold truncate text-white">{t.title}</p>
+                                  {isThisPlaying && (
+                                    <span className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-emerald-400 bg-emerald-950/70 border border-emerald-800/50 px-2 py-0.5 rounded-full shrink-0">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                                      Playing
+                                    </span>
+                                  )}
+                                  {isThisTrack && !isThisPlaying && !isThisBuffering && (
+                                    <span className="text-[10px] uppercase font-bold text-amber-400 bg-amber-950/70 border border-amber-800/50 px-2 py-0.5 rounded-full shrink-0">
+                                      Paused
+                                    </span>
+                                  )}
+                                  {isThisBuffering && (
+                                    <span className="text-[10px] uppercase font-bold text-purple-300 bg-purple-950/70 border border-purple-800/50 px-2 py-0.5 rounded-full shrink-0">
+                                      Buffering…
+                                    </span>
+                                  )}
+                                </div>
+                                {t.album && (
+                                  <p className="text-[11px] text-slate-400 truncate mt-0.5">{t.album}</p>
+                                )}
                               </div>
-                            )}
-                            <div className="min-w-0">
-                              <p className="text-xs font-medium truncate">{t.title}</p>
-                              {t.album && (
-                                <p className="text-[11px] text-slate-500 truncate">{t.album}</p>
+                            </div>
+
+                            <div className="flex items-center gap-3 shrink-0 relative z-10">
+                              {/* Animated Equalizer Wave Bars when playing */}
+                              {isThisPlaying && (
+                                <div className="flex items-end gap-0.5 h-4 w-5 px-1 py-0.5 bg-purple-950/80 rounded border border-purple-800/40 shrink-0" title="Audio playing">
+                                  <span className="w-0.5 bg-brand-light rounded-full animate-sound-bar-1" />
+                                  <span className="w-0.5 bg-brand-light rounded-full animate-sound-bar-2" />
+                                  <span className="w-0.5 bg-brand-light rounded-full animate-sound-bar-3" />
+                                  <span className="w-0.5 bg-brand-light rounded-full animate-sound-bar-4" />
+                                </div>
+                              )}
+
+                              {/* Time display: live counter if active, or 30s badge */}
+                              {isThisTrack ? (
+                                <span className="text-xs font-mono font-semibold text-brand-light shrink-0">
+                                  {formatTime(currentTime)} <span className="text-slate-500 font-normal">/ 0:30</span>
+                                </span>
+                              ) : (
+                                <span className="text-[11px] font-mono text-slate-400 bg-surface/60 border border-purple-900/30 px-2 py-0.5 rounded shrink-0">
+                                  30s preview
+                                </span>
                               )}
                             </div>
                           </div>
 
-                          <span className="text-xs text-slate-500 font-mono shrink-0">
-                            {formatDuration(t.duration)}
-                          </span>
+                          {/* Embedded progress bar when active track */}
+                          {isThisTrack && (
+                            <div className="w-full bg-purple-950/80 h-1.5 rounded-full overflow-hidden relative z-10">
+                              <div
+                                className="bg-gradient-to-r from-brand to-brand-light h-full rounded-full transition-all duration-150"
+                                style={{ width: `${progressPercent}%` }}
+                              />
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -421,10 +612,136 @@ export default function ArtistSuggestionModal({
           )}
         </div>
 
+        {/* Docked "Now Playing" Audio Player Bar */}
+        {activeTrack && (
+          <div className="mx-6 mb-3 p-3 rounded-2xl bg-gradient-to-r from-[#1c1236] via-[#151228] to-[#1c1236] border border-brand/50 shadow-2xl shadow-purple-950/80 flex flex-col gap-2 shrink-0 animate-tray-card-enter">
+            <div className="flex items-center justify-between gap-3">
+              {/* Left: Thumbnail & track info */}
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="relative shrink-0">
+                  {activeTrack.album_cover ? (
+                    <img
+                      src={activeTrack.album_cover}
+                      alt={activeTrack.title}
+                      className={`w-10 h-10 rounded-lg object-cover border border-purple-700/50 shadow ${
+                        isPlaying ? "ring-2 ring-brand-light" : ""
+                      }`}
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-lg bg-purple-900/40 border border-purple-800/40 flex items-center justify-center text-purple-300">
+                      <Disc3 size={20} className={isPlaying ? "animate-spin" : ""} />
+                    </div>
+                  )}
+                  {isPlaying && (
+                    <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+                    </span>
+                  )}
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold tracking-wider uppercase text-purple-400 bg-purple-950/80 border border-purple-800/50 px-1.5 py-0.5 rounded">
+                      30s Preview
+                    </span>
+                    <span className="text-xs text-slate-400 truncate">{artistName}</span>
+                  </div>
+                  <p className="text-sm font-bold text-white truncate mt-0.5">{activeTrack.title}</p>
+                </div>
+              </div>
+
+              {/* Center: Equalizer wave */}
+              {isPlaying && (
+                <div className="hidden sm:flex items-end gap-1 h-5 px-2 py-1 bg-purple-950/80 rounded-lg border border-purple-800/40" title="Preview playing">
+                  <span className="w-0.5 bg-brand-light rounded-full animate-sound-bar-1" />
+                  <span className="w-0.5 bg-brand-light rounded-full animate-sound-bar-2" />
+                  <span className="w-0.5 bg-brand-light rounded-full animate-sound-bar-3" />
+                  <span className="w-0.5 bg-brand-light rounded-full animate-sound-bar-4" />
+                </div>
+              )}
+
+              {/* Right: Master transport + Volume + Dismiss */}
+              <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                <button
+                  onClick={() => togglePlay(activeTrack)}
+                  title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+                  aria-label={isPlaying ? "Pause track" : "Play track"}
+                  className="w-10 h-10 rounded-full bg-brand hover:bg-brand-light text-white flex items-center justify-center shadow-lg shadow-purple-900/60 transition-all hover:scale-105 active:scale-95"
+                >
+                  {isBuffering ? (
+                    <Loader2 size={18} className="animate-spin text-white" />
+                  ) : isPlaying ? (
+                    <Pause size={18} />
+                  ) : (
+                    <Play size={18} className="ml-0.5" />
+                  )}
+                </button>
+
+                <button
+                  onClick={stopAudio}
+                  title="Stop preview"
+                  aria-label="Stop preview"
+                  className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+                >
+                  <Square size={15} />
+                </button>
+
+                <div className="hidden sm:flex items-center gap-1.5 pl-2 border-l border-purple-800/40">
+                  <button
+                    onClick={toggleMute}
+                    title={isMuted ? "Unmute" : "Mute"}
+                    aria-label={isMuted ? "Unmute" : "Mute"}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+                  >
+                    {isMuted || volume === 0 ? (
+                      <VolumeX size={16} className="text-red-400" />
+                    ) : volume < 0.5 ? (
+                      <Volume1 size={16} />
+                    ) : (
+                      <Volume2 size={16} />
+                    )}
+                  </button>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={isMuted ? 0 : volume}
+                    onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                    className="w-16 accent-brand-light h-1 bg-purple-950 rounded cursor-pointer"
+                    title={`Volume: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Scrubber slider & Time counter */}
+            <div className="flex items-center gap-2.5 pt-1">
+              <span className="text-[11px] font-mono text-brand-light font-semibold w-8 text-right shrink-0">
+                {formatTime(currentTime)}
+              </span>
+              <input
+                type="range"
+                min="0"
+                max={duration || 30}
+                step="0.1"
+                value={currentTime}
+                onChange={(e) => handleSeek(Number(e.target.value))}
+                className="flex-1 accent-brand-light h-1.5 bg-purple-950/80 rounded-full cursor-pointer hover:h-2 transition-all"
+                title="Seek preview position"
+              />
+              <span className="text-[11px] font-mono text-slate-400 w-8 shrink-0">
+                {formatTime(duration || 30)}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Modal Actions Footer */}
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-purple-900/30 bg-surface-raised/50 shrink-0">
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
           >
             Close

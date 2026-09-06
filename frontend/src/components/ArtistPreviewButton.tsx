@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Play } from "lucide-react";
+import { Play, X } from "lucide-react";
 import { req } from "../lib/api";
 
 // AD-18, reworked v0.79.0 (user feedback) — the Play button only renders once a
@@ -56,7 +56,18 @@ export default function ArtistPreviewButton({ artistName }: { artistName: string
 
   if (revealed) {
     return (
-      <div className="mt-2 space-y-2">
+      <div className="mt-2 space-y-2 p-2 rounded-lg bg-surface/50 border border-purple-900/30">
+        <div className="flex items-center justify-between text-xs text-slate-400">
+          <span className="truncate pr-2 font-medium">Preview ({artistName})</span>
+          <button
+            onClick={() => setRevealed(false)}
+            title="Close preview"
+            aria-label="Close preview"
+            className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+          >
+            <X size={13} />
+          </button>
+        </div>
         {available.map(s => (
           <div key={s.source}>
             {s.source === "youtube" && s.video_id && (
