@@ -1731,3 +1731,183 @@ async def get_stats(db) -> dict[str, Any]:
         "last_run_at": last_run.started_at.isoformat() if last_run else None,
         "last_run_message": last_run.message if last_run else None,
     }
+
+
+async def get_candidate_insights(db, candidate_id: int) -> dict[str, Any] | None:
+    """Deep suggestion insights for an artist discovery candidate:
+    - Lane identity & description
+    - Mathematical similarity & gate proximity
+    - Library seed network & Plex play counts
+    - Shared vs unique genre tags
+    - Noise & non-music detection
+    - Deezer top tracks with 30s audio previews (zero-config)
+    """
+    row = db.query(DiscoveredArtist).filter_by(id=candidate_id).first()
+    if not row:
+        return None
+
+    cfg = load_settings(db)
+    qdrant = _qdrant(db)
+
+    genres = clean_tags(json.loads(row.genres) if row.genres else [])
+    mood_tags = clean_tags(json.loads(row.mood_tags) if row.mood_tags else [])
+    seed_mbids = json.loads(row.associated_seed_mbids) if row.associated_seed_mbids else []
+    seed_names = json.loads(row.seed_artist_names) if row.seed_artist_names else []
+    if not seed_names and row.seed_artist_name:
+        seed_names = [row.seed_artist_name]
+
+    source = row.source or "centroid"
+    if source == "centroid":
+        lane_label = "Taste Centroid (All-Time)"
+        lane_desc = "Vector cosine similarity to your all-time top 15 most-played artists in Qdrant."
+    elif source == "centroid_recent":
+        lane_label = "Recent Taste Lane"
+        lane_desc = "Vector cosine similarity to your recently-played artists from the last 90 days."
+    elif source.startswith("centroid_mood_"):
+        mood = source[len("centroid_mood_"):].replace("_", " ").title()
+        lane_label = f"Mood Lane: {mood}"
+        lane_desc = f"Matches artists tagged '{mood}' in your library's vector space."
+    elif source == "graph":
+        lane_label = "Library Graph Expansion"
+        lane_desc = "Discovered via related-artist connections branching from artists monitored in Lidarr."
+    elif source == "ingest":
+        lane_label = "Scrobble Ingestion Expansion"
+        lane_desc = "Discovered via similar-artist expansion of recent Last.fm listening scrobbles."
+    else:
+        lane_label = source.capitalize()
+        lane_desc = "Discovered through the taste curation pipeline."
+
+    sim_score = row.similarity_score
+    sim_pct = round(sim_score * 100) if sim_score is not None else None
+    conn_count = max(len(seed_mbids), len(seed_names))
+
+    auto_add_threshold = _effective_auto_add_threshold(cfg)
+    suggest_threshold = max(cfg.suggest_connection_threshold, 1)
+
+    if auto_add_threshold == 0:
+        auto_add_eligible = False
+        auto_add_reason = "Auto-add is disabled in Settings (manual review required)."
+    elif conn_count >= auto_add_threshold:
+        auto_add_eligible = True
+        auto_add_reason = f"Met {conn_count}/{auto_add_threshold} connections required for auto-add."
+    else:
+        auto_add_eligible = False
+        diff = auto_add_threshold - conn_count
+        auto_add_reason = f"Has {conn_count}/{auto_add_threshold} required connections (needs {diff} more to auto-add)."
+
+    gate = {
+        "lane": source,
+        "lane_label": lane_label,
+        "lane_description": lane_desc,
+        "similarity_score": sim_score,
+        "similarity_percent": sim_pct,
+        "connection_count": conn_count,
+        "suggest_threshold": suggest_threshold,
+        "auto_add_threshold": auto_add_threshold,
+        "auto_add_eligible": auto_add_eligible,
+        "auto_add_reason": auto_add_reason,
+    }
+
+    # Query library plays from MediaItem
+    from app.models.media import MediaItem
+    from sqlalchemy import func
+
+    seed_plays: dict[str, int] = {}
+    if seed_names:
+        try:
+            rows_plays = (
+                db.query(MediaItem.parent_title, func.sum(MediaItem.watch_count))
+                .filter(MediaItem.media_type == "track", MediaItem.parent_title.in_(seed_names))
+                .group_by(MediaItem.parent_title)
+                .all()
+            )
+            for stitle, ssum in rows_plays:
+                if stitle:
+                    seed_plays[stitle.lower()] = int(ssum or 0)
+        except Exception as e:
+            logger.debug(f"Artist Discovery insights: seed play query failed: {e}")
+
+    # Lidarr monitored status of seeds
+    lidarr_names = set()
+    try:
+        lidarr_row = db.query(Integration).filter_by(name="lidarr", enabled=True).first()
+        if lidarr_row:
+            from app.api.v1.integrations import _get_client
+            lidarr = _get_client(lidarr_row)
+            _mbid_idx, name_idx = await _lidarr_artist_index(lidarr)
+            lidarr_names = set(name_idx.keys())
+    except Exception:
+        pass
+
+    # Retrieve seed points from Qdrant for seed genres
+    seed_genres_map: dict[str, list[str]] = {}
+    if qdrant and seed_mbids:
+        try:
+            valid_mbids = [m for m in seed_mbids if _UUID_RE.match(m)]
+            if valid_mbids:
+                points = await qdrant.retrieve_points([qdrant.point_id(m, "") for m in valid_mbids])
+                for p in points:
+                    p_payload = p.get("payload") or {}
+                    p_name = p_payload.get("artist_name")
+                    p_genres = clean_tags(p_payload.get("genres") or [])
+                    if p_name:
+                        seed_genres_map[p_name.lower()] = p_genres
+        except Exception:
+            pass
+
+    all_seed_genres = set()
+    seeds_out = []
+    for s_name in seed_names:
+        s_norm = s_name.lower()
+        s_genres = seed_genres_map.get(s_norm, [])
+        all_seed_genres.update(g.lower() for g in s_genres)
+        shared_with_seed = [g for g in genres if g.lower() in [sg.lower() for sg in s_genres]]
+        seeds_out.append({
+            "name": s_name,
+            "musicbrainz_id": None,
+            "plays_in_library": seed_plays.get(s_norm, 0),
+            "in_lidarr": _norm_artist(s_name) in lidarr_names,
+            "shared_genres": shared_with_seed,
+        })
+
+    shared_genres = [g for g in genres if g.lower() in all_seed_genres]
+    unique_genres = [g for g in genres if g.lower() not in all_seed_genres]
+
+    # Noise & metadata warnings
+    is_low_metadata = (not row.musicbrainz_id) and (len(genres) == 0)
+    warning = None
+    if is_low_metadata:
+        warning = "Missing MusicBrainz ID and genre tags. This candidate may have been generated from video, podcast, or creator scrobbles."
+
+    # Deezer top tracks
+    from app.integrations import deezer
+    top_tracks = await deezer.get_artist_top_tracks(row.artist_name, limit=5)
+
+    if sim_pct is not None:
+        summary = f"{sim_pct}% match to {lane_label.lower()}"
+        if seeds_out:
+            summary += f", influenced by {', '.join(s['name'] for s in seeds_out[:3])}"
+    elif seeds_out:
+        summary = f"Surfaced via {conn_count} library connections ({', '.join(s['name'] for s in seeds_out[:3])})"
+    else:
+        summary = f"Surfaced via {lane_label}"
+
+    return {
+        "id": row.id,
+        "artist_name": row.artist_name,
+        "musicbrainz_id": row.musicbrainz_id,
+        "image_url": row.image_url,
+        "bio": row.bio,
+        "years_active": row.years_active,
+        "genres": genres,
+        "shared_genres": shared_genres,
+        "unique_genres": unique_genres,
+        "mood_tags": mood_tags,
+        "era": row.era,
+        "gate": gate,
+        "seeds": seeds_out,
+        "top_tracks": top_tracks,
+        "is_low_metadata": is_low_metadata,
+        "warning": warning,
+        "summary": summary,
+    }

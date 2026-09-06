@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Music2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Music2, Sparkles, AlertTriangle } from "lucide-react";
 
 // Shared visual body for an artist result card — used by Music -> Artist
 // Discovery's candidate queue and Music -> Related Artists' search results.
@@ -14,12 +14,12 @@ function ArtistAvatar({ url, name }: { url: string | null; name: string }) {
         src={url}
         alt={name}
         onError={() => setFailed(true)}
-        className="w-16 h-16 rounded-lg object-cover shrink-0 bg-surface border border-purple-900/30"
+        className="w-16 h-16 rounded-xl object-cover shrink-0 bg-surface border border-purple-900/30 shadow-sm"
       />
     );
   }
   return (
-    <div className="w-16 h-16 rounded-lg shrink-0 bg-surface border border-purple-900/30 flex items-center justify-center">
+    <div className="w-16 h-16 rounded-xl shrink-0 bg-surface border border-purple-900/30 flex items-center justify-center">
       <Music2 size={22} className="text-slate-600" />
     </div>
   );
@@ -30,7 +30,25 @@ export interface SourceBadge {
   className: string;
 }
 
-export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, era, subtitle, actions, sourceBadges, preview }: {
+export default function ArtistCard({
+  name,
+  yearsActive,
+  imageUrl,
+  bio,
+  genres,
+  era,
+  subtitle,
+  actions,
+  sourceBadges,
+  preview,
+  scorePill,
+  laneBadge,
+  isLowMetadata,
+  onInspect,
+  selectable,
+  selected,
+  onToggleSelect,
+}: {
   name: string;
   yearsActive?: string | null;
   imageUrl: string | null;
@@ -40,10 +58,14 @@ export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, e
   subtitle: string;
   actions: React.ReactNode;
   sourceBadges?: SourceBadge[];
-  // AD-18 — a caller-supplied preview trigger/player (see ArtistPreviewButton),
-  // rendered full-width below the bio rather than squeezed into the small
-  // actions icon row, since its expanded state is an iframe/audio player.
   preview?: React.ReactNode;
+  scorePill?: { label: string; className: string };
+  laneBadge?: { label: string; className: string; icon?: React.ReactNode };
+  isLowMetadata?: boolean;
+  onInspect?: () => void;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const bioText = bio || "";
@@ -51,17 +73,57 @@ export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, e
   const genreList = genres || [];
 
   return (
-    <div className="bg-surface-raised border border-purple-900/30 rounded-lg p-4 flex gap-3">
+    <div
+      className={`bg-surface-raised border rounded-xl p-4 flex gap-3.5 transition-all ${
+        selected
+          ? "border-brand bg-purple-950/20 shadow-md shadow-purple-950/20"
+          : "border-purple-900/30 hover:border-purple-800/50"
+      }`}
+    >
+      {selectable && (
+        <div className="flex items-center shrink-0">
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={() => onToggleSelect?.()}
+            className="w-4 h-4 rounded border-purple-900/50 text-brand bg-surface focus:ring-brand cursor-pointer"
+          />
+        </div>
+      )}
+
       <ArtistAvatar url={imageUrl} name={name} />
+
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-white text-sm font-medium truncate">
-              {name}
-              {yearsActive && <span className="text-slate-500 font-normal"> · {yearsActive}</span>}
-            </p>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <p className="text-xs text-slate-500">{subtitle}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-white text-sm font-semibold truncate">
+                {name}
+                {yearsActive && <span className="text-slate-500 font-normal"> · {yearsActive}</span>}
+              </p>
+
+              {scorePill && (
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full leading-none ${scorePill.className}`}>
+                  {scorePill.label}
+                </span>
+              )}
+
+              {laneBadge && (
+                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full leading-none flex items-center gap-1 ${laneBadge.className}`}>
+                  {laneBadge.icon}
+                  {laneBadge.label}
+                </span>
+              )}
+
+              {isLowMetadata && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full leading-none bg-amber-950/60 text-amber-300 border border-amber-800/40 flex items-center gap-1" title="Missing MusicBrainz ID and genres">
+                  <AlertTriangle size={10} /> Low Metadata
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+              <p className="text-xs text-slate-400 leading-snug">{subtitle}</p>
               {sourceBadges && sourceBadges.length > 0 && (
                 <span className="flex gap-1">
                   {sourceBadges.map(b => (
@@ -73,15 +135,31 @@ export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, e
               )}
             </div>
           </div>
-          <div className="flex gap-1 shrink-0">{actions}</div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            {onInspect && (
+              <button
+                onClick={onInspect}
+                title="View Suggestion Insights"
+                aria-label="View Suggestion Insights"
+                className="p-1.5 rounded-lg hover:bg-purple-900/40 text-purple-400 hover:text-purple-200 transition-colors"
+              >
+                <Sparkles size={15} />
+              </button>
+            )}
+            {actions}
+          </div>
         </div>
 
         {(genreList.length > 0 || era) && (
           <div className="flex flex-wrap gap-1 mt-2">
             {genreList.slice(0, 5).map(g => (
-              <span key={g} className="text-xs bg-purple-900/40 text-purple-200 px-2 py-0.5 rounded">{g}</span>
+              <span key={g} className="text-xs bg-purple-900/40 text-purple-200 px-2 py-0.5 rounded-lg">{g}</span>
             ))}
-            {era && <span className="text-xs bg-surface text-slate-400 px-2 py-0.5 rounded border border-purple-900/40">{era}</span>}
+            {genreList.length > 5 && (
+              <span className="text-xs text-slate-500 px-1 py-0.5">+{genreList.length - 5}</span>
+            )}
+            {era && <span className="text-xs bg-surface text-slate-400 px-2 py-0.5 rounded-lg border border-purple-900/40">{era}</span>}
           </div>
         )}
 
@@ -104,3 +182,4 @@ export default function ArtistCard({ name, yearsActive, imageUrl, bio, genres, e
     </div>
   );
 }
+

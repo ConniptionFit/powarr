@@ -38,6 +38,58 @@ class CandidateOut(BaseModel):
     image_url: Optional[str] = None
     bio: Optional[str] = None
     years_active: Optional[str] = None
+    connection_count: int = 0
+    is_low_metadata: bool = False
+
+
+class SeedInsight(BaseModel):
+    name: str
+    musicbrainz_id: Optional[str] = None
+    plays_in_library: int = 0
+    in_lidarr: bool = False
+    shared_genres: list[str] = []
+
+
+class GateInsight(BaseModel):
+    lane: str
+    lane_label: str
+    lane_description: str
+    similarity_score: Optional[float] = None
+    similarity_percent: Optional[int] = None
+    connection_count: int = 0
+    suggest_threshold: int = 0
+    auto_add_threshold: int = 0
+    auto_add_eligible: bool = False
+    auto_add_reason: str
+
+
+class TrackPreview(BaseModel):
+    id: Optional[int] = None
+    title: str
+    duration: int = 0
+    preview: Optional[str] = None
+    album: Optional[str] = None
+    album_cover: Optional[str] = None
+
+
+class CandidateInsightsOut(BaseModel):
+    id: int
+    artist_name: str
+    musicbrainz_id: Optional[str] = None
+    image_url: Optional[str] = None
+    bio: Optional[str] = None
+    years_active: Optional[str] = None
+    genres: list[str] = []
+    shared_genres: list[str] = []
+    unique_genres: list[str] = []
+    mood_tags: list[str] = []
+    era: Optional[str] = None
+    gate: GateInsight
+    seeds: list[SeedInsight] = []
+    top_tracks: list[TrackPreview] = []
+    is_low_metadata: bool = False
+    warning: Optional[str] = None
+    summary: str
 
 
 def _match_rating_key(row: DiscoveredArtist) -> tuple[bool, float, int]:
@@ -54,17 +106,27 @@ def _match_rating_key(row: DiscoveredArtist) -> tuple[bool, float, int]:
 def _candidate_out(row: DiscoveredArtist) -> CandidateOut:
     # clean_tags/clean_era also run at candidate creation — re-applying here
     # covers rows stored before the placeholder filtering existed (AD-06).
+    genres = service.clean_tags(json.loads(row.genres) if row.genres else [])
+    seed_mbids = json.loads(row.associated_seed_mbids) if row.associated_seed_mbids else []
+    seed_names = json.loads(row.seed_artist_names) if row.seed_artist_names else []
+    if not seed_names and row.seed_artist_name:
+        seed_names = [row.seed_artist_name]
+    conn_count = max(len(seed_mbids), len(seed_names))
+    is_low = (not row.musicbrainz_id) and (len(genres) == 0)
+
     return CandidateOut(
         id=row.id, musicbrainz_id=row.musicbrainz_id, artist_name=row.artist_name,
-        genres=service.clean_tags(json.loads(row.genres) if row.genres else []),
+        genres=genres,
         mood_tags=service.clean_tags(json.loads(row.mood_tags) if row.mood_tags else []),
         era=service.clean_era(row.era), source=row.source, similarity_score=row.similarity_score,
-        associated_seed_mbids=json.loads(row.associated_seed_mbids) if row.associated_seed_mbids else [],
+        associated_seed_mbids=seed_mbids,
         seed_artist_name=row.seed_artist_name,
-        seed_artist_names=json.loads(row.seed_artist_names) if row.seed_artist_names else [],
+        seed_artist_names=seed_names,
         status=row.status,
         lidarr_artist_id=row.lidarr_artist_id, created_at=row.created_at,
         image_url=row.image_url, bio=row.bio, years_active=row.years_active,
+        connection_count=conn_count,
+        is_low_metadata=is_low,
     )
 
 
@@ -114,6 +176,14 @@ def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return _candidate_out(row)
+
+
+@router.get("/candidates/{candidate_id}/insights", response_model=CandidateInsightsOut)
+async def get_candidate_insights(candidate_id: int, db: Session = Depends(get_db)):
+    insights = await service.get_candidate_insights(db, candidate_id)
+    if not insights:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    return CandidateInsightsOut(**insights)
 
 
 @router.post("/candidates/{candidate_id}/accept")

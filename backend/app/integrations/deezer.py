@@ -52,3 +52,63 @@ async def search_artist_image(name: str) -> str | None:
             return None
     except Exception:
         return None
+
+
+_top_tracks_cache: dict[str, tuple[float, list[dict]]] = {}
+_TOP_TRACKS_CACHE_TTL = 86400.0  # 24 hours
+
+
+def clear_top_tracks_cache() -> None:
+    """Test hook."""
+    _top_tracks_cache.clear()
+
+
+async def get_artist_top_tracks(name: str, limit: int = 5) -> list[dict]:
+    """GET /artist/{id}/top?limit= — top tracks with 30s audio previews, album title and cover.
+    Only trusted when Deezer search's top hit matches the requested artist name
+    case-insensitively, preventing mismatched discographies on niche names.
+    Cached in-process (24h hits / 1h misses)."""
+    if not name:
+        return []
+    import time
+    name_norm = name.strip().lower()
+    now = time.time()
+    cached = _top_tracks_cache.get(name_norm)
+    if cached and now < cached[0]:
+        return cached[1]
+
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.get(f"{_API}/search/artist",
+                                 params={"q": name, "limit": 1},
+                                 headers={"User-Agent": _USER_AGENT})
+            if r.status_code != 200:
+                return []
+            hits = r.json().get("data") or []
+            if not hits or (hits[0].get("name") or "").strip().lower() != name_norm:
+                _top_tracks_cache[name_norm] = (now + 3600.0, [])  # 1h miss cache
+                return []
+            artist_id = hits[0].get("id")
+            if not artist_id:
+                return []
+
+            top_r = await client.get(f"{_API}/artist/{artist_id}/top",
+                                     params={"limit": limit},
+                                     headers={"User-Agent": _USER_AGENT})
+            if top_r.status_code != 200:
+                return []
+            tracks_raw = top_r.json().get("data") or []
+            tracks = []
+            for t in tracks_raw:
+                tracks.append({
+                    "id": t.get("id"),
+                    "title": t.get("title") or t.get("title_short") or "Unknown Track",
+                    "duration": t.get("duration") or 0,
+                    "preview": t.get("preview"),  # 30s mp3 URL
+                    "album": (t.get("album") or {}).get("title"),
+                    "album_cover": (t.get("album") or {}).get("cover_medium") or (t.get("album") or {}).get("cover"),
+                })
+            _top_tracks_cache[name_norm] = (now + _TOP_TRACKS_CACHE_TTL, tracks)
+            return tracks
+    except Exception:
+        return []
