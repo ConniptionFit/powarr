@@ -1,0 +1,748 @@
+import { Fragment, useState, useMemo, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3, ShieldAlert, Link2, Calculator } from "lucide-react";
+import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem, type EpisodeDeleteMode } from "../../lib/api";
+import ScoreBreakdownModal from "../../components/ScoreBreakdownModal";
+import { usePersistedState } from "../../lib/usePersistedState";
+import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
+import ClampedText from "../../components/ClampedText";
+import BotState from "../../components/BotState";
+import DeletionPreviewModal from "../../components/DeletionPreviewModal";
+import ArrLinkModal from "../../components/ArrLinkModal";
+import { PLATFORM_META, PLATFORM_ORDER, type PlatformName } from "../../components/PlatformIcon";
+import { SkeletonTable } from "../../components/Skeleton";
+import Kbd from "../../components/Kbd";
+import ScrollFadeX from "../../components/ScrollFadeX";
+
+function ScoreBadge({ score }: { score: number }) {
+  const color =
+    score >= 75 ? "bg-red-900/60 text-red-300" :
+    score >= 50 ? "bg-yellow-900/60 text-yellow-300" :
+    "bg-green-900/60 text-green-300";
+  return <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold ${color}`}>{score.toFixed(0)}</span>;
+}
+
+/** True when the click landed on (or inside) an interactive control. */
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return !!target.closest("button, a, input, select, textarea, label, [role='button']");
+}
+
+type SortKey = "score" | "file_size" | "watch_count" | "last_watched_at";
+
+interface ShowGroup {
+  parent_title: string;
+  episodes: MediaItem[];
+  total_size: number;
+  total_watch_count: number;
+  last_watched_at: string | null;
+  avg_score: number;
+  sonarr_id: number | null;
+  radarr_id: number | null;
+  lidarr_id: number | null;
+  ids: number[];
+}
+
+function groupByShow(items: MediaItem[]): ShowGroup[] {
+  const map = new Map<string, ShowGroup>();
+  for (const ep of items) {
+    const key = ep.parent_title || ep.title;
+    if (!map.has(key)) {
+      map.set(key, {
+        parent_title: key,
+        episodes: [],
+        total_size: 0,
+        total_watch_count: 0,
+        last_watched_at: null,
+        avg_score: 0,
+        sonarr_id: ep.sonarr_id,
+        radarr_id: ep.radarr_id,
+        lidarr_id: ep.lidarr_id,
+        ids: [],
+      });
+    }
+    const g = map.get(key)!;
+    g.episodes.push(ep);
+    g.total_size += ep.file_size;
+    g.total_watch_count += ep.watch_count;
+    g.ids.push(ep.id);
+    if (ep.sonarr_id) g.sonarr_id = ep.sonarr_id;
+    if (ep.radarr_id) g.radarr_id = ep.radarr_id;
+    if (ep.lidarr_id) g.lidarr_id = ep.lidarr_id;
+    if (ep.last_watched_at) {
+      if (!g.last_watched_at || ep.last_watched_at > g.last_watched_at) {
+        g.last_watched_at = ep.last_watched_at;
+      }
+    }
+  }
+  for (const g of map.values()) {
+    g.avg_score = g.episodes.reduce((s, e) => s + e.score, 0) / g.episodes.length;
+  }
+  return Array.from(map.values());
+}
+
+function matchesPlatform(item: { sonarr_id: number | null; radarr_id: number | null; lidarr_id: number | null }, platform: PlatformName): boolean {
+  if (platform === "sonarr") return item.sonarr_id != null;
+  if (platform === "radarr") return item.radarr_id != null;
+  if (platform === "lidarr") return item.lidarr_id != null;
+  return false; // readarr has no MediaItem FK — chip omitted on this page
+}
+
+export default function DeletionSuggestions() {
+  const qc = useQueryClient();
+  // Filters + sort persist per-browser (v0.27.0, Approved Queue #11)
+  const [minScore, setMinScore] = usePersistedState("powarr.deletionSuggestions.minScore", 40);
+  const [mediaType, setMediaType] = usePersistedState("powarr.deletionSuggestions.mediaType", "");
+  const [showMode, setShowMode] = usePersistedState<"episode" | "show">("powarr.deletionSuggestions.showMode", "show");
+  const [sortBy, setSortBy] = usePersistedState<SortKey>("powarr.deletionSuggestions.sortBy", "score");
+  const [order, setOrder] = usePersistedState<"asc" | "desc">("powarr.deletionSuggestions.order", "desc");
+  const [search, setSearch] = usePersistedState("powarr.deletionSuggestions.search", "");
+  const [platformFilter, setPlatformFilter] = usePersistedState<PlatformName | "">("powarr.deletionSuggestions.platformFilter", "");
+  const [density, setDensity] = usePersistedState<TableDensity>(DENSITY_STORAGE_KEY, "comfortable");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [previewIds, setPreviewIds] = useState<number[] | null>(null); // LIB-01 dry-run preview modal
+  const [arrLinkItem, setArrLinkItem] = useState<MediaItem | null>(null); // INT-02 manual *arr link fix modal
+  const [focusedKey, setFocusedKey] = useState<string | null>(null); // UX-06 keyboard focus (group title or item id)
+  const [breakdownItem, setBreakdownItem] = useState<MediaItem | null>(null);
+  const [explainBusy, setExplainBusy] = useState<number | null>(null);
+  const [explainMsg, setExplainMsg] = useState<Record<number, string>>({});
+  const [streamText, setStreamText] = useState<Record<number, string>>({});
+
+  // LIB-07 — the search term is now sent to the API instead of filtering the
+  // fetched page, so debounce it: every keystroke would otherwise re-query a
+  // 160k-row table. Same 250ms as ArrLinkModal's candidate search.
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const fetchType = mediaType || undefined;
+  const params: Record<string, string | number | boolean> = {
+    min_score: minScore,
+    sort_by: sortBy,
+    order,
+    limit: 500,
+    ...(debouncedSearch.trim() ? { search: debouncedSearch.trim() } : {}),
+    // When show mode is active, always fetch episodes
+    ...(showMode === "show" && !mediaType ? { media_type: "episode" } : {}),
+    ...(fetchType ? { media_type: fetchType } : {}),
+  };
+
+  const { data: rawItems = [], isLoading } = useQuery({
+    queryKey: ["media", params],
+    queryFn: () => mediaApi.list(params),
+  });
+
+  const { data: matchSettings } = useQuery({
+    queryKey: ["import-matching"],
+    queryFn: settingsApi.getImportMatching,
+  });
+
+  // Deletion page: Radarr/Sonarr/Lidarr only (no readarr_id on MediaItem)
+  const enabledPlatforms = useMemo(() => {
+    const deletionPlatforms = PLATFORM_ORDER.filter(p => p !== "readarr");
+    if (!matchSettings) return deletionPlatforms;
+    return deletionPlatforms.filter(p => matchSettings[`${p}_enabled` as keyof typeof matchSettings] !== false);
+  }, [matchSettings]);
+
+  const filteredItems = useMemo(() => {
+    let arr = rawItems;
+    if (platformFilter && platformFilter !== "readarr") {
+      arr = arr.filter(i => matchesPlatform(i, platformFilter));
+    }
+    // Title/year search is applied server-side (LIB-07) — filtering here too
+    // would just re-filter the same rows. The platform filter above stays
+    // client-side: it reads *arr link ids already present on the fetched rows.
+    return arr;
+  }, [rawItems, platformFilter]);
+
+  const isShowMode = showMode === "show" && (!mediaType || mediaType === "episode");
+  const showGroups = useMemo(() => {
+    if (!isShowMode) return [];
+    const episodes = filteredItems.filter(i => i.media_type === "episode");
+    const groups = groupByShow(episodes);
+    if (sortBy === "score") groups.sort((a, b) => order === "desc" ? b.avg_score - a.avg_score : a.avg_score - b.avg_score);
+    if (sortBy === "file_size") groups.sort((a, b) => order === "desc" ? b.total_size - a.total_size : a.total_size - b.total_size);
+    if (sortBy === "watch_count") groups.sort((a, b) => order === "desc" ? b.total_watch_count - a.total_watch_count : a.total_watch_count - b.total_watch_count);
+    return groups;
+  }, [filteredItems, isShowMode, sortBy, order]);
+
+  const displayItems = isShowMode ? [] : filteredItems;
+
+  const deleteBatchMut = useMutation({
+    mutationFn: ({ ids, deleteMode }: { ids: number[]; deleteMode?: EpisodeDeleteMode }) =>
+      mediaApi.deleteBatch(ids, deleteMode),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["media"] }); qc.invalidateQueries({ queryKey: ["stats"] }); setPreviewIds(null); setSelected(new Set()); },
+  });
+
+  const ignoreMut = useMutation({
+    mutationFn: ({ id, ignored }: { id: number; ignored: boolean }) => mediaApi.ignore(id, ignored),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["media"] }),
+  });
+
+  const toggleSelect = (id: number) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectMany = (ids: number[]) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      const allSelected = ids.every(id => next.has(id));
+      if (allSelected) ids.forEach(id => next.delete(id));
+      else ids.forEach(id => next.add(id));
+      return next;
+    });
+  };
+
+  const allVisibleIds = useMemo(() => {
+    if (isShowMode) return showGroups.flatMap(g => g.ids);
+    return displayItems.map(i => i.id);
+  }, [isShowMode, showGroups, displayItems]);
+
+  const toggleSelectAll = () => {
+    setSelected(prev =>
+      prev.size === allVisibleIds.length && allVisibleIds.length > 0
+        ? new Set()
+        : new Set(allVisibleIds)
+    );
+  };
+
+  // Streams rationale tokens over SSE so long verbose generations are visible as
+  // they happen; falls back to the plain POST when the stream can't start
+  // (busy 409, not configured, proxy without SSE support).
+  const explain = (item: MediaItem) => {
+    setExplainBusy(item.id);
+    setExplainMsg(m => ({ ...m, [item.id]: "" }));
+    setStreamText(s => ({ ...s, [item.id]: "" }));
+    let gotDelta = false;
+    const es = new EventSource(`/api/v1/media/${item.id}/explain/stream`);
+    const finish = () => { es.close(); setExplainBusy(null); };
+    es.onmessage = ev => {
+      try {
+        const d = JSON.parse(ev.data);
+        if (d.delta) { gotDelta = true; setStreamText(s => ({ ...s, [item.id]: (s[item.id] ?? "") + d.delta })); }
+        if (d.done) {
+          if (!d.rationale) setExplainMsg(m => ({ ...m, [item.id]: d.message ?? "No response from LLM" }));
+          qc.invalidateQueries({ queryKey: ["media"] });
+          finish();
+        }
+      } catch { /* keepalive */ }
+    };
+    es.onerror = async () => {
+      es.close();
+      if (gotDelta) { qc.invalidateQueries({ queryKey: ["media"] }); setExplainBusy(null); return; }
+      try {
+        const r = await mediaApi.explain(item.id, !!item.llm_rationale);
+        if (r.rationale) qc.invalidateQueries({ queryKey: ["media"] });
+        else setExplainMsg(m => ({ ...m, [item.id]: r.message ?? "No response from LLM" }));
+      } catch (e: unknown) {
+        setExplainMsg(m => ({ ...m, [item.id]: `Explain failed: ${e instanceof Error ? e.message : String(e)}` }));
+      }
+      setExplainBusy(null);
+    };
+  };
+
+  // Once fresh list data lands, cached rationales are current — drop finished
+  // stream buffers so the stored text (with its date stamp) takes over.
+  useEffect(() => {
+    // Bail out on an already-empty buffer (same reference = no re-render):
+    // while the query is pending, `rawItems` falls back to a fresh [] every
+    // render, and unconditionally setting a fresh {} here looped render → effect
+    // → render until the data arrived ("Maximum update depth exceeded").
+    if (explainBusy === null) setStreamText(s => Object.keys(s).length ? {} : s);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawItems]);
+
+  // A finished batch LLM run publishes over the same SSE channel the import
+  // scanner uses — refresh so freshly cached rationales appear without a reload.
+  useEffect(() => {
+    const es = new EventSource("/api/v1/imports/events");
+    es.onmessage = ev => {
+      try {
+        const data = JSON.parse(ev.data);
+        if (data.type === "media_llm_run" || data.type === "media_llm_second_opinion_run")
+          qc.invalidateQueries({ queryKey: ["media"] });
+      } catch { /* keepalive */ }
+    };
+    return () => es.close();
+  }, [qc]);
+
+  // Batch "explain all visible" (v0.27.0, Approved Queue #8): one background LLM
+  // run over the currently listed items — progress lands in the Active Processes
+  // tray, and the media_llm_run SSE handler above refreshes rationales as it ends.
+  const [batchMsg, setBatchMsg] = useState<string | null>(null);
+  const explainVisible = async () => {
+    setBatchMsg(null);
+    try {
+      const r = await mediaApi.llmRun(displayItems.map(i => i.id));
+      setBatchMsg(r.message);
+    } catch (e: unknown) {
+      setBatchMsg(`LLM run failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  // LLM-07 — same batch shape as explainVisible, own SSE event + endpoint. Fails
+  // soft server-side (400 message) when the second_opinion task isn't enabled.
+  const secondOpinionVisible = async () => {
+    setBatchMsg(null);
+    try {
+      const r = await mediaApi.secondOpinionRun(displayItems.map(i => i.id));
+      setBatchMsg(r.message);
+    } catch (e: unknown) {
+      setBatchMsg(`Second opinion run failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      // Progress + completion now show in the Active Processes tray (bottom-right)
+      // instead of a blocking alert() — this just kicks the sync off and lets
+      // the tray carry the rest.
+      await integrationsApi.syncPlex();
+      qc.invalidateQueries({ queryKey: ["media"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
+    } catch (e: unknown) {
+      setSyncMsg(`Sync failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // UX-06 — same keyboard triage pattern as Match Review (UX-05): j/k move a
+  // focus ring through the visible rows (show groups or single items), x
+  // selects, d opens the non-destructive LIB-01 deletion preview for the
+  // focused row (the modal's Confirm stays click-only — no key ever deletes
+  // anything directly), i toggles ignore on a single item (reversible), Esc
+  // clears focus. Ignored while typing, with a modifier held, or while a
+  // modal is open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (previewIds !== null || arrLinkItem !== null) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable=true]")) return;
+      if (!["j", "k", "x", "d", "i", "Escape"].includes(e.key)) return;
+      if (e.key === "Escape") { setFocusedKey(null); return; }
+      const rows: { key: string; ids: number[]; item?: MediaItem }[] = isShowMode
+        ? showGroups.map(g => ({ key: g.parent_title, ids: g.ids }))
+        : displayItems.map(it => ({ key: String(it.id), ids: [it.id], item: it }));
+      if (rows.length === 0) return;
+      const idx = rows.findIndex(r => r.key === focusedKey);
+      if (e.key === "j" || e.key === "k") {
+        e.preventDefault();
+        const nextIdx = idx === -1 ? 0
+          : e.key === "j" ? Math.min(idx + 1, rows.length - 1)
+          : Math.max(idx - 1, 0);
+        const next = rows[nextIdx];
+        setFocusedKey(next.key);
+        document.getElementById(`del-row-${next.key}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return;
+      }
+      const row = idx >= 0 ? rows[idx] : undefined;
+      if (!row) return;
+      if (e.key === "x") {
+        if (row.item) toggleSelect(row.item.id); else toggleSelectMany(row.ids);
+      }
+      if (e.key === "d") setPreviewIds(row.ids);
+      if (e.key === "i" && row.item) ignoreMut.mutate({ id: row.item.id, ignored: !row.item.ignored });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isShowMode, showGroups, displayItems, focusedKey, previewIds, arrLinkItem]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortBy === key) setOrder(o => o === "desc" ? "asc" : "desc");
+    else { setSortBy(key); setOrder("desc"); }
+  };
+
+  const SortIcon = ({ k }: { k: SortKey }) =>
+    sortBy === k ? (order === "desc" ? <ChevronDown size={13} /> : <ChevronUp size={13} />) : null;
+
+  const hasEpisodes = filteredItems.some(i => i.media_type === "episode") || (!mediaType);
+
+  return (
+    <div className="p-4 sm:p-8">
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <p className="text-slate-400 text-sm">Deletion candidates sorted by score</p>
+          {/* UX-06 — pointer-only devices never see the shortcut hint */}
+          <p className="hidden md:block text-slate-600 text-xs mt-0.5">
+            Keyboard: <Kbd>j</Kbd>/<Kbd>k</Kbd> navigate · <Kbd>x</Kbd> select · <Kbd>d</Kbd> preview delete · <Kbd>i</Kbd> ignore
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {syncMsg && <span className="text-sm text-red-400">{syncMsg}</span>}
+          {batchMsg && <span className="text-sm text-slate-400">{batchMsg}</span>}
+          <button
+            onClick={() => setDensity(density === "comfortable" ? "compact" : "comfortable")}
+            title={density === "comfortable" ? "Switch to compact rows" : "Switch to comfortable rows"}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+          >
+            <Rows3 size={15} />
+            {density === "comfortable" ? "Compact" : "Comfortable"}
+          </button>
+          <button
+            onClick={() => mediaApi.exportCsv({
+              min_score: minScore,
+              ...(mediaType ? { media_type: mediaType } : {}),
+              // Export what's on screen, search included (LIB-07) — an export
+              // that ignored the active search would be a different list.
+              ...(debouncedSearch.trim() ? { search: debouncedSearch.trim() } : {}),
+              limit: 10000,
+            })}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-raised border border-purple-900/40 text-slate-300 hover:text-white text-sm transition-colors"
+          >
+            <Download size={15} />
+            CSV
+          </button>
+          {!isShowMode && displayItems.length > 0 && (
+            <button
+              onClick={explainVisible}
+              title="Generate an LLM deletion rationale for every listed item (cached ones are skipped) — runs in the background"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm transition-colors"
+            >
+              <Bot size={15} />
+              Explain Visible ({displayItems.length})
+            </button>
+          )}
+          {!isShowMode && displayItems.length > 0 && (
+            <button
+              onClick={secondOpinionVisible}
+              title="Independent 'risky delete' second opinion for every listed item (cached ones are skipped) — runs in the background. Off by default; enable in Settings → LLM Assist."
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-800 hover:bg-amber-700 text-white text-sm transition-colors"
+            >
+              <ShieldAlert size={15} />
+              Second Opinion ({displayItems.length})
+            </button>
+          )}
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-dark text-sm transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
+            {syncing ? "Syncing…" : "Sync Plex"}
+          </button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 mb-4 items-center">
+        <div className="flex items-center gap-2">
+          <label className="text-slate-400 text-sm">Min score</label>
+          <input
+            type="number"
+            value={minScore}
+            onChange={e => setMinScore(Number(e.target.value))}
+            className="w-20 bg-surface-raised border border-purple-900/40 rounded px-2 py-1 text-sm text-white"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-slate-400 text-sm">Type</label>
+          <select
+            value={mediaType}
+            onChange={e => { setMediaType(e.target.value); if (e.target.value && e.target.value !== "episode") setShowMode("episode"); }}
+            className="bg-surface-raised border border-purple-900/40 rounded px-2 py-1 text-sm text-white"
+          >
+            <option value="">All</option>
+            <option value="movie">Movies</option>
+            <option value="episode">TV Episodes</option>
+            <option value="track">Music</option>
+          </select>
+        </div>
+
+        {/* Show/Episode toggle — only when TV is in scope */}
+        {hasEpisodes && (!mediaType || mediaType === "episode") && (
+          <div className="flex items-center rounded-lg overflow-hidden border border-purple-900/40 ml-1">
+            <button
+              onClick={() => setShowMode("show")}
+              className={`px-3 py-1.5 text-sm transition-colors ${showMode === "show" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}
+            >
+              By Show
+            </button>
+            <button
+              onClick={() => setShowMode("episode")}
+              className={`px-3 py-1.5 text-sm transition-colors ${showMode === "episode" ? "bg-brand text-white" : "bg-surface-raised text-slate-400 hover:text-white"}`}
+            >
+              By Episode
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Search + platform filters (v0.28.0) */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <div className="relative">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+          <input
+            type="search"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search title…"
+            className="pl-8 pr-3 py-1.5 w-56 bg-surface-raised border border-purple-900/40 rounded-lg text-sm text-white placeholder:text-slate-500"
+          />
+        </div>
+        {enabledPlatforms.map(p => {
+          const meta = PLATFORM_META[p];
+          const Icon = meta.Icon;
+          const active = platformFilter === p;
+          return (
+            <button
+              key={p}
+              onClick={() => setPlatformFilter(active ? "" : p)}
+              title={`Filter by linked ${meta.label} ID`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors border ${
+                active
+                  ? `${meta.badge} border-transparent text-white`
+                  : `bg-surface-raised hover:text-white border-purple-900/40 ${meta.chip}`
+              }`}
+            >
+              <Icon size={13} />
+              {meta.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 mb-4 px-4 py-2.5 bg-brand/10 border border-brand/30 rounded-lg">
+          <span className="text-sm text-brand-light">{selected.size} selected</span>
+          <button
+            onClick={() => setPreviewIds([...selected])}
+            className="px-3 py-1 bg-red-700 hover:bg-red-600 text-white rounded text-xs disabled:opacity-50"
+          >
+            Delete Selected
+          </button>
+          <button onClick={() => setSelected(new Set())} className="text-xs text-slate-400 hover:text-white ml-auto">
+            Clear
+          </button>
+        </div>
+      )}
+
+      {isLoading ? (
+        <SkeletonTable rows={8} cols={6} />
+      ) : (isShowMode ? showGroups : displayItems).length === 0 ? (
+        <div className="bg-surface-raised rounded-xl border border-purple-900/30 p-10 text-center">
+          <p className="text-slate-400">No candidates found. Try lowering the minimum score or sync Plex first.</p>
+        </div>
+      ) : (
+        <ScrollFadeX className="bg-surface-raised rounded-xl border border-purple-900/30 overflow-x-auto">
+          <table className={`w-full text-sm ${density === "compact" ? "[&_td]:!py-1.5 [&_th]:!py-1.5 [&_td]:text-xs" : ""}`}>
+            <thead className="border-b border-purple-900/30 text-slate-400 text-xs uppercase tracking-wider">
+              <tr>
+                <th className="px-3 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    className="accent-purple-500"
+                    checked={selected.size > 0 && selected.size === allVisibleIds.length && allVisibleIds.length > 0}
+                    onChange={toggleSelectAll}
+                  />
+                </th>
+                <th className="text-left px-4 py-3">{isShowMode ? "Show" : "Title"}</th>
+                {!isShowMode && <th className="text-left px-4 py-3">Type</th>}
+                <th className="text-left px-4 py-3 cursor-pointer hover:text-white select-none" onClick={() => toggleSort("score")}>
+                  <span className="flex items-center gap-1">Score <SortIcon k="score" /></span>
+                </th>
+                <th className="text-left px-4 py-3 cursor-pointer hover:text-white select-none" onClick={() => toggleSort("file_size")}>
+                  <span className="flex items-center gap-1">{isShowMode ? "Total Size" : "Size"} <SortIcon k="file_size" /></span>
+                </th>
+                <th className="text-left px-4 py-3 cursor-pointer hover:text-white select-none" onClick={() => toggleSort("watch_count")}>
+                  <span className="flex items-center gap-1">Plays <SortIcon k="watch_count" /></span>
+                </th>
+                <th className="text-left px-4 py-3 cursor-pointer hover:text-white select-none" onClick={() => toggleSort("last_watched_at")}>
+                  <span className="flex items-center gap-1">Last Watched <SortIcon k="last_watched_at" /></span>
+                </th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-purple-900/20">
+              {isShowMode
+                ? showGroups.map(group => {
+                    const groupSelected = group.ids.length > 0 && group.ids.every(id => selected.has(id));
+                    const groupPartial = !groupSelected && group.ids.some(id => selected.has(id));
+                    return (
+                      <tr
+                        key={group.parent_title}
+                        id={`del-row-${group.parent_title}`}
+                        className={`hover:bg-white/5 transition-colors cursor-pointer ${groupSelected ? "bg-brand/5" : ""} ${focusedKey === group.parent_title ? "ring-1 ring-inset ring-brand/60" : ""}`}
+                        onClick={e => {
+                          setFocusedKey(group.parent_title);
+                          if (isInteractiveTarget(e.target)) return;
+                          toggleSelectMany(group.ids);
+                        }}
+                      >
+                        <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            className="accent-purple-500"
+                            checked={groupSelected}
+                            ref={el => { if (el) el.indeterminate = groupPartial; }}
+                            onChange={() => toggleSelectMany(group.ids)}
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-white font-medium">
+                          {group.parent_title}
+                          <span className="text-slate-500 text-xs ml-2">{group.episodes.length} ep</span>
+                        </td>
+                        <td className="px-4 py-3"><ScoreBadge score={group.avg_score} /></td>
+                        <td className="px-4 py-3 text-slate-300">{fmtBytes(group.total_size)}</td>
+                        <td className="px-4 py-3 text-slate-300">{group.total_watch_count}</td>
+                        <td className="px-4 py-3 text-slate-400">{fmtDate(group.last_watched_at)}</td>
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center gap-2 justify-end">
+                            <button onClick={() => setPreviewIds(group.ids)} title="Delete all episodes" className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors">
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                : displayItems.map((item: MediaItem) => {
+                    return (
+                      <Fragment key={item.id}>
+                      <tr
+                        id={`del-row-${item.id}`}
+                        className={`hover:bg-white/5 transition-colors cursor-pointer ${selected.has(item.id) ? "bg-brand/5" : ""} ${focusedKey === String(item.id) ? "ring-1 ring-inset ring-brand/60" : ""}`}
+                        onClick={e => {
+                          setFocusedKey(String(item.id));
+                          if (isInteractiveTarget(e.target)) return;
+                          toggleSelect(item.id);
+                        }}
+                      >
+                        <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            className="accent-purple-500"
+                            checked={selected.has(item.id)}
+                            onChange={() => toggleSelect(item.id)}
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-white font-medium">
+                          {item.parent_title && <span className="text-slate-500 text-xs block">{item.parent_title}</span>}
+                          {item.title}
+                          {item.year && <span className="text-slate-500 ml-1">({item.year})</span>}
+                        </td>
+                        <td className="px-4 py-3 text-slate-400 capitalize">{item.media_type}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <ScoreBadge score={item.score} />
+                            {item.risky_delete && (
+                              <span
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-900/60 text-amber-300"
+                                title="Second opinion: the LLM's independent verdict is KEEP despite this item's deletion score — a conflict worth a second look. Advisory only, not a block."
+                              >
+                                <ShieldAlert size={11} /> RISKY
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-slate-300">{fmtBytes(item.file_size)}</td>
+                        <td className="px-4 py-3 text-slate-300">{item.watch_count}</td>
+                        <td className="px-4 py-3 text-slate-400">{fmtDate(item.last_watched_at)}</td>
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center gap-2 justify-end">
+                            <button
+                              onClick={() => setBreakdownItem(item)}
+                              aria-label={`Score breakdown for ${item.title}`}
+                              title="Why this score? Per-factor breakdown — deterministic, no LLM required"
+                              className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                            >
+                              <Calculator size={15} />
+                            </button>
+                            <button
+                              onClick={() => explain(item)}
+                              disabled={explainBusy !== null}
+                              title={item.llm_rationale
+                                ? "Regenerate the LLM rationale (cached result shown below)"
+                                : "Ask the local LLM whether this is a good deletion candidate (requires Ollama assist)"}
+                              className={`p-1.5 rounded hover:bg-white/10 transition-colors disabled:opacity-50 ${item.llm_rationale ? "text-brand-light" : "text-slate-400 hover:text-brand-light"}`}
+                            >
+                              {explainBusy === item.id ? <BotState variant="responding" size={15} /> : <Bot size={15} />}
+                            </button>
+                            {["movie", "episode", "track"].includes(item.media_type) && (
+                              <button
+                                onClick={() => setArrLinkItem(item)}
+                                title="Fix *arr link (INT-02) — repoint this item at the correct Sonarr/Radarr/Lidarr entry"
+                                className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                              >
+                                <Link2 size={15} />
+                              </button>
+                            )}
+                            <button onClick={() => ignoreMut.mutate({ id: item.id, ignored: !item.ignored })} title={item.ignored ? "Un-ignore" : "Ignore"} className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
+                              {item.ignored ? <Eye size={15} /> : <EyeOff size={15} />}
+                            </button>
+                            <button onClick={() => setPreviewIds([item.id])} title="Delete" className="p-1.5 rounded hover:bg-red-900/40 text-slate-400 hover:text-red-300 transition-colors">
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {(item.llm_rationale || explainMsg[item.id] || explainBusy === item.id || streamText[item.id]) && (
+                        <tr className="bg-black/10">
+                          <td colSpan={8} className="px-4 pb-3 pt-1">
+                            <div className="flex items-start gap-2">
+                              <Bot size={13} className="text-brand-light mt-0.5 shrink-0" />
+                              <div className="min-w-0">
+                                {explainBusy === item.id && !streamText[item.id] && (
+                                  <span className="text-slate-500 text-xs italic">Asking the LLM…</span>
+                                )}
+                                {streamText[item.id] && (
+                                  <span className="block whitespace-normal break-words text-slate-400 text-xs leading-relaxed">
+                                    {streamText[item.id]}
+                                    {explainBusy === item.id && <span className="text-brand-light animate-pulse">▍</span>}
+                                  </span>
+                                )}
+                                {explainBusy !== item.id && !streamText[item.id] && item.llm_rationale && (
+                                  <>
+                                    <ClampedText text={item.llm_rationale} />
+                                    {item.llm_rationale_at && (
+                                      <span className="text-slate-600 text-[11px]">generated {fmtDate(item.llm_rationale_at)}</span>
+                                    )}
+                                  </>
+                                )}
+                                {explainBusy !== item.id && explainMsg[item.id] && (
+                                  <span className="block text-amber-400/80 text-xs">{explainMsg[item.id]}</span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
+                    );
+                  })}
+            </tbody>
+          </table>
+        </ScrollFadeX>
+      )}
+
+      {previewIds && (
+        <DeletionPreviewModal
+          ids={previewIds}
+          onCancel={() => setPreviewIds(null)}
+          onConfirm={deleteMode => deleteBatchMut.mutate({ ids: previewIds, deleteMode })}
+          confirming={deleteBatchMut.isPending}
+        />
+      )}
+
+      {arrLinkItem && (
+        <ArrLinkModal item={arrLinkItem} onClose={() => setArrLinkItem(null)} />
+      )}
+
+      {breakdownItem && (
+        <ScoreBreakdownModal item={breakdownItem} onClose={() => setBreakdownItem(null)} />
+      )}
+    </div>
+  );
+}

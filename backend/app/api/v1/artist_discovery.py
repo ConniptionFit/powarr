@@ -1,0 +1,454 @@
+"""Artist Discovery API — native port of the n8n Music Curator. POST /run
+stays synchronous (request/response) but is tray-tracked as of v0.48.0 (AD-02, artist_discovery task kind) — the tray
+card appears via SSE independent of the request's own lifecycle, same as
+POST /imports/scan. Smart Playlists' own generate/sync endpoints remain
+untracked (its own module's precedent for now)."""
+import json
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models.artist_discovery import DiscoveredArtist
+from app.schemas.settings import ArtistDiscoverySettings
+from app.services import artist_discovery as service
+from pydantic import BaseModel
+
+router = APIRouter(prefix="/artist-discovery", tags=["artist-discovery"])
+
+
+class CandidateOut(BaseModel):
+    id: int
+    musicbrainz_id: Optional[str] = None
+    artist_name: str
+    genres: list[str] = []
+    mood_tags: list[str] = []
+    era: Optional[str] = None
+    source: str
+    similarity_score: Optional[float] = None
+    associated_seed_mbids: list[str] = []
+    seed_artist_name: Optional[str] = None
+    seed_artist_names: list[str] = []
+    status: str = "pending"
+    lidarr_artist_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    image_url: Optional[str] = None
+    bio: Optional[str] = None
+    years_active: Optional[str] = None
+    connection_count: int = 0
+    all_time_connections: int = 0
+    recent_connections: int = 0
+    auto_add_progress: float = 0.0
+    is_low_metadata: bool = False
+
+
+class SeedInsight(BaseModel):
+    name: str
+    musicbrainz_id: Optional[str] = None
+    plays_in_library: int = 0
+    in_lidarr: bool = False
+    shared_genres: list[str] = []
+    is_recent: bool = False
+
+
+class GateInsight(BaseModel):
+    lane: str
+    lane_label: str
+    lane_description: str
+    similarity_score: Optional[float] = None
+    similarity_percent: Optional[int] = None
+    connection_count: int = 0
+    all_time_connections: int = 0
+    recent_connections: int = 0
+    lookback_days: int = 30
+    suggest_threshold: int = 0
+    auto_add_threshold: int = 0
+    auto_add_recent_threshold: int = 0
+    auto_add_all_time_threshold: int = 0
+    auto_add_eligible: bool = False
+    auto_add_progress: float = 0.0
+    auto_add_reason: str
+
+
+class TrackPreview(BaseModel):
+    id: Optional[int] = None
+    title: str
+    duration: int = 0
+    preview: Optional[str] = None
+    album: Optional[str] = None
+    album_cover: Optional[str] = None
+
+
+class CandidateInsightsOut(BaseModel):
+    id: int
+    artist_name: str
+    musicbrainz_id: Optional[str] = None
+    image_url: Optional[str] = None
+    bio: Optional[str] = None
+    years_active: Optional[str] = None
+    genres: list[str] = []
+    shared_genres: list[str] = []
+    unique_genres: list[str] = []
+    mood_tags: list[str] = []
+    era: Optional[str] = None
+    gate: GateInsight
+    seeds: list[SeedInsight] = []
+    top_tracks: list[TrackPreview] = []
+    is_low_metadata: bool = False
+    warning: Optional[str] = None
+    summary: str
+
+
+def _match_rating_key(row: DiscoveredArtist) -> tuple[bool, float, int]:
+    """Legacy helper for ranking raw rows by similarity score or raw connection count."""
+    connections = len(json.loads(row.associated_seed_mbids)) if row.associated_seed_mbids else 0
+    return (row.similarity_score is not None, row.similarity_score or 0.0, connections)
+
+
+def _candidate_best_match_key(cand: CandidateOut, cfg: ArtistDiscoverySettings) -> tuple:
+    """AD-32: Unified Best-Match ranking based on active criteria.
+    Ensures that the candidates closest to meeting the active auto-add criteria are at the top.
+
+    Rule:
+    1. If either auto-add threshold is active (recent > 0 or all-time > 0):
+       - Candidates are ranked by proximity to auto-adding:
+         max(recent_connections / recent_thresh, all_time_connections / all_time_thresh).
+         Example: 8/10 all-time (80%) > 2/3 recent (66.7%) > 6/10 all-time (60%) > 0% auto-add.
+       - Tie-breakers:
+         a. secondary ratio sum (r_ratio + a_ratio) to favor candidates with connections on both axes
+         b. cosine similarity_score (for centroid matches)
+         c. recent_connections count
+         d. all_time_connections count
+         e. created_at timestamp (newest first)
+    2. If neither auto-add threshold is active (auto-add disabled):
+       - Sorting is based on the active suggestion criteria:
+         Centroid similarity score (0.0 to 1.0) and suggest connection progress
+         (recent_connections / suggest_connection_threshold).
+       - Candidates with 0 recent connections are not artificially pushed to the top based on
+         inactive all-time counts.
+    """
+    recent_thresh = service._effective_auto_add_threshold(cfg)
+    all_time_thresh = cfg.auto_add_all_time_threshold or 0
+    created_ts = cand.created_at.timestamp() if cand.created_at else 0.0
+
+    if recent_thresh > 0 or all_time_thresh > 0:
+        r_ratio = (cand.recent_connections / recent_thresh) if recent_thresh > 0 else 0.0
+        a_ratio = (cand.all_time_connections / all_time_thresh) if all_time_thresh > 0 else 0.0
+        auto_add_progress = max(r_ratio, a_ratio)
+        sim = cand.similarity_score or 0.0
+        return (
+            auto_add_progress,
+            (r_ratio + a_ratio),
+            sim,
+            cand.recent_connections,
+            cand.all_time_connections,
+            created_ts,
+        )
+    else:
+        suggest_thresh = max(cfg.suggest_connection_threshold, 1)
+        suggest_progress = cand.recent_connections / suggest_thresh
+        sim = cand.similarity_score or 0.0
+        is_centroid = cand.similarity_score is not None
+        return (
+            is_centroid,
+            sim,
+            suggest_progress,
+            cand.recent_connections,
+            cand.all_time_connections,
+            created_ts,
+        )
+
+
+def _candidate_out(row: DiscoveredArtist,
+                   recent_keys: set[str] | None = None,
+                   has_lastfm: bool = False,
+                   cfg: ArtistDiscoverySettings | None = None) -> CandidateOut:
+    # clean_tags/clean_era also run at candidate creation — re-applying here
+    # covers rows stored before the placeholder filtering existed (AD-06).
+    genres = service.clean_tags(json.loads(row.genres) if row.genres else [])
+    seed_mbids = json.loads(row.associated_seed_mbids) if row.associated_seed_mbids else []
+    seed_names = json.loads(row.seed_artist_names) if row.seed_artist_names else []
+    if not seed_names and row.seed_artist_name:
+        seed_names = [row.seed_artist_name]
+    conn_count = max(len(seed_mbids), len(seed_names))
+    is_low = (not row.musicbrainz_id) and (len(genres) == 0)
+
+    seeds_to_check = seed_names if seed_names else seed_mbids
+    if has_lastfm and recent_keys is not None:
+        recent_conn = sum(1 for s in seeds_to_check if s and (s in recent_keys or service._norm_artist(s) in recent_keys))
+    else:
+        recent_conn = conn_count
+
+    auto_add_progress = 0.0
+    if cfg:
+        recent_thresh = service._effective_auto_add_threshold(cfg)
+        all_time_thresh = cfg.auto_add_all_time_threshold or 0
+        r_ratio = (recent_conn / recent_thresh) if recent_thresh > 0 else 0.0
+        a_ratio = (conn_count / all_time_thresh) if all_time_thresh > 0 else 0.0
+        if recent_thresh > 0 or all_time_thresh > 0:
+            auto_add_progress = max(r_ratio, a_ratio)
+
+    return CandidateOut(
+        id=row.id, musicbrainz_id=row.musicbrainz_id, artist_name=row.artist_name,
+        genres=genres,
+        mood_tags=service.clean_tags(json.loads(row.mood_tags) if row.mood_tags else []),
+        era=service.clean_era(row.era), source=row.source, similarity_score=row.similarity_score,
+        associated_seed_mbids=seed_mbids,
+        seed_artist_name=row.seed_artist_name,
+        seed_artist_names=seed_names,
+        status=row.status,
+        lidarr_artist_id=row.lidarr_artist_id, created_at=row.created_at,
+        image_url=row.image_url, bio=row.bio, years_active=row.years_active,
+        connection_count=conn_count,
+        all_time_connections=conn_count,
+        recent_connections=recent_conn,
+        auto_add_progress=round(auto_add_progress, 4),
+        is_low_metadata=is_low,
+    )
+
+
+@router.get("/settings", response_model=ArtistDiscoverySettings)
+def get_settings(db: Session = Depends(get_db)):
+    return service.load_settings(db)
+
+
+@router.put("/settings", response_model=ArtistDiscoverySettings)
+async def put_settings(body: ArtistDiscoverySettings,
+                       purge_no_mbid: bool = Query(False, description="Purge items without MusicBrainz ID immediately"),
+                       purge_non_music: bool = Query(False, description="Purge non-music YouTube channels immediately"),
+                       db: Session = Depends(get_db)):
+    service.save_settings(db, body)
+    if purge_no_mbid:
+        await service.purge_artists_without_mbid(db)
+    if purge_non_music:
+        await service.purge_non_music_artists(db)
+    return body
+
+
+@router.post("/purge-no-mbid")
+async def purge_no_mbid(db: Session = Depends(get_db)):
+    """Purge candidates and unowned Qdrant points lacking a MusicBrainz ID (AD-28)."""
+    return await service.purge_artists_without_mbid(db)
+
+
+@router.post("/purge-non-music")
+async def purge_non_music(db: Session = Depends(get_db)):
+    """Purge non-music YouTube channels, podcasts, and creators (AD-29)."""
+    return await service.purge_non_music_artists(db)
+
+
+@router.get("/stats")
+async def stats(db: Session = Depends(get_db)):
+    return await service.get_stats(db)
+
+
+@router.post("/run")
+async def run_discovery(db: Session = Depends(get_db)):
+    return await service.run_discovery(db)
+
+
+@router.post("/sync")
+async def run_sync(db: Session = Depends(get_db)):
+    return await service.run_differential_sync(db)
+
+
+@router.get("/candidates", response_model=list[CandidateOut])
+async def list_candidates(status: str = Query("pending"),
+                          source: Optional[str] = None,
+                          db: Session = Depends(get_db)):
+    q = db.query(DiscoveredArtist).filter_by(status=status)
+    if source:
+        q = q.filter_by(source=source)
+    # created_at desc first so _match_rating_key's stable sort breaks ties
+    rows = q.order_by(DiscoveredArtist.created_at.desc()).limit(500).all()
+    cfg = service.load_settings(db)
+    recent_keys, has_lastfm = await service.get_cached_recent_keys_and_status(db)
+    candidates = [_candidate_out(r, recent_keys=recent_keys, has_lastfm=has_lastfm, cfg=cfg) for r in rows]
+    # Sort candidates by proximity to active auto-add criteria (AD-32)
+    candidates.sort(key=lambda c: _candidate_best_match_key(c, cfg), reverse=True)
+    return candidates
+
+
+@router.get("/candidates/{candidate_id}", response_model=CandidateOut)
+async def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
+    row = db.query(DiscoveredArtist).filter_by(id=candidate_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    cfg = service.load_settings(db)
+    recent_keys, has_lastfm = await service.get_cached_recent_keys_and_status(db)
+    return _candidate_out(row, recent_keys=recent_keys, has_lastfm=has_lastfm, cfg=cfg)
+
+
+@router.get("/candidates/{candidate_id}/insights", response_model=CandidateInsightsOut)
+async def get_candidate_insights(candidate_id: int, db: Session = Depends(get_db)):
+    insights = await service.get_candidate_insights(db, candidate_id)
+    if not insights:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    return CandidateInsightsOut(**insights)
+
+
+@router.post("/candidates/{candidate_id}/accept")
+async def accept(candidate_id: int, db: Session = Depends(get_db)):
+    result = await service.add_to_lidarr(db, candidate_id)
+    if not result.get("ok") and result.get("message") == "Candidate not found":
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
+
+
+@router.post("/candidates/{candidate_id}/reject")
+def reject(candidate_id: int, db: Session = Depends(get_db)):
+    result = service.reject_candidate(db, candidate_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("message"))
+    return result
+
+
+@router.post("/batch")
+async def batch(body: dict = Body(...), db: Session = Depends(get_db)):
+    ids = body.get("ids") or []
+    action = body.get("action")
+    if action not in ("accept", "reject") or not ids:
+        raise HTTPException(status_code=400, detail="Body: {ids, action: accept|reject}")
+    results = []
+    for cid in ids:
+        if action == "accept":
+            results.append(await service.add_to_lidarr(db, cid))
+        else:
+            results.append(service.reject_candidate(db, cid))
+    return {"results": results}
+
+
+@router.post("/candidates/re-enrich")
+async def re_enrich(db: Session = Depends(get_db)):
+    """Backfill image/bio/years/seed-names on pending candidates missing them."""
+    return await service.re_enrich_missing(db)
+
+
+class RunOut(BaseModel):
+    id: int
+    run_type: str
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    candidates_found: int = 0
+    candidates_added: int = 0
+    message: Optional[str] = None
+
+
+class RecentAddOut(BaseModel):
+    """AD-22 — one artist actually added to Lidarr, with enough of its
+    DiscoveredArtist enrichment (when it has one) for the frontend to reuse
+    the candidate cards' why-suggested wording."""
+    id: int
+    artist_name: str
+    musicbrainz_id: Optional[str] = None
+    source: str  # discovery | related
+    lidarr_artist_id: Optional[int] = None
+    added_at: Optional[datetime] = None
+    discovery_source: Optional[str] = None  # centroid | graph | centroid_recent | centroid_mood_*
+    similarity_score: Optional[float] = None
+    seed_artist_name: Optional[str] = None
+    seed_artist_names: list[str] = []
+    associated_seed_mbids: list[str] = []
+    genres: list[str] = []
+    years_active: Optional[str] = None
+    image_url: Optional[str] = None
+    bio: Optional[str] = None
+
+
+@router.get("/recent-adds", response_model=list[RecentAddOut])
+def recent_adds(limit: int = Query(10, ge=1, le=100), db: Session = Depends(get_db)):
+    """AD-22 — the last N genuine Lidarr adds (discovery accepts + Related
+    Artists adds), newest first. Read-only, local tables only."""
+    return [RecentAddOut(**row) for row in service.list_recent_adds(db, limit=limit)]
+
+
+@router.get("/runs", response_model=list[RunOut])
+def list_runs(limit: int = Query(20, le=100), db: Session = Depends(get_db)):
+    from app.models.artist_discovery import ArtistDiscoveryRun
+    rows = (db.query(ArtistDiscoveryRun)
+            .order_by(ArtistDiscoveryRun.started_at.desc()).limit(limit).all())
+    return [RunOut(id=r.id, run_type=r.run_type, started_at=r.started_at,
+                   finished_at=r.finished_at, candidates_found=r.candidates_found or 0,
+                   candidates_added=r.candidates_added or 0, message=r.message)
+            for r in rows]
+
+
+@router.get("/lidarr/profiles")
+async def lidarr_profiles(db: Session = Depends(get_db)):
+    return await service.get_lidarr_profiles(db)
+
+
+class RelatedArtistOut(BaseModel):
+    musicbrainz_id: Optional[str] = None
+    artist_name: str
+    match_score: float = 0.0
+    already_owned: bool = False
+    image_url: Optional[str] = None
+    bio: Optional[str] = None
+    genres: list[str] = []
+    years_active: Optional[str] = None
+    similarity_sources: list[str] = ["lastfm"]  # AD-14: "lastfm" | "plex_sonic" | "plex_similar"
+
+
+class RelatedSearchOut(BaseModel):
+    ok: bool
+    message: str
+    results: list[RelatedArtistOut] = []
+
+
+class ArtistNameMatchOut(BaseModel):
+    artist_name: str
+    musicbrainz_id: Optional[str] = None
+    image_url: Optional[str] = None
+    genres: list[str] = []
+
+
+class ArtistNameSearchOut(BaseModel):
+    ok: bool
+    message: str = ""
+    results: list[ArtistNameMatchOut] = []
+
+
+@router.get("/related/search-names", response_model=ArtistNameSearchOut)
+async def related_search_names(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(8, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """Name-completion typeahead for the Related Artists search box — pick the
+    right artist before running the (much slower) similar-artists search."""
+    return await service.search_artist_names(db, q, limit=limit)
+
+
+@router.get("/related", response_model=RelatedSearchOut)
+async def related(
+    artist: str = Query(..., min_length=1),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Ad-hoc "who's similar to X" search — read-only, no Qdrant writes, no
+    DiscoveredArtist rows. Independent of the taste-model pipeline. Tray-tracked
+    (kind "related_search") so the frontend shows enrichment progress."""
+    return await service.search_related_artists_tracked(db, artist, limit=limit)
+
+
+@router.get("/preview")
+async def artist_preview(artist: str = Query(..., min_length=1), db: Session = Depends(get_db)):
+    """AD-18 — listen-before-add preview (YouTube video / Spotify 30s clip),
+    whichever configured+enabled sources resolve. Since v0.79.0 the frontend
+    calls this once per card as it scrolls into view (availability gate for
+    the Play button); results are cached in-process — see artist_preview.py."""
+    from app.services.artist_preview import get_preview
+    return await get_preview(db, artist)
+
+
+@router.post("/related/add")
+async def related_add(body: dict = Body(...), db: Session = Depends(get_db)):
+    """Add a Related Artists search result straight to Lidarr, bypassing the
+    review queue entirely. Body: {mbid?, artist_name}."""
+    artist_name = (body.get("artist_name") or "").strip()
+    if not artist_name:
+        raise HTTPException(status_code=400, detail="Body: {mbid?, artist_name}")
+    return await service.add_related_artist(db, body.get("mbid"), artist_name)

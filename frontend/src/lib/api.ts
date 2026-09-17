@@ -1,0 +1,946 @@
+const BASE = "/api/v1";
+
+export async function req<T>(path: string, opts?: RequestInit): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  if (r.status === 401 && !path.startsWith("/auth/")) {
+    // Session missing/expired — surface the login modal
+    window.dispatchEvent(new Event("powarr:unauthorized"));
+  }
+  if (!r.ok) {
+    let detail = `${r.status} ${r.statusText}`;
+    try {
+      const body = await r.json();
+      if (body?.detail) detail = String(body.detail);
+    } catch { /* keep default */ }
+    throw new Error(detail);
+  }
+  if (r.status === 204) return undefined as T;
+  return r.json();
+}
+
+// --- Media ---
+export interface MediaItem {
+  id: number;
+  plex_rating_key: string;
+  title: string;
+  year: number | null;
+  media_type: string;
+  library_section: string | null;
+  file_path: string | null;
+  file_size: number;
+  added_at: string | null;
+  release_date: string | null;
+  last_watched_at: string | null;
+  watch_count: number;
+  score: number;
+  ignored: boolean;
+  parent_title: string | null;
+  protected: boolean | null;
+  pending_delete_at: string | null;
+  llm_rationale: string | null;
+  llm_rationale_at: string | null;
+  llm_second_opinion: string | null;
+  llm_second_opinion_at: string | null;
+  risky_delete: boolean | null;
+  sonarr_id: number | null;
+  radarr_id: number | null;
+  lidarr_id: number | null;
+}
+
+export interface ArrCandidate {
+  id: number;
+  title: string;
+  year: number | null;
+}
+
+export interface DeletionLogEntry {
+  id: number;
+  title: string;
+  parent_title: string | null;
+  media_type: string;
+  library_section: string | null;
+  file_size: number;
+  arr_action: string | null;
+  deleted_at: string | null;
+}
+
+export interface DeletionStats {
+  deleted_30d: number;
+  freed_30d_bytes: number;
+  deleted_total: number;
+  freed_total_bytes: number;
+}
+
+export interface MediaStats {
+  total_items: number;
+  total_size_bytes: number;
+  candidates_above_threshold: number;
+  potential_savings_bytes: number;
+  last_synced: string | null;
+}
+
+export interface DeletionPreviewItem {
+  id: number;
+  title: string;
+  media_type: string;
+  library_section: string | null;
+  file_size: number;
+  protected: boolean;
+  watch_protected: boolean;
+  seeding_protected: boolean;
+  progress_protected: boolean;
+  arr_app: string | null;
+  arr_action: "delete_from_arr" | "unmonitor" | "none" | "delete_episode_file" | "unmonitor_season";
+  cascade_warning: string | null;
+}
+
+export interface DeletionPreview {
+  items: DeletionPreviewItem[];
+  total_items: number;
+  missing_count: number;
+  total_size_bytes: number;
+  soft_delete_days: number;
+  would_pend: boolean;
+  protected_count: number;
+}
+
+// LIB-03 — duplicate & upgrade hunter.
+export interface DuplicateGroupItem {
+  id: number;
+  plex_rating_key: string;
+  title: string;
+  library_section: string | null;
+  file_path: string | null;
+  file_size: number;
+  added_at: string | null;
+  score: number;
+}
+
+export interface DuplicateGroup {
+  media_type: string;
+  title: string;
+  year: number | null;
+  items: DuplicateGroupItem[];
+  suggested_keep_id: number;
+  has_size_signal: boolean;
+  total_size_bytes: number;
+  reclaimable_bytes: number;
+}
+
+// LIB-06 — read-only library health KPIs, computed entirely from the synced
+// local tables (no live Plex/*arr calls behind this endpoint).
+export interface MediaTypeFootprint {
+  media_type: string;
+  count: number;
+  total_size_bytes: number;
+}
+
+export interface ArrLinkCoverage {
+  media_type: string;
+  arr_field: string;
+  linked: number;
+  total: number;
+}
+
+export interface ReclaimPoint {
+  date: string;
+  deleted: number;
+  bytes: number;
+}
+
+export interface ReclaimTrend {
+  days: number;
+  points: ReclaimPoint[];
+  total_deleted: number;
+  total_bytes: number;
+}
+
+export interface ScoringPreviewSide {
+  above_threshold: number;
+  total_size_bytes: number;
+  threshold: number;
+}
+
+export interface ScoringPreviewMover {
+  id: number;
+  title: string;
+  media_type: string;
+  score_before: number;
+  score_after: number;
+}
+
+export interface ScoringPreview {
+  evaluated: number;
+  current: ScoringPreviewSide;
+  proposed: ScoringPreviewSide;
+  newly_above_count: number;
+  newly_below_count: number;
+  newly_above: ScoringPreviewMover[];
+  newly_below: ScoringPreviewMover[];
+}
+
+export interface ScoreFactor {
+  key: string;
+  label: string;
+  factor: number;           // 0-1 strength of this signal for this item
+  weight: number;           // configured importance
+  contribution: number;     // points it actually added, out of 100
+  max_contribution: number; // the most it could have added at this weight
+}
+
+export interface ScoreBreakdown {
+  item_id: number;
+  title: string;
+  score: number;
+  factors: ScoreFactor[];
+  series_watched: boolean;
+  library_section: string | null;
+  profile_applied: boolean;
+}
+
+export interface LibraryHealth {
+  by_type: MediaTypeFootprint[];
+  arr_link_coverage: ArrLinkCoverage[];
+  duplicate_groups: number;
+  duplicate_reclaimable_bytes: number;
+  artist_thumbnails_total: number;
+  artist_thumbnails_with_image: number;
+  open_imports_by_status: Record<string, number>;
+  open_imports_total: number;
+  malformed_flags_open: number;
+  protections: Record<string, number>;
+  pending_soft_deletes: number;
+  ignored_items: number;
+}
+
+// LIB-02 — explicit Sonarr episode delete policy modes, only meaningful when
+// every previewed item is a Sonarr-linked episode.
+export type EpisodeDeleteMode = "episode_files" | "unmonitor_season" | "unmonitor_series" | "remove_from_sonarr";
+
+function downloadCsv(path: string) {
+  // Same-origin cookie auth; open as a navigation so the browser saves the file.
+  window.location.assign(`/api/v1${path}`);
+}
+
+export const mediaApi = {
+  list: (params?: Record<string, string | number | boolean>) => {
+    const qs = params ? "?" + new URLSearchParams(params as Record<string, string>).toString() : "";
+    return req<MediaItem[]>(`/media${qs}`);
+  },
+  stats: () => req<MediaStats>("/media/stats"),
+  ignore: (id: number, ignored: boolean) =>
+    req(`/media/${id}/ignore?ignored=${ignored}`, { method: "PATCH" }),
+  delete: (id: number, deleteMode?: EpisodeDeleteMode) =>
+    req(`/media/${id}${deleteMode ? `?delete_mode=${deleteMode}` : ""}`, { method: "DELETE" }),
+  deleteBatch: (ids: number[], deleteMode?: EpisodeDeleteMode) =>
+    req(`/media/batch${deleteMode ? `?delete_mode=${deleteMode}` : ""}`, {
+      method: "DELETE", body: JSON.stringify(ids),
+    }),
+  previewDelete: (ids: number[], deleteMode?: EpisodeDeleteMode) =>
+    req<DeletionPreview>(`/media/preview-delete${deleteMode ? `?delete_mode=${deleteMode}` : ""}`, {
+      method: "POST", body: JSON.stringify(ids),
+    }),
+  libraries: () => req<string[]>("/media/libraries"),
+  duplicates: () => req<DuplicateGroup[]>("/media/duplicates"),
+  health: () => req<LibraryHealth>("/media/health"),
+  // LIB-08 — deterministic per-factor "why this score?". Always available:
+  // it is the arithmetic the scorer already ran, so unlike the LLM Explain it
+  // needs no model configured.
+  scoreBreakdown: (id: number) => req<ScoreBreakdown>(`/media/${id}/score-breakdown`),
+  // LIB-11 — reclaimed space per day, from the deletion log Powarr already keeps.
+  reclaimTrend: (days = 90) => req<ReclaimTrend>(`/media/reclaim-trend?days=${days}`),
+  restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
+  // INT-02 (v0.71.0) — manual *arr ID override, fixing a bad auto-link without a
+  // full resync. arrCandidates browses/searches the matching app's library;
+  // setArrLink writes (or clears, with value: null) the field for this item's
+  // media_type.
+  arrCandidates: (id: number, q = "") =>
+    req<{ candidates: ArrCandidate[] }>(`/media/${id}/arr-candidates${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  setArrLink: (id: number, value: number | null) =>
+    req<Record<string, number | null>>(`/media/${id}/arr-link`, {
+      method: "PUT", body: JSON.stringify({ value }),
+    }),
+  // INT-01 (v0.77.0) — on-demand Bazarr subtitle-count check ahead of a delete.
+  // Never called automatically (see DeletionPreviewModal) — one real network
+  // call, only when the user asks for it.
+  subtitleWarning: (id: number) =>
+    req<{ available: boolean; subtitle_count: number | null; message: string }>(
+      `/media/${id}/subtitle-warning`),
+  explain: (id: number, force = false) =>
+    req<{ rationale: string | null; message: string | null; cached: boolean }>(
+      `/media/${id}/explain${force ? "?force=true" : ""}`, { method: "POST" }),
+  llmRun: (ids?: number[]) =>
+    req<{ started: number; total_eligible: number; message: string }>("/media/llm-run", {
+      method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
+    }),
+  secondOpinion: (id: number, force = false) =>
+    req<{ verdict: string | null; message: string | null; cached: boolean }>(
+      `/media/${id}/second-opinion${force ? "?force=true" : ""}`, { method: "POST" }),
+  secondOpinionRun: (ids?: number[]) =>
+    req<{ started: number; total_eligible: number; message: string }>("/media/second-opinion-run", {
+      method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
+    }),
+  deletionLog: () => req<DeletionLogEntry[]>("/media/deletion-log"),
+  deletionStats: () => req<DeletionStats>("/media/deletion-stats"),
+  exportCsv: (params?: Record<string, string | number | boolean>) => {
+    const qs = params ? "?" + new URLSearchParams(params as Record<string, string>).toString() : "";
+    downloadCsv(`/media/export.csv${qs}`);
+  },
+  exportDeletionLogCsv: () => downloadCsv("/media/deletion-log/export.csv"),
+};
+
+// --- Settings ---
+export interface ScoringWeights {
+  watch_history_weight: number;
+  file_size_weight: number;
+  file_age_weight: number;
+  release_date_weight: number;
+  min_score_threshold: number;
+  never_watched_boost: number;
+  max_size_gb_reference: number;
+  max_age_days_reference: number;
+  max_release_age_years_reference: number;
+  watch_half_life_days?: number;
+}
+
+export interface ScoringProfiles {
+  by_library: Record<string, Partial<ScoringWeights>>;
+}
+
+export interface ImportMatchingSettings {
+  enabled: boolean;
+  poll_interval_seconds: number;
+  high_confidence_threshold: number;
+  low_confidence_floor: number;
+  auto_resolve_enabled: boolean;
+  auto_import_mode: "llm" | "algorithm" | "either" | "both"; // which signal(s) gate auto-import (v0.44.0)
+  llm_auto_threshold: number; // LLM leg of the auto-import gate (0-1)
+  grace_period_minutes: number;
+  include_stalled: boolean;
+  verify_timeout_minutes: number;
+  sonarr_enabled: boolean;
+  radarr_enabled: boolean;
+  lidarr_enabled: boolean;
+  readarr_enabled: boolean;
+  title_weight: number;
+  number_weight: number;
+  title_only_cap: number;
+  anime_absolute_numbering: boolean;
+  anime_absolute_pack_coverage: boolean; // FI-08, opt-in — see Settings toggle for the auto-resolve-impact caveat
+  malformed_audit_enabled: boolean; // FI-10, opt-in — nightly re-check of settled Sonarr packs for incomplete coverage
+  malformed_audit_interval_hours: number;
+  malformed_audit_lookback_days: number;
+  malformed_audit_threshold: number;
+  orphan_auto_purge: boolean;
+  llm_blend_weight: number; // LLM share of the confidence blend (0-1)
+  quality_downgrade_auto_reject: boolean;
+  suspicious_extensions: string[];
+  suspicious_extension_auto_reject: boolean;
+  suspicious_extension_delete_from_disk: boolean;
+  // LLM-09 (v0.69.0) — user-authored regex strip rules, applied in order to the
+  // raw release title before built-in cleanup + heuristic/LLM matching. Empty
+  // by default. `enabled` defaults true when omitted.
+  junk_strip_rules: { name?: string; pattern?: string; enabled?: boolean }[];
+}
+
+export interface OllamaSettings {
+  enabled: boolean;
+  host: string;
+  model: string;
+  api_style: string;
+  verbosity: string; // minimal | brief | verbose
+  model_size: string; // small | medium | large — scales token caps/timeouts
+  keep_alive_minutes: number; // ollama keep_alive between calls; 0 = unload after each
+  reply_format: string; // json | simple
+  confidence_style: string; // numeric | classified
+  batch_delay_ms: number; // pause between sequential batch calls; 0 = none
+  match_prompt: string;
+  explain_prompt: string;
+  pack_prompt?: string;
+  // Per-task control (v0.27.0) — task models default to `model` when blank
+  match_enabled: boolean;
+  explain_enabled: boolean;
+  match_model: string;
+  explain_model: string;
+  // LLM-07 (v0.67.0) — "risky delete" second opinion on deletion candidates
+  second_opinion_enabled: boolean;
+  second_opinion_model: string;
+  // Circuit breaker (v0.27.0) — 0 threshold disables
+  breaker_threshold: number;
+  breaker_cooldown_minutes: number;
+  // Inference tuning (v0.29.0) — 0 max_tokens/timeout = model_size defaults
+  temperature?: number;
+  max_tokens?: number;
+  timeout_seconds?: number;
+  // Prompt scaffold (v0.30.0)
+  forbid_thinking?: boolean;
+  compact_det_summary?: boolean;
+}
+
+// LLM-08 (v0.68.0) — per-source_app overrides (match_enabled, match_model,
+// llm_blend_weight) and per-Plex-library overrides (explain_enabled,
+// explain_model). Empty by default; unlisted apps/libraries keep global behavior.
+export interface LlmAppOverride {
+  match_enabled?: boolean;
+  match_model?: string;
+  llm_blend_weight?: number;
+}
+export interface LlmLibraryOverride {
+  explain_enabled?: boolean;
+  explain_model?: string;
+}
+export interface LlmPolicies {
+  by_app: Record<string, LlmAppOverride>;
+  by_library: Record<string, LlmLibraryOverride>;
+}
+
+export interface LlmStats {
+  calls: number;
+  successes: number;
+  failures: number;
+  consecutive_failures: number;
+  avg_latency_ms: number | null;
+  last_error: string | null;
+  last_error_at: number | null; // unix seconds
+  last_success_at: number | null;
+  breaker_open: boolean;
+  breaker_seconds_remaining: number;
+  breaker_trips: number;
+  breaker_threshold: number;
+}
+
+export interface LlmScheduleSettings {
+  enabled: boolean;
+  mode: string; // "quiet_hours" | "trickle"
+  quiet_hours_start: number; // UTC hour 0-23
+  quiet_hours_end: number; // UTC hour 0-23
+  max_items_per_pass: number;
+  scan_imports: boolean;
+  scan_media: boolean;
+}
+
+export interface BackupSettings {
+  enabled: boolean;
+  interval_hours: number;
+  retention_count: number;
+  // OPS-02 (v0.72.0) — optional settings-only export alongside the DB backup
+  export_settings_enabled: boolean;
+  export_settings_retention_count: number;
+}
+
+// OPS-02 — config-as-code export/import payload shape
+export interface SettingsExport {
+  powarr_version: string;
+  exported_at: string;
+  app_settings: Record<string, unknown>;
+  integrations: { name: string; url: string | null; enabled: boolean }[];
+}
+
+export interface BackupFile {
+  name: string;
+  size: number;
+  modified: string;
+}
+
+// OPS-03 (v0.82.0) — read-only scheduled-backup staleness check
+export interface BackupStatus {
+  enabled: boolean;
+  interval_hours: number;
+  last_backup: string | null;
+  age_hours: number | null;
+  backup_count: number;
+  newest_file: string | null;
+  stale: boolean;
+  reason: string | null;
+}
+
+export interface CleanupSettings {
+  excluded_libraries: string[];
+  soft_delete_days: number;
+  protect_requested: boolean;
+  protect_other_users: boolean;
+  other_user_watch_days: number;
+  primary_tautulli_user: string;
+  protect_seeding_torrents: boolean;
+  protect_in_progress: boolean;
+  in_progress_min_percent: number;
+  in_progress_max_percent: number;
+  in_progress_lookback_days: number;
+}
+
+export interface SyncSettings {
+  plex_sync_interval_hours: number;
+}
+
+export interface NotificationSettings {
+  enabled: boolean;
+  ntfy_url: string;
+  topic: string;
+  public_base_url: string;
+  actionable_new_suggestions: boolean;
+  actionable_max_per_scan: number;
+  digest_enabled: boolean;
+  digest_weekday: number;
+  digest_hour_utc: number;
+  digest_include_imports: boolean;
+  digest_include_artists: boolean;
+  digest_include_playlists: boolean;
+  digest_include_cleanup: boolean;
+  discord_enabled: boolean;
+  discord_webhook_url: string;   // blank on read — leave blank on save to keep the stored value
+  discord_webhook_url_set: boolean;
+}
+
+export const settingsApi = {
+  getScoring: () => req<ScoringWeights>("/settings/scoring"),
+  updateScoring: (w: ScoringWeights) =>
+    req<ScoringWeights>("/settings/scoring", { method: "PUT", body: JSON.stringify(w) }),
+  // LIB-09 — dry-run a weight change. Read-only: nothing is saved and no score
+  // is written, so it is safe to call before committing to the change.
+  previewScoring: (w: ScoringWeights) =>
+    req<ScoringPreview>("/settings/scoring/preview", { method: "POST", body: JSON.stringify(w) }),
+  getScoringProfiles: () => req<ScoringProfiles>("/settings/scoring-profiles"),
+  updateScoringProfiles: (p: ScoringProfiles) =>
+    req<ScoringProfiles>("/settings/scoring-profiles", { method: "PUT", body: JSON.stringify(p) }),
+  getImportMatching: () => req<ImportMatchingSettings>("/settings/import-matching"),
+  updateImportMatching: (s: ImportMatchingSettings) =>
+    req<ImportMatchingSettings>("/settings/import-matching", { method: "PUT", body: JSON.stringify(s) }),
+  getOllama: () => req<OllamaSettings>("/settings/ollama"),
+  updateOllama: (s: OllamaSettings) =>
+    req<OllamaSettings>("/settings/ollama", { method: "PUT", body: JSON.stringify(s) }),
+  getLlmPolicies: () => req<LlmPolicies>("/settings/llm-policies"),
+  updateLlmPolicies: (p: LlmPolicies) =>
+    req<LlmPolicies>("/settings/llm-policies", { method: "PUT", body: JSON.stringify(p) }),
+  getLlmSchedule: () => req<LlmScheduleSettings>("/settings/llm-schedule"),
+  updateLlmSchedule: (s: LlmScheduleSettings) =>
+    req<LlmScheduleSettings>("/settings/llm-schedule", { method: "PUT", body: JSON.stringify(s) }),
+  getBackup: () => req<BackupSettings>("/settings/backup"),
+  updateBackup: (s: BackupSettings) =>
+    req<BackupSettings>("/settings/backup", { method: "PUT", body: JSON.stringify(s) }),
+  runBackupNow: () => req<{ ok: boolean; path: string | null; message: string }>("/settings/backup/run", { method: "POST" }),
+  listBackups: () => req<BackupFile[]>("/settings/backup/list"),
+  backupStatus: () => req<BackupStatus>("/settings/backup/status"),
+  // OPS-02 — config-as-code export/import (on-demand) + the scheduled variant
+  exportSettings: () => downloadCsv("/settings/export"),
+  importSettings: (payload: SettingsExport) =>
+    req<{ app_settings_imported: number; integrations_updated: number }>("/settings/import", {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+  runSettingsExportNow: () =>
+    req<{ ok: boolean; path: string | null; message: string }>("/settings/export/run", { method: "POST" }),
+  listSettingsExports: () => req<BackupFile[]>("/settings/export/list"),
+  getCleanup: () => req<CleanupSettings>("/settings/cleanup"),
+  updateCleanup: (s: CleanupSettings) =>
+    req<CleanupSettings>("/settings/cleanup", { method: "PUT", body: JSON.stringify(s) }),
+  getSync: () => req<SyncSettings>("/settings/sync"),
+  updateSync: (s: SyncSettings) =>
+    req<SyncSettings>("/settings/sync", { method: "PUT", body: JSON.stringify(s) }),
+  getNotifications: () => req<NotificationSettings>("/settings/notifications"),
+  updateNotifications: (s: NotificationSettings) =>
+    req<NotificationSettings>("/settings/notifications", { method: "PUT", body: JSON.stringify(s) }),
+  testNotification: () => req<{ ok: boolean; message: string }>("/settings/notifications/test", { method: "POST" }),
+  refinePrompt: (draft: string, task: "match" | "explain" | "pack") =>
+    req<{ refined: string }>("/settings/ollama/refine-prompt", {
+      method: "POST", body: JSON.stringify({ draft, task }),
+    }),
+  ollamaContextLength: () =>
+    req<{ context_length: number | null; model: string | null }>("/settings/ollama/context-length"),
+  ollamaPreview: (task: "match" | "explain" | "pack", useRealData: boolean) =>
+    req<{ output: string | null; latency_ms: number; json_valid: boolean | null; message: string }>(
+      "/settings/ollama/preview", { method: "POST", body: JSON.stringify({ task, use_real_data: useRealData }) }),
+  llmStats: () => req<LlmStats>("/settings/llm/stats"),
+  llmBreakerReset: () => req<LlmStats>("/settings/llm/breaker/reset", { method: "POST" }),
+};
+
+// --- Failed imports ---
+export interface FailedImport {
+  id: number;
+  source_app: string;
+  queue_item_id: string | null;
+  download_id: string | null;
+  raw_title: string;
+  matched_title: string | null;
+  matched_id: number | null;
+  confidence: number;
+  heuristic_confidence: number | null;
+  match_rationale: string | null;
+  pack: string | null; // season-pack label ("S03", "S01-S03", "complete series")
+  llm_confidence: number | null;
+  llm_rationale: string | null;
+  llm_agrees: boolean | null; // structured agree/disagree signal (llm_rationale is plain prose, no prefix)
+  pack_file_matches: string | null; // JSON: per-file episode suggestions from LLM review
+  mapping_overrides: string | null; // JSON: user-corrected per-file episode mappings, keyed by raw path
+  quality_downgrade: boolean | null; // every file in the download rejects as "not an upgrade"
+  partial_import: boolean | null; // some importable + some already covered (gap-fill)
+  suspicious_files: string | null; // JSON list of filenames matching a suspicious extension
+  status: string;
+  still_in_queue: boolean | null; // download still present in the *arr queue (v0.35.0)
+  verified: boolean | null;
+  message: string | null;
+  root_cause_code: string | null; // FI-06 — plain-language root-cause tag, drives filter chips
+  root_cause_label: string | null;
+  root_cause_action: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  resolved_at: string | null;
+}
+
+export interface ImportStats {
+  suggested: number;
+  auto_resolved: number;
+  accepted: number;
+  rejected: number;
+  closed_external: number;
+  resolve_failed: number;
+  orphan_pending: number;
+  orphaned: number;
+  still_in_queue: number;
+  needs_attention: number;
+  by_service: Record<string, number>;
+  auto_resolved_7d: number;
+  auto_eligible_count: number;
+}
+
+export interface AutoEligible {
+  enabled: boolean;
+  threshold: number;
+  count: number;
+  ids: number[];
+}
+
+export interface AutoGateStatus {
+  mode: "llm" | "algorithm" | "either" | "both" | string;
+  auto_resolve_enabled: boolean;
+  would_auto_import: boolean;
+  status_eligible: boolean;
+  has_match: boolean;
+  algorithm: { value: number | null; threshold: number; passes: boolean };
+  llm: { value: number | null; threshold: number; passes: boolean };
+  reasons: string[];
+}
+
+export interface ImportFileDetail {
+  path: string | null;
+  raw_path: string | null; // stable identifier (Sonarr's own absolute path) — used for mapping overrides
+  size: number;
+  quality: string | null;
+  mapped_to: string | null;
+  detail: string;
+  overridden: boolean;
+  rejections: string[];
+  import_status?: "ok" | "covered" | "blocked"; // v0.32.0 gap-fill highlighting
+}
+
+export interface ImportTrends {
+  days: number;
+  labels: string[];
+  new: number[];
+  resolved: number[];
+}
+
+// AN-01 (v0.70.0) — per-source_app funnel stats
+export interface ImportFunnelGroup {
+  app: string;
+  total: number;
+  suggested: number;
+  accepted: number;
+  auto_resolved: number;
+  accepted_or_auto: number;
+  verified: number;
+  verified_rate: number | null;
+  rejected: number;
+  orphaned: number;
+  resolve_failed: number;
+  closed_external: number;
+  failed: number;
+  failed_rate: number | null;
+  failure_reason_breakdown: Record<string, number>;
+}
+export interface ImportFunnel {
+  days: number | null;
+  overall: Omit<ImportFunnelGroup, "app">;
+  by_app: ImportFunnelGroup[];
+}
+
+export const importsApi = {
+  list: (status?: string) =>
+    req<FailedImport[]>(`/imports${status ? `?status=${status}` : ""}`),
+  stats: () => req<ImportStats>("/imports/stats"),
+  trends: (days = 30) => req<ImportTrends>(`/imports/trends?days=${days}`),
+  funnel: (days?: number) => req<ImportFunnel>(`/imports/funnel${days ? `?days=${days}` : ""}`),
+  exportCsv: (status?: string) =>
+    downloadCsv(`/imports/export.csv${status ? `?status=${status}` : ""}`),
+  autoEligible: () => req<AutoEligible>("/imports/auto-eligible"),
+  scan: () => req<Record<string, unknown>>("/imports/scan", { method: "POST" }),
+  accept: (id: number) =>
+    req<{ async?: boolean; task_id?: string; total?: number; added?: number; coalesced?: boolean;
+          ok?: boolean; message?: string; status?: string; id?: number }>(
+      `/imports/${id}/accept`, { method: "POST" }),
+  reject: (id: number, removeDownload = false) =>
+    req<{ id: number; status: string; download_client?: string[] }>(
+      `/imports/${id}/reject?remove_download=${removeDownload}`, { method: "POST" }),
+  batch: (ids: number[], action: "accept" | "reject" | "confirm_orphan" | "reopen") =>
+    req<{ async?: boolean; task_id?: string; total?: number; added?: number; coalesced?: boolean;
+          results: Array<Record<string, unknown>> }>("/imports/batch", {
+      method: "POST", body: JSON.stringify({ ids, action }),
+    }),
+  confirmOrphan: (id: number) =>
+    req<{ id: number; status: string }>(`/imports/${id}/confirm-orphan`, { method: "POST" }),
+  reopen: (id: number) =>
+    req<{ id: number; status: string; previous_status?: string; message?: string }>(
+      `/imports/${id}/reopen`, { method: "POST" }),
+  keep: (id: number) =>
+    req<{ id: number; status: string }>(`/imports/${id}/keep`, { method: "POST" }),
+  files: (id: number) =>
+    req<{ files: ImportFileDetail[]; message: string | null }>(`/imports/${id}/files`),
+  autoGate: (id: number) => req<AutoGateStatus>(`/imports/${id}/auto-gate`),
+  candidates: (id: number, query?: string) =>
+    req<{ candidates: Array<{ id: number; title: string; score: number }> }>(
+      `/imports/${id}/candidates${query ? `?query=${encodeURIComponent(query)}` : ""}`),
+  setMatch: (id: number, matchedId: number, matchedTitle: string) =>
+    req<{ id: number; matched_id: number; matched_title: string }>(`/imports/${id}/match`, {
+      method: "POST", body: JSON.stringify({ matched_id: matchedId, matched_title: matchedTitle }),
+    }),
+  llmRun: (ids?: number[]) =>
+    req<{ started: number; total_eligible: number; queued: boolean; queue_position?: number; message: string }>("/imports/llm-run", {
+      method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
+    }),
+  rescore: (ids?: number[]) =>
+    req<{ started: number; message: string }>("/imports/rescore", {
+      method: "POST", body: JSON.stringify(ids?.length ? { ids } : {}),
+    }),
+  llmReviewPack: (id: number) =>
+    req<{ matches: Array<{ file: string; season: number; episode: number; match_type: string; confidence: string; reason: string }>; file_count?: number; message?: string }>(
+      `/imports/${id}/llm-review-pack`, { method: "POST" }),
+  episodeOptions: (id: number) =>
+    req<{ episodes: Array<{ id: number; season: number; episode: number; title: string }>; message?: string }>(
+      `/imports/${id}/episode-options`),
+  updateFileMapping: (id: number, path: string, episodeId: number, season: number, episode: number, title: string) =>
+    req<{ id: number; overrides: Record<string, unknown> }>(`/imports/${id}/file-mapping`, {
+      method: "PUT", body: JSON.stringify({ path, episode_id: episodeId, season, episode, title }),
+    }),
+  // FI-09 — browse/search recent grabs across all enabled *arr apps + force
+  // a one-shot re-import, independent of stuck-import detection (Scan Now).
+  recentDownloads: (params?: { source_app?: string; search?: string; limit?: number }) => {
+    const qs = params
+      ? "?" + new URLSearchParams(Object.entries(params).filter(([, v]) => v != null) as string[][]).toString()
+      : "";
+    return req<RecentDownload[]>(`/imports/recent-downloads${qs}`);
+  },
+  forceReimport: (sourceApp: string, downloadId: string, matchedId: number) =>
+    req<{ ok: boolean; imported?: number; skipped?: number; message: string; reason?: string }>(
+      "/imports/recent-downloads/reimport", {
+        method: "POST",
+        body: JSON.stringify({ source_app: sourceApp, download_id: downloadId, matched_id: matchedId }),
+      }),
+  // FI-10 — nightly malformed-import audit flags.
+  malformedAudit: (includeDismissed = false) =>
+    req<MalformedImportFlag[]>(`/imports/malformed-audit${includeDismissed ? "?include_dismissed=true" : ""}`),
+  malformedAuditDismiss: (id: number) =>
+    req<{ id: number; dismissed: boolean }>(`/imports/malformed-audit/${id}/dismiss`, { method: "POST" }),
+  malformedAuditRunNow: () =>
+    req<{ checked: number; flagged: number }>("/imports/malformed-audit/run", { method: "POST" }),
+  // LLM-06 — in-app accuracy dashboard, pre-aggregated from llm_match_log.
+  llmLogStats: (days?: number) =>
+    req<LlmAccuracyStats>(`/imports/llm-log/stats${days ? `?days=${days}` : ""}`),
+  exportLlmLogCsv: () => downloadCsv("/imports/llm-log/export.csv"),
+};
+
+export interface LlmLogGroupStats {
+  key: string;
+  total: number;
+  parse_ok_rate: number | null;
+  agree_rate: number | null;
+  enforced_rate: number | null;
+  avg_latency_ms: number | null;
+  outcome_agreement_rate: number | null;
+  outcome_sample_size: number;
+  resolution_breakdown: Record<string, number>;
+}
+
+export interface LlmAccuracyStats {
+  overall: LlmLogGroupStats;
+  by_source_app: LlmLogGroupStats[];
+  by_model: LlmLogGroupStats[];
+  by_scaffold_version: LlmLogGroupStats[];
+}
+
+export interface RecentDownload {
+  source_app: string;
+  source_title: string;
+  download_id: string;
+  matched_id: number | null;
+  matched_title: string | null;
+  event_date: string | null;
+  still_in_queue: boolean;
+}
+
+export interface MalformedImportFlag {
+  id: number;
+  source_app: string;
+  matched_id: number | null;
+  matched_title: string | null;
+  download_id: string;
+  source_title: string;
+  pack_label: string | null;
+  mapped_episodes: number | null;
+  total_episodes: number | null;
+  coverage_ratio: number | null;
+  flagged_at: string | null;
+  dismissed: boolean;
+}
+
+// --- Active processes (tracked background tasks) ---
+export interface TaskProgress {
+  id: string;
+  kind: "llm_run" | "scan" | "plex_sync" | "deletion" | "import_batch" | "artist_discovery" | "related_search";
+  label: string;
+  status: "running" | "done" | "failed";
+  current: number | null;
+  total: number | null;
+  message: string | null;
+  started_at: number;
+}
+
+export const tasksApi = {
+  list: () => req<TaskProgress[]>("/tasks"),
+};
+
+// --- System ---
+export interface ScheduleInfo {
+  last_scan_at: string | null;
+  next_scan_at: string | null; // null = scanning disabled
+  last_synced_at: string | null;
+  next_sync_at: string | null; // null = manual sync only
+}
+
+export interface DepHealth {
+  name: string;
+  ok: boolean | null;
+  message: string;
+  source: string | null;
+  checked_at: number | null;
+  breaker_open: boolean;
+  breaker_seconds_remaining: number;
+  last_error: string | null;
+}
+
+export const systemApi = {
+  health: () => req<{ status: string; db: string }>("/system/health"),
+  dependencies: (probe = false) =>
+    req<{ integrations: DepHealth[]; breakers: unknown }>(
+      `/system/dependencies${probe ? "?probe=true" : ""}`),
+  logs: (lines = 200) => req<{ lines: string[] }>(`/system/logs?lines=${lines}`),
+  schedule: () => req<ScheduleInfo>("/system/schedule"),
+};
+
+// --- Auth ---
+export interface AuthStatus {
+  enabled: boolean;
+  totp_enabled: boolean;
+  authenticated: boolean;
+  bypassed: boolean;
+  via: "sso" | "lan" | "session" | null; // how the current request was allowed
+  lan_bypass: boolean;
+  lan_cidrs: string[];
+  sso_enabled: boolean;
+  sso_allow_lan_without_sso: boolean;
+  sso_trusted_proxies: string[] | null; // null unless the caller can manage
+  sso_username_header: string | null;
+  username: string | null;
+}
+
+export interface SsoConfig {
+  sso_enabled?: boolean;
+  sso_allow_lan_without_sso?: boolean;
+  sso_trusted_proxies?: string[];
+  sso_username_header?: string;
+}
+
+export const authApi = {
+  status: () => req<AuthStatus>("/auth/status"),
+  login: (username: string, password: string, totp?: string) =>
+    req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ username, password, totp }) }),
+  logout: () => req<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  setup: (username: string, password: string) =>
+    req<{ ok: boolean; enabled: boolean }>("/auth/setup", { method: "POST", body: JSON.stringify({ username, password }) }),
+  disable: (password: string) =>
+    req<{ ok: boolean; enabled: boolean }>("/auth/disable", { method: "POST", body: JSON.stringify({ password }) }),
+  changePassword: (current: string, next: string) =>
+    req<{ ok: boolean }>("/auth/change-password", { method: "POST", body: JSON.stringify({ current, new: next }) }),
+  totpSetup: () => req<{ secret: string; otpauth_uri: string }>("/auth/totp/setup", { method: "POST" }),
+  totpEnable: (code: string) =>
+    req<{ ok: boolean; totp_enabled: boolean }>("/auth/totp/enable", { method: "POST", body: JSON.stringify({ code }) }),
+  totpDisable: (password: string) =>
+    req<{ ok: boolean; totp_enabled: boolean }>("/auth/totp/disable", { method: "POST", body: JSON.stringify({ password }) }),
+  updateConfig: (lan_bypass: boolean, lan_cidrs: string[]) =>
+    req<{ ok: boolean }>("/auth/config", { method: "PUT", body: JSON.stringify({ lan_bypass, lan_cidrs }) }),
+  updateSso: (body: SsoConfig) =>
+    req<{ ok: boolean; sso_enabled: boolean; sso_allow_lan_without_sso: boolean; sso_trusted_proxies: string[]; sso_username_header: string }>(
+      "/auth/sso", { method: "PUT", body: JSON.stringify(body) }),
+};
+
+// --- Ollama (optional local-LLM assist) ---
+export const ollamaApi = {
+  models: () => req<{ ok: boolean; models: string[]; message: string }>("/integrations/ollama/models"),
+  test: () => req<{ ok: boolean; message: string; version: string | null }>("/integrations/ollama/test", { method: "POST" }),
+};
+
+// --- Integrations ---
+export interface IntegrationConfig {
+  name: string;
+  url: string | null;
+  api_key: string | null;   // masked on read — never the stored secret
+  api_key_set: boolean;     // a secret is stored (drives the "leave blank to keep" placeholder)
+  username: string | null;  // user/pass download clients (qBittorrent) — not a secret
+  password: string | null;  // masked on read — never the stored secret
+  password_set: boolean;
+  enabled: boolean;
+  remove_from_monitored_on_delete: boolean;
+  delete_from_arr_list: boolean;
+}
+
+export const integrationsApi = {
+  list: () => req<IntegrationConfig[]>("/integrations"),
+  update: (name: string, body: Partial<IntegrationConfig>) =>
+    req<IntegrationConfig>(`/integrations/${name}`, { method: "PUT", body: JSON.stringify(body) }),
+  test: (name: string) => req<{ ok: boolean; message: string; version: string | null }>(`/integrations/${name}/test`, { method: "POST" }),
+  syncPlex: () => req<{ synced: number; protected?: number }>("/integrations/plex/sync", { method: "POST" }),
+  syncSeerr: () => req<{ protected: number }>("/integrations/seerr/sync", { method: "POST" }),
+};
+
+// --- Formatters ---
+export function fmtBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+// Backend timestamps are naive UTC with no timezone suffix; treat suffix-less
+// date-times as UTC so they render correctly in the browser's local zone.
+// Date-only strings (no "T") and suffixed strings pass through unchanged.
+export function parseApiDate(iso: string): Date {
+  if (iso.includes("T") && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso)) return new Date(iso + "Z");
+  return new Date(iso);
+}
+
+export function fmtDate(iso: string | null): string {
+  if (!iso) return "—";
+  return parseApiDate(iso).toLocaleDateString();
+}
+
+export function fmtRelative(iso: string | null | undefined, empty = "Never"): string {
+  if (!iso) return empty;
+  const diffMs = Date.now() - parseApiDate(iso).getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
+}
