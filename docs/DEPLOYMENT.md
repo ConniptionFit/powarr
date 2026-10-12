@@ -22,7 +22,7 @@ file sets `com.centurylinklabs.watchtower.enable=false`).
    current Postgres password (rotate it first if the old one was ever in git history).
 4. **Resources.** Create the Build and Stack from `deploy/komodo/resources.toml`
    (paste into a Resource Sync, or create them in the UI with the same values).
-   Set the config path in `deploy/komodo/compose.yaml` to the real host path.
+   The config path in `deploy/komodo/compose.yaml` is `/mnt/ServerFiles/Docker/powarr`; change it if yours differs.
 5. **Webhook.** In Forgejo repo Settings > Webhooks, add a push webhook for `master`
    pointing at the Build's webhook URL shown in Komodo (Build > Config > Webhook).
 6. **First run.** Run the Build once, then Deploy the Stack. Stop the old

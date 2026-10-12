@@ -10,7 +10,7 @@ services:
     ports:
       - "7979:7979"
     volumes:
-      - /path/to/powarr/config:/config   # set to the existing host config path
+      - /mnt/ServerFiles/Docker/powarr:/config
     restart: unless-stopped
     environment:
       - POWARR_DATA_DIR=/config
