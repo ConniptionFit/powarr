@@ -1,0 +1,28 @@
+# Powarr stack for Komodo: pulls the published image instead of building on the host.
+# Secrets are never written here. Komodo injects POWARR_DB_PASSWORD from a Variable
+# (see deploy/komodo/resources.toml and docs/DEPLOYMENT.md).
+
+services:
+  powarr:
+    image: git.pwrs.dev/powers/powarr:latest
+    pull_policy: always
+    container_name: powarr
+    ports:
+      - "7979:7979"
+    volumes:
+      - /mnt/ServerFiles/Docker/powarr:/config
+    restart: unless-stopped
+    environment:
+      - POWARR_DATA_DIR=/config
+      - POWARR_DB_URL=postgresql://powarr:${POWARR_DB_PASSWORD:?set POWARR_DB_PASSWORD}@postgres:5432/powarr
+    labels:
+      # Komodo is the only updater for this container; keep Watchtower away from it.
+      - com.centurylinklabs.watchtower.enable=false
+    networks:
+      - default
+      - postgres_net
+
+networks:
+  postgres_net:
+    external: true
+    name: postgres_net   # replace with the real postgres network name
