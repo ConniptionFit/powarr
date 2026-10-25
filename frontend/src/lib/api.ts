@@ -158,6 +158,20 @@ export interface ReclaimTrend {
   total_bytes: number;
 }
 
+export interface StorageForecast {
+  days: number;
+  current_bytes: number;
+  added_bytes: number;
+  removed_bytes: number;
+  net_bytes_per_day: number;
+  capacity_bytes: number | null;
+  used_pct: number | null;
+  days_until_full: number | null;
+  full_date: string | null;
+  status: "no_capacity" | "growing" | "shrinking" | "flat" | "distant" | "full";
+  points: { date: string; added: number; removed: number }[];
+}
+
 export interface ScoringPreviewSide {
   above_threshold: number;
   total_size_bytes: number;
@@ -252,6 +266,8 @@ export const mediaApi = {
   scoreBreakdown: (id: number) => req<ScoreBreakdown>(`/media/${id}/score-breakdown`),
   // LIB-11 — reclaimed space per day, from the deletion log Powarr already keeps.
   reclaimTrend: (days = 90) => req<ReclaimTrend>(`/media/reclaim-trend?days=${days}`),
+  storageForecast: (days = 90, capacityBytes?: number) =>
+    req<StorageForecast>(`/media/storage-forecast?days=${days}${capacityBytes ? `&capacity_bytes=${capacityBytes}` : ""}`),
   restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
   // INT-02 (v0.71.0) — manual *arr ID override, fixing a bad auto-link without a
   // full resync. arrCandidates browses/searches the matching app's library;

@@ -327,6 +327,17 @@ def reclaim_trend(db: Session = Depends(get_db), days: int = Query(90, ge=7, le=
     }
 
 
+@router.get("/storage-forecast")
+def storage_forecast(db: Session = Depends(get_db),
+                     days: int = Query(90, ge=14, le=365),
+                     capacity_bytes: Optional[int] = Query(None, ge=0)):
+    """Net library growth (added minus deleted) over the window and, when a
+    capacity is supplied, a projected fill date. Capacity is an input because
+    Powarr has no reliable view of the underlying disk size."""
+    from app.services.storage_forecast import build_forecast
+    return build_forecast(db, days=days, capacity_bytes=capacity_bytes)
+
+
 @router.post("/preview-delete", response_model=DeletionPreview)
 def preview_delete(ids: list[int] = Body(...), delete_mode: Optional[str] = Query(None),
                    db: Session = Depends(get_db)):
