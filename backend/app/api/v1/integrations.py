@@ -9,7 +9,7 @@ from app.schemas.settings import IntegrationConfig, IntegrationConfigUpdate, Qdr
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
-INTEGRATION_NAMES = ("plex", "tautulli", "sonarr", "radarr", "lidarr",
+INTEGRATION_NAMES = ("plex", "jellyfin", "tautulli", "sonarr", "radarr", "lidarr",
                      "readarr", "seerr", "qbittorrent", "transmission", "lastfm", "bazarr",
                      "youtube", "spotify")
 
@@ -27,6 +27,9 @@ def _get_client(integration: Integration):
     if integration.name == "plex":
         from app.integrations.plex import PlexIntegration
         return PlexIntegration(integration.url, api_key, extra)
+    if integration.name == "jellyfin":
+        from app.integrations.jellyfin import JellyfinIntegration
+        return JellyfinIntegration(integration.url, api_key, extra)
     if integration.name == "tautulli":
         from app.integrations.tautulli import TautulliIntegration
         return TautulliIntegration(integration.url, api_key, extra)
@@ -242,6 +245,15 @@ async def test_integration(name: str, db: Session = Depends(get_db)) -> dict[str
         raise HTTPException(status_code=404, detail="Integration not found")
     client = _get_client(row)
     return await client.test_connection()
+
+
+@router.post("/jellyfin/sync")
+async def sync_jellyfin(db: Session = Depends(get_db)) -> dict[str, Any]:
+    from app.services.jellyfin_sync import run_jellyfin_sync
+    try:
+        return await run_jellyfin_sync(db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/plex/sync")

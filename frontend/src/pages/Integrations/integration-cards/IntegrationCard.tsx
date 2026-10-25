@@ -6,6 +6,7 @@ import { integrationsApi, type IntegrationConfig } from "../../../lib/api";
 
 export const INTEGRATION_META: Record<string, { label: string; color: string; description: string }> = {
   plex: { label: "Plex", color: "bg-yellow-600", description: "Media server — required for library sync" },
+  jellyfin: { label: "Jellyfin", color: "bg-violet-700", description: "Alternative media server (read-only library sync). Use Plex or Jellyfin as your source, not both" },
   tautulli: { label: "Tautulli", color: "bg-blue-600", description: "Optional: watch history + multi-user deletion protection" },
   sonarr: { label: "Sonarr", color: "bg-teal-600", description: "TV show management" },
   radarr: { label: "Radarr", color: "bg-amber-600", description: "Movie management" },
@@ -69,6 +70,7 @@ export function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
 
   const isArr = ["sonarr", "radarr", "lidarr"].includes(cfg.name);
   const isPlex = cfg.name === "plex";
+  const isJellyfin = cfg.name === "jellyfin";
 
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
@@ -77,8 +79,9 @@ export function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
     setSyncing(true);
     setSyncResult(null);
     try {
-      const result = await integrationsApi.syncPlex();
-      setSyncResult(`Synced ${result.synced} items`);
+      const result = isJellyfin ? await integrationsApi.syncJellyfin() : await integrationsApi.syncPlex();
+      const warning = "warning" in result && result.warning ? ` (${result.warning})` : "";
+      setSyncResult(`Synced ${result.synced} items${warning}`);
       qc.invalidateQueries({ queryKey: ["media"] });
       qc.invalidateQueries({ queryKey: ["stats"] });
     } catch (e: unknown) {
@@ -184,7 +187,7 @@ export function IntegrationCard({ cfg }: { cfg: IntegrationConfig }) {
           <Save size={13} />
           Save
         </button>
-        {isPlex && (
+        {(isPlex || isJellyfin) && (
           <button
             onClick={handleSync}
             disabled={syncing || !enabled}

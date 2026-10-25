@@ -92,7 +92,7 @@ def _seed_integrations():
 
     db = SessionLocal()
     try:
-        for name in ("plex", "tautulli", "sonarr", "radarr", "lidarr",
+        for name in ("plex", "jellyfin", "tautulli", "sonarr", "radarr", "lidarr",
                      "readarr", "seerr", "qbittorrent", "transmission", "lastfm", "bazarr",
                      "youtube", "spotify"):
             if not db.query(Integration).filter_by(name=name).first():

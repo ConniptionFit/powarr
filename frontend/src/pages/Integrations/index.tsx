@@ -14,7 +14,7 @@ export default function IntegrationsPage({ embedded = false }: { embedded?: bool
     queryFn: integrationsApi.list,
   });
 
-  const order = ["plex", "tautulli", "radarr", "sonarr", "lidarr", "readarr", "seerr", "bazarr", "qbittorrent", "transmission"];
+  const order = ["plex", "jellyfin", "tautulli", "radarr", "sonarr", "lidarr", "readarr", "seerr", "bazarr", "qbittorrent", "transmission"];
   const dedicatedCards = ["lastfm", "youtube", "spotify"];
   const sorted = [...integrations]
     .filter(cfg => !dedicatedCards.includes(cfg.name))

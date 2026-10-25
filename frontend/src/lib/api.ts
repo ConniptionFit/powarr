@@ -946,6 +946,13 @@ export const integrationsApi = {
     req<IntegrationConfig>(`/integrations/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   test: (name: string) => req<{ ok: boolean; message: string; version: string | null }>(`/integrations/${name}/test`, { method: "POST" }),
   syncPlex: () => req<{ synced: number; protected?: number }>("/integrations/plex/sync", { method: "POST" }),
+  syncJellyfin: () => req<{ synced: number; warning?: string | null }>("/integrations/jellyfin/sync", { method: "POST" }),
+  // Sync whichever media server is the library source (Plex unless only Jellyfin is on).
+  syncLibrary: async () => {
+    const list = await integrationsApi.list();
+    const on = (n: string) => list.some(i => i.name === n && i.enabled);
+    return !on("plex") && on("jellyfin") ? integrationsApi.syncJellyfin() : integrationsApi.syncPlex();
+  },
   syncSeerr: () => req<{ protected: number }>("/integrations/seerr/sync", { method: "POST" }),
 };
 
