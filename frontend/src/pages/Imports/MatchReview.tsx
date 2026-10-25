@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd, Download, Rows3, Split, LayoutGrid, Table2, HelpCircle, CheckCircle2, XCircle } from "lucide-react";
 import { importsApi, settingsApi, fmtDate, fmtBytes, type FailedImport, type AutoGateStatus } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
+import SavedViews from "../../components/SavedViews";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
@@ -1227,6 +1228,15 @@ export default function MatchReview() {
             className="pl-8 pr-3 py-1.5 w-56 bg-surface-raised border border-purple-900/40 rounded-lg text-sm text-white placeholder:text-slate-500"
           />
         </div>
+        <SavedViews
+          scope="matchReview"
+          current={{ statusFilter, sortBy, sortDir, downgradeOnly, suspiciousOnly, packFilter, search, platformFilter, rootCauseFilter }}
+          apply={v => {
+            setStatusFilter(v.statusFilter); setSortBy(v.sortBy); setSortDir(v.sortDir);
+            setDowngradeOnly(v.downgradeOnly); setSuspiciousOnly(v.suspiciousOnly); setPackFilter(v.packFilter);
+            setSearch(v.search); setPlatformFilter(v.platformFilter); setRootCauseFilter(v.rootCauseFilter);
+          }}
+        />
         {rootCauseCounts.length > 0 && (
           <select
             value={rootCauseFilter}
