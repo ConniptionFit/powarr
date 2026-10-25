@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Link2, Unlink } from "lucide-react";
 import { mediaApi, type MediaItem, type ArrCandidate } from "../lib/api";
+import Modal from "./Modal";
 
 const APP_LABEL: Record<string, string> = { movie: "Radarr", episode: "Sonarr", track: "Lidarr" };
 const ID_FIELD: Record<string, keyof MediaItem> = {
@@ -50,8 +51,7 @@ export default function ArrLinkModal({ item, onClose }: { item: MediaItem; onClo
   if (!idField) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-surface-raised border border-purple-900/40 rounded-2xl w-full max-w-md shadow-2xl max-h-[80vh] flex flex-col">
+    <Modal onClose={onClose} label="Fix arr link" className="w-full max-w-md max-h-[80vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-purple-900/20">
           <div>
             <h2 className="text-lg font-bold text-white">Fix {appLabel} Link</h2>
@@ -118,7 +118,6 @@ export default function ArrLinkModal({ item, onClose }: { item: MediaItem; onClo
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
