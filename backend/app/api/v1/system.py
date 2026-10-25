@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.log_buffer import get_recent_logs
+from app.log_buffer import get_logs_since, get_recent_logs
 from app.models.app_setting import AppSetting
 from app.schemas.settings import ImportMatchingSettings, SyncSettings
 
@@ -72,8 +72,15 @@ def reset_dependency_breaker(name: Optional[str] = Query(None)):
 
 
 @router.get("/logs")
-def logs(lines: int = Query(200, le=1000)):
-    return {"lines": get_recent_logs(lines)}
+def logs(lines: int = Query(200, le=1000), since: Optional[int] = Query(None, ge=0)):
+    """Recent log lines. Pass `since` (the `next` from a previous response) to get
+    only lines added after it; `reset` is true when the cursor no longer applies
+    (e.g. the server restarted) and `lines` is a fresh tail."""
+    if since is None:
+        new, nxt, _ = get_logs_since(-1, lines)
+        return {"lines": new, "next": nxt, "reset": True}
+    new, nxt, reset = get_logs_since(since, lines)
+    return {"lines": new, "next": nxt, "reset": reset}
 
 
 class ScheduleOut(BaseModel):
