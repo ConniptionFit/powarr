@@ -12,6 +12,7 @@ import { ToastProvider } from "./context/ToastContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import CommandPalette from "./components/CommandPalette";
 import ShortcutHelp from "./components/ShortcutHelp";
+import TitleSync from "./components/TitleSync";
 import { PAGE_LOADERS } from "./lib/pageChunks";
 
 // Each page is its own chunk so first paint only ships the shell + the route being viewed.
@@ -179,6 +180,7 @@ export default function App() {
       <ActiveProcessesTray />
       <CommandPalette />
       <ShortcutHelp />
+      <TitleSync />
       </ToastProvider>
       </TaskProvider>
       </AuthGate>
