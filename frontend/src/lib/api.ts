@@ -975,12 +975,25 @@ export interface IntegrationConfig {
   delete_from_arr_list: boolean;
 }
 
+export interface UpgradeItem {
+  id: number | null;
+  title: string;
+  year: number | null;
+  quality: string | null;
+  size: number;
+  monitored: boolean;
+  episodes: number | null;
+}
+export interface UpgradeSection { configured: boolean; error: string | null; total: number; items: UpgradeItem[] }
+export interface UpgradeCandidates { radarr: UpgradeSection; sonarr: UpgradeSection }
+
 export const integrationsApi = {
   list: () => req<IntegrationConfig[]>("/integrations"),
   update: (name: string, body: Partial<IntegrationConfig>) =>
     req<IntegrationConfig>(`/integrations/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   test: (name: string) => req<{ ok: boolean; message: string; version: string | null }>(`/integrations/${name}/test`, { method: "POST" }),
   syncPlex: () => req<{ synced: number; protected?: number }>("/integrations/plex/sync", { method: "POST" }),
+  upgradeCandidates: () => req<UpgradeCandidates>("/integrations/upgrade-candidates"),
   syncJellyfin: () => req<{ synced: number; warning?: string | null }>("/integrations/jellyfin/sync", { method: "POST" }),
   // Sync whichever media server is the library source (Plex unless only Jellyfin is on).
   syncLibrary: async () => {

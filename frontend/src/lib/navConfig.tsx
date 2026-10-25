@@ -33,6 +33,7 @@ export const AREAS: AreaDef[] = [
       { path: "/library/deletion-suggestions", label: "Deletion Suggestions" },
       { path: "/library/duplicates", label: "Duplicates" },
       { path: "/library/health", label: "Health" },
+      { path: "/library/upgrades", label: "Upgrades" },
       { path: "/library/rules", label: "Rules" },
       { path: "/library/deletion-history", label: "Deletion History" },
     ],
