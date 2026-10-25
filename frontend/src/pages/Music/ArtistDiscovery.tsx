@@ -27,6 +27,7 @@ import ArtistCard from "../../components/ArtistCard";
 import ArtistPreviewButton from "../../components/ArtistPreviewButton";
 import ScrollFadeX from "../../components/ScrollFadeX";
 import ArtistSuggestionModal from "../../components/ArtistSuggestionModal";
+import { useToast } from "../../context/ToastContext";
 
 interface Candidate {
   id: number;
@@ -159,6 +160,8 @@ const api = {
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/accept`, { method: "POST" }),
   reject: (id: number) =>
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/reject`, { method: "POST" }),
+  unreject: (id: number) =>
+    req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/unreject`, { method: "POST" }),
   batch: (ids: number[], action: "accept" | "reject") =>
     req<{ results: any[] }>("/artist-discovery/batch", {
       method: "POST",
@@ -482,6 +485,7 @@ function RecentRuns() {
 
 export default function ArtistDiscovery() {
   const qc = useQueryClient();
+  const toast = useToast();
   const { data: settings } = useQuery({ queryKey: ["ad-settings"], queryFn: api.settings });
   const { data: stats } = useQuery({ queryKey: ["ad-stats"], queryFn: api.stats });
   const { data: candidates = [] } = useQuery({
@@ -516,8 +520,19 @@ export default function ArtistDiscovery() {
   const actMut = useMutation({
     mutationFn: ({ id, action }: { id: number; action: "accept" | "reject" }) =>
       action === "accept" ? api.accept(id) : api.reject(id),
-    onSuccess: (r) => {
-      setMsg(r.message);
+    onSuccess: (r, v) => {
+      if (v.action === "reject") {
+        toast.undoable("Candidate rejected", () => {
+          api.unreject(v.id)
+            .then(() => {
+              qc.invalidateQueries({ queryKey: ["ad-candidates"] });
+              qc.invalidateQueries({ queryKey: ["ad-stats"] });
+            })
+            .catch((e: Error) => toast.error(e.message));
+        });
+      } else {
+        setMsg(r.message);
+      }
       qc.invalidateQueries({ queryKey: ["ad-candidates"] });
       qc.invalidateQueries({ queryKey: ["ad-stats"] });
       qc.invalidateQueries({ queryKey: ["ad-recent-adds"] });

@@ -2,15 +2,18 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState, type
 import { CheckCircle2, AlertCircle, Info, X } from "lucide-react";
 
 type Kind = "success" | "error" | "info";
-interface Toast { id: number; kind: Kind; message: string; }
+interface ToastAction { label: string; onClick: () => void; }
+interface Toast { id: number; kind: Kind; message: string; action?: ToastAction; }
 
 interface ToastApi {
   success: (message: string) => void;
   error: (message: string) => void;
   info: (message: string) => void;
+  /** Success toast with an Undo-style button; lingers longer so it can be used. */
+  undoable: (message: string, onUndo: () => void) => void;
 }
 
-const ToastContext = createContext<ToastApi>({ success() {}, error() {}, info() {} });
+const ToastContext = createContext<ToastApi>({ success() {}, error() {}, info() {}, undoable() {} });
 export const useToast = () => useContext(ToastContext);
 
 const ICONS = { success: CheckCircle2, error: AlertCircle, info: Info } as const;
@@ -29,16 +32,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback((id: number) => setToasts(t => t.filter(x => x.id !== id)), []);
 
-  const push = useCallback((kind: Kind, message: string) => {
+  const push = useCallback((kind: Kind, message: string, action?: ToastAction) => {
     const id = nextId.current++;
-    setToasts(t => [...t.slice(-3), { id, kind, message }]);
-    setTimeout(() => dismiss(id), TTL[kind]);
+    setToasts(t => [...t.slice(-3), { id, kind, message, action }]);
+    setTimeout(() => dismiss(id), action ? 8000 : TTL[kind]);
   }, [dismiss]);
 
   const api = useMemo<ToastApi>(() => ({
     success: m => push("success", m),
     error: m => push("error", m),
     info: m => push("info", m),
+    undoable: (m, onUndo) => push("success", m, { label: "Undo", onClick: onUndo }),
   }), [push]);
 
   return (
@@ -58,6 +62,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             >
               <Icon size={16} className="mt-0.5 flex-shrink-0" />
               <span className="flex-1 text-slate-200 break-words">{t.message}</span>
+              {t.action && (
+                <button
+                  onClick={() => { t.action!.onClick(); dismiss(t.id); }}
+                  className="rounded px-2 py-0.5 text-xs font-semibold text-brand-light hover:bg-white/10"
+                >
+                  {t.action.label}
+                </button>
+              )}
               <button onClick={() => dismiss(t.id)} aria-label="Dismiss" className="text-slate-500 hover:text-white">
                 <X size={14} />
               </button>

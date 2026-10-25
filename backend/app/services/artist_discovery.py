@@ -1706,6 +1706,19 @@ def reject_candidate(db, candidate_id: int) -> dict[str, Any]:
     return {"ok": True, "message": "Rejected"}
 
 
+def unreject_candidate(db, candidate_id: int) -> dict[str, Any]:
+    """Undo a rejection: only rejected rows go back to the pending queue."""
+    cand = db.query(DiscoveredArtist).filter_by(id=candidate_id).first()
+    if not cand:
+        return {"ok": False, "message": "Candidate not found"}
+    if cand.status != "rejected":
+        return {"ok": False, "message": "Candidate is not rejected"}
+    cand.status = "pending"
+    cand.resolved_at = None
+    db.commit()
+    return {"ok": True, "message": "Restored to pending"}
+
+
 # --- Related Artists search (ad-hoc, read-only) ------------------------------------
 # On-demand "who's similar to X" for any artist, not just your own monitored
 # ones. Deliberately independent of the taste-model pipeline above: no Qdrant

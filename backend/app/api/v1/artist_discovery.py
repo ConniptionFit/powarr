@@ -305,6 +305,15 @@ def reject(candidate_id: int, db: Session = Depends(get_db)):
     return result
 
 
+@router.post("/candidates/{candidate_id}/unreject")
+def unreject(candidate_id: int, db: Session = Depends(get_db)):
+    result = service.unreject_candidate(db, candidate_id)
+    if not result.get("ok"):
+        status = 404 if result.get("message") == "Candidate not found" else 409
+        raise HTTPException(status_code=status, detail=result.get("message"))
+    return result
+
+
 @router.post("/batch")
 async def batch(body: dict = Body(...), db: Session = Depends(get_db)):
     ids = body.get("ids") or []
