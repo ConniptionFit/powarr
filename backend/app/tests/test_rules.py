@@ -91,3 +91,18 @@ class RuleApiTests(_ApiCase):
     def test_put_invalid_is_422(self):
         r = self.client.put("/api/v1/media/rules", json=[{"name": "x", "conditions": []}])
         self.assertEqual(r.status_code, 422)
+
+
+class CountEndpointTests(_ApiCase):
+    def test_count_matches_list_filters(self):
+        for i in range(5):
+            _m(self.db, f"c{i}", score=50.0 + i)
+        _m(self.db, "prot", protected=True, score=99.0)
+        _m(self.db, "pend", pending_delete_at=NOW, score=99.0)
+        self.db.commit()
+        total = self.client.get("/api/v1/media/count").json()["total"]
+        listed = self.client.get("/api/v1/media", params={"limit": 100}).json()
+        self.assertEqual(total, len(listed))
+        self.assertEqual(total, 5)  # protected and pending excluded
+        self.assertEqual(self.client.get("/api/v1/media/count", params={"min_score": 53}).json()["total"], 2)
+        self.assertEqual(self.client.get("/api/v1/media/count", params={"include_protected": True}).json()["total"], 6)

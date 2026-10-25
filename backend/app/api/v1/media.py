@@ -38,21 +38,9 @@ def _get_setting(db: Session, key: str, schema):
     return schema(**json.loads(row.value))
 
 
-@router.get("", response_model=list[MediaItemOut])
-def list_media(
-    db: Session = Depends(get_db),
-    media_type: Optional[str] = Query(None),
-    min_score: Optional[float] = Query(None),
-    search: Optional[str] = Query(None, description="Substring match across title, "
-                                                    "parent title, library section and year"),
-    ignored: Optional[bool] = Query(False),
-    include_protected: bool = Query(False),
-    pending: bool = Query(False),  # true = list only items awaiting soft-delete purge
-    sort_by: str = Query("score"),
-    order: str = Query("desc"),
-    limit: int = Query(200),
-    offset: int = Query(0),
-):
+def _media_query(db, media_type, min_score, search, ignored, include_protected, pending):
+    """Shared filter set for the list and count endpoints, so the "N matching"
+    number always agrees with what paging through the list would return."""
     q = db.query(MediaItem)
     if pending:
         q = q.filter(MediaItem.pending_delete_at.isnot(None))
@@ -93,6 +81,40 @@ def list_media(
             conditions.append(MediaItem.year == int(digits))
         q = q.filter(or_(*conditions))
 
+    return q
+
+
+@router.get("/count")
+def count_media(
+    db: Session = Depends(get_db),
+    media_type: Optional[str] = Query(None),
+    min_score: Optional[float] = Query(None),
+    search: Optional[str] = Query(None),
+    ignored: Optional[bool] = Query(False),
+    include_protected: bool = Query(False),
+    pending: bool = Query(False),
+):
+    """How many items match the same filters as the list endpoint."""
+    q = _media_query(db, media_type, min_score, search, ignored, include_protected, pending)
+    return {"total": q.with_entities(func.count(MediaItem.id)).scalar() or 0}
+
+
+@router.get("", response_model=list[MediaItemOut])
+def list_media(
+    db: Session = Depends(get_db),
+    media_type: Optional[str] = Query(None),
+    min_score: Optional[float] = Query(None),
+    search: Optional[str] = Query(None, description="Substring match across title, "
+                                                    "parent title, library section and year"),
+    ignored: Optional[bool] = Query(False),
+    include_protected: bool = Query(False),
+    pending: bool = Query(False),  # true = list only items awaiting soft-delete purge
+    sort_by: str = Query("score"),
+    order: str = Query("desc"),
+    limit: int = Query(200),
+    offset: int = Query(0),
+):
+    q = _media_query(db, media_type, min_score, search, ignored, include_protected, pending)
     col = getattr(MediaItem, sort_by, None) if sort_by in SORTABLE_FIELDS else None
     if col is None:
         col = MediaItem.score

@@ -259,6 +259,10 @@ export const mediaApi = {
     const qs = params ? "?" + new URLSearchParams(params as Record<string, string>).toString() : "";
     return req<MediaItem[]>(`/media${qs}`);
   },
+  count: (params?: Record<string, string | number | boolean>) => {
+    const qs = params ? "?" + new URLSearchParams(params as Record<string, string>).toString() : "";
+    return req<{ total: number }>(`/media/count${qs}`);
+  },
   stats: () => req<MediaStats>("/media/stats"),
   ignore: (id: number, ignored: boolean) =>
     req(`/media/${id}/ignore?ignored=${ignored}`, { method: "PATCH" }),
