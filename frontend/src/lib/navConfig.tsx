@@ -73,7 +73,10 @@ export const LOGS_AREA: AreaDef = {
   label: "Logs",
   icon: ScrollText,
   base: "/logs",
-  screens: [{ path: "/logs", label: "Logs" }],
+  screens: [
+    { path: "/logs", label: "Logs" },
+    { path: "/logs/status", label: "Status" },
+  ],
 };
 
 export function areaForPath(pathname: string): AreaDef | undefined {

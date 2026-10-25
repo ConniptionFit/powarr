@@ -22,6 +22,7 @@ const DeletionSuggestions = lazy(PAGE_LOADERS.DeletionSuggestions);
 const Duplicates = lazy(PAGE_LOADERS.Duplicates);
 const Health = lazy(PAGE_LOADERS.Health);
 const Rules = lazy(PAGE_LOADERS.Rules);
+const Status = lazy(PAGE_LOADERS.Status);
 const DeletionHistory = lazy(PAGE_LOADERS.DeletionHistory);
 const MatchReview = lazy(PAGE_LOADERS.MatchReview);
 const RecentDownloads = lazy(PAGE_LOADERS.RecentDownloads);
@@ -170,6 +171,7 @@ export default function App() {
               <Route path="/settings/:category" element={<SettingsPage />} />
 
               <Route path="/logs" element={<LogsPage />} />
+              <Route path="/logs/status" element={<Status />} />
 
               {/* Back-compat redirect for the old top-level Integrations page */}
               <Route path="/integrations" element={<Navigate to="/settings/integrations" replace />} />
