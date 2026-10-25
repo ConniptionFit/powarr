@@ -247,6 +247,14 @@ async def test_integration(name: str, db: Session = Depends(get_db)) -> dict[str
     return await client.test_connection()
 
 
+@router.get("/upgrade-candidates")
+async def upgrade_candidates(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Movies/series whose files are below their quality profile's cutoff,
+    straight from Radarr/Sonarr (Wanted > Cutoff Unmet). Live and read-only."""
+    from app.services import upgrade_candidates as uc
+    return await uc.build(db)
+
+
 @router.post("/jellyfin/sync")
 async def sync_jellyfin(db: Session = Depends(get_db)) -> dict[str, Any]:
     from app.services.jellyfin_sync import run_jellyfin_sync
