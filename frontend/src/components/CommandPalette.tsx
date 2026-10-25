@@ -5,6 +5,7 @@ import { AREAS, LOGS_AREA } from "../lib/navConfig";
 import Kbd from "./Kbd";
 import { useToast } from "../context/ToastContext";
 import { setTheme } from "../lib/useTheme";
+import { OPEN_SHORTCUTS_EVENT } from "./ShortcutHelp";
 import { importsApi, integrationsApi, settingsApi } from "../lib/api";
 
 interface Entry {
@@ -20,6 +21,10 @@ const ACTIONS: Entry[] = [
   {
     path: "action:toggle-theme", area: "Action", label: "Toggle light / dark theme",
     run: async () => { setTheme(document.documentElement.classList.contains("light") ? "dark" : "light"); },
+  },
+  {
+    path: "action:shortcuts", area: "Action", label: "Keyboard shortcuts",
+    run: async () => { window.dispatchEvent(new Event(OPEN_SHORTCUTS_EVENT)); },
   },
   {
     path: "action:scan-imports", area: "Action", label: "Scan failed imports now",

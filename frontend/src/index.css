@@ -37,7 +37,16 @@ html.light .text-brand-light { color: #6d28d9; }
 html.light .text-purple-200, html.light .text-purple-300, html.light .text-purple-400 { color: #6d28d9; }
 html.light .text-red-300, html.light .text-red-400 { color: #b91c1c; }
 html.light .text-green-300, html.light .text-green-400 { color: #15803d; }
-html.light .text-yellow-400, html.light .text-yellow-200 { color: #a16207; }
+html.light .text-yellow-400, html.light .text-yellow-200 { color: #92400e; }
+/* Tinted status surfaces (dark -900/-950 washes) become light tints; their text goes darker. */
+html.light [class*="bg-red-9"] { background-color: rgb(220 38 38 / 0.10); }
+html.light [class*="bg-green-9"] { background-color: rgb(22 163 74 / 0.12); }
+html.light [class*="bg-yellow-9"], html.light [class*="bg-amber-9"] { background-color: rgb(202 138 4 / 0.14); }
+html.light [class*="bg-orange-9"] { background-color: rgb(234 88 12 / 0.12); }
+html.light .text-amber-200, html.light .text-amber-300, html.light .text-amber-400, html.light .text-yellow-300, html.light .text-yellow-500 { color: #92400e; }
+html.light .text-orange-300 { color: #c2410c; }
+html.light .text-emerald-200, html.light .text-emerald-300, html.light .text-emerald-400 { color: #047857; }
+html.light .text-indigo-300 { color: #4338ca; }
 /* Solid coloured controls keep white labels. */
 html.light .bg-brand.text-white, html.light .bg-brand-dark.text-white, html.light .bg-brand-light.text-white,
 html.light [class*="bg-indigo-"].text-white, html.light [class*="bg-red-"].text-white,
