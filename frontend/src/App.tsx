@@ -11,6 +11,7 @@ import { TaskProvider } from "./context/TaskContext";
 import { ToastProvider } from "./context/ToastContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import CommandPalette from "./components/CommandPalette";
+import ShortcutHelp from "./components/ShortcutHelp";
 
 // Each page is its own chunk so first paint only ships the shell + the route being viewed.
 const Overview = lazy(() => import("./pages/Overview"));
@@ -175,6 +176,7 @@ export default function App() {
       </div>
       <ActiveProcessesTray />
       <CommandPalette />
+      <ShortcutHelp />
       </ToastProvider>
       </TaskProvider>
       </AuthGate>
