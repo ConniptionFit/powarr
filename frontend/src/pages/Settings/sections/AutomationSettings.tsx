@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, AlertTriangle, Lock, Bell, Send, Bot, Wand2, Play, Clock, DatabaseBackup, Activity, RotateCcw, Plug, SlidersHorizontal, Music } from "lucide-react";
 import { Skeleton } from "../../../components/Skeleton";
+import ImportPreviewModal from "../../../components/ImportPreviewModal";
 import { settingsApi, mediaApi, authApi, importsApi, fmtBytes, fmtDate, type ScoringWeights, type ScoringProfiles,
          type ImportMatchingSettings, type CleanupSettings, type SyncSettings, type NotificationSettings,
          type OllamaSettings, type LlmPolicies, type LlmAppOverride, type LlmLibraryOverride,
-         type LlmScheduleSettings, type BackupSettings, type BackupFile, type SettingsExport } from "../../../lib/api";
+         type LlmScheduleSettings, type BackupSettings, type BackupFile, type SettingsExport, type ImportPreview } from "../../../lib/api";
 
 export function CleanupSection() {
   const { data } = useQuery({ queryKey: ["cleanup-settings"], queryFn: settingsApi.getCleanup });
@@ -397,6 +398,7 @@ export function ConfigExportSection() {
   const [saved, setSaved] = useState(false);
   const [running, setRunning] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [pending, setPending] = useState<{ payload: SettingsExport; preview: ImportPreview } | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -424,6 +426,7 @@ export function ConfigExportSection() {
     finally { setRunning(false); }
   };
 
+  // Step 1: read the file and show what it would change. Nothing is written yet.
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -431,13 +434,26 @@ export function ConfigExportSection() {
     setImporting(true);
     setMsg(null);
     try {
-      const text = await file.text();
-      const payload = JSON.parse(text) as SettingsExport;
-      const r = await settingsApi.importSettings(payload);
+      const payload = JSON.parse(await file.text()) as SettingsExport;
+      setPending({ payload, preview: await settingsApi.previewSettingsImport(payload) });
+    } catch (err: unknown) {
+      setMsg(err instanceof Error ? `Import failed: ${err.message}` : String(err));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // Step 2: the user confirmed the preview.
+  const applyImport = async () => {
+    if (!pending) return;
+    setImporting(true);
+    try {
+      const r = await settingsApi.importSettings(pending.payload);
       setMsg(`Imported ${r.app_settings_imported} setting(s), updated ${r.integrations_updated} integration(s). Reload the page to see the new values.`);
     } catch (err: unknown) {
       setMsg(err instanceof Error ? `Import failed: ${err.message}` : String(err));
     } finally {
+      setPending(null);
       setImporting(false);
     }
   };
@@ -451,6 +467,10 @@ export function ConfigExportSection() {
         <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Config-as-Code (Settings Export)</h2>
       </div>
       {msg && <p className="text-xs text-slate-300 pb-2">{msg}</p>}
+      {pending && (
+        <ImportPreviewModal preview={pending.preview} busy={importing}
+                            onApply={applyImport} onClose={() => setPending(null)} />
+      )}
       <p className="text-slate-500 text-xs pb-3">
         A JSON snapshot of every setting plus integration URLs — <strong>never credentials</strong> (api keys/passwords are
         never exported; re-enter them after an import). For disaster recovery or standing up a second instance.

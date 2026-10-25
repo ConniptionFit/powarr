@@ -171,6 +171,80 @@ def import_settings(db, payload: dict) -> dict:
     return {"app_settings_imported": imported, "integrations_updated": updated}
 
 
+def _flatten(value, prefix=""):
+    """Leaf paths of nested dicts; lists and scalars are leaves (a list that
+    changed is reported as one change, not element by element)."""
+    if isinstance(value, dict) and value:
+        out = {}
+        for k, v in value.items():
+            out.update(_flatten(v, f"{prefix}.{k}" if prefix else str(k)))
+        return out
+    return {prefix: value}
+
+
+def _short(v, limit=80):
+    text = json.dumps(v) if not isinstance(v, str) else v
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def preview_import(db, payload: dict) -> dict:
+    """Read-only: what import_settings(payload) would change, without writing.
+    Uses the same redaction-restoring merge as the real import, so a credential
+    the file redacts never shows up as a change."""
+    app_settings = payload.get("app_settings") or {}
+    if not isinstance(app_settings, dict):
+        raise ValueError("app_settings must be an object")
+    integrations = payload.get("integrations") or []
+    if not isinstance(integrations, list):
+        raise ValueError("integrations must be a list")
+
+    settings_out, unchanged = [], 0
+    for key, value in app_settings.items():
+        row = db.query(AppSetting).filter_by(key=key).first()
+        existing = None
+        if row and row.value:
+            try:
+                existing = json.loads(row.value)
+            except (ValueError, TypeError):
+                existing = None
+        merged = _unredact_merge(existing, value)
+        if not row:
+            settings_out.append({"key": key, "status": "new", "changes": []})
+            continue
+        before, after = _flatten(existing), _flatten(merged)
+        changes = [
+            {"path": path, "old": _short(before.get(path)) if path in before else None,
+             "new": _short(after.get(path)) if path in after else None}
+            for path in sorted(set(before) | set(after))
+            if before.get(path, object()) != after.get(path, object())
+        ]
+        if changes:
+            settings_out.append({"key": key, "status": "changed", "changes": changes})
+        else:
+            unchanged += 1
+
+    integ_out = []
+    for entry in integrations:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not name:
+            continue
+        row = db.query(Integration).filter_by(name=name).first()
+        new_url, new_enabled = entry.get("url"), bool(entry.get("enabled", False))
+        if not row:
+            integ_out.append({"name": name, "status": "new", "changes": []})
+            continue
+        changes = []
+        if (row.url or None) != (new_url or None):
+            changes.append({"path": "url", "old": row.url, "new": new_url})
+        if bool(row.enabled) != new_enabled:
+            changes.append({"path": "enabled", "old": str(bool(row.enabled)).lower(),
+                            "new": str(new_enabled).lower()})
+        if changes:
+            integ_out.append({"name": name, "status": "changed", "changes": changes})
+    return {"app_settings": settings_out, "settings_unchanged": unchanged,
+            "integrations": integ_out}
+
+
 def run_settings_export(db, powarr_version: str = "") -> dict:
     """File-based export for the scheduled path (mirrors backup.run_backup's
     shape/return contract) — writes into settings-exports/, one file per run."""

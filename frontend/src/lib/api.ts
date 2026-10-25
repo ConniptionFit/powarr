@@ -476,6 +476,13 @@ export interface SettingsExport {
   integrations: { name: string; url: string | null; enabled: boolean }[];
 }
 
+export interface ImportChange { path: string; old: string | null; new: string | null }
+export interface ImportPreview {
+  app_settings: { key: string; status: "new" | "changed"; changes: ImportChange[] }[];
+  settings_unchanged: number;
+  integrations: { name: string; status: "new" | "changed"; changes: ImportChange[] }[];
+}
+
 export interface BackupFile {
   name: string;
   size: number;
@@ -567,6 +574,8 @@ export const settingsApi = {
     req<{ app_settings_imported: number; integrations_updated: number }>("/settings/import", {
       method: "POST", body: JSON.stringify(payload),
     }),
+  previewSettingsImport: (payload: SettingsExport) =>
+    req<ImportPreview>("/settings/import/preview", { method: "POST", body: JSON.stringify(payload) }),
   runSettingsExportNow: () =>
     req<{ ok: boolean; path: string | null; message: string }>("/settings/export/run", { method: "POST" }),
   listSettingsExports: () => req<BackupFile[]>("/settings/export/list"),
