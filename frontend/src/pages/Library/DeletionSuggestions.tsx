@@ -4,6 +4,7 @@ import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Do
 import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem, type EpisodeDeleteMode } from "../../lib/api";
 import ScoreBreakdownModal from "../../components/ScoreBreakdownModal";
 import { usePersistedState } from "../../lib/usePersistedState";
+import SavedViews from "../../components/SavedViews";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
 import BotState from "../../components/BotState";
@@ -492,6 +493,14 @@ export default function DeletionSuggestions() {
             className="pl-8 pr-3 py-1.5 w-56 bg-surface-raised border border-purple-900/40 rounded-lg text-sm text-white placeholder:text-slate-500"
           />
         </div>
+        <SavedViews
+          scope="deletionSuggestions"
+          current={{ minScore, mediaType, showMode, sortBy, order, search, platformFilter }}
+          apply={v => {
+            setMinScore(v.minScore); setMediaType(v.mediaType); setShowMode(v.showMode);
+            setSortBy(v.sortBy); setOrder(v.order); setSearch(v.search); setPlatformFilter(v.platformFilter);
+          }}
+        />
         {enabledPlatforms.map(p => {
           const meta = PLATFORM_META[p];
           const Icon = meta.Icon;
