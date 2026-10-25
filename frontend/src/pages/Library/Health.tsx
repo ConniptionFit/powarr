@@ -4,6 +4,7 @@ import { Activity, Copy, DownloadCloud, Image, Link2, Shield, Trash2 } from "luc
 import { mediaApi, fmtBytes, type LibraryHealth, type ReclaimPoint } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
 import ScrollFadeX from "../../components/ScrollFadeX";
+import StorageForecastCard from "./StorageForecastCard";
 
 // LIB-06 — library health dashboard. Read-only KPI tiles over signals Powarr
 // already tracks locally (synced tables only — the endpoint makes no live
@@ -93,6 +94,7 @@ export default function Health() {
         A snapshot of library upkeep — computed from Powarr's synced data, refreshed by the regular Plex sync.
       </p>
 
+      <StorageForecastCard />
       <ReclaimTrendCard />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
