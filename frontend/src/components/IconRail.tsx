@@ -13,6 +13,8 @@ function RailItem({ area, active, onClick }: { area: AreaDef; active: boolean; o
       onMouseEnter={warm}
       onFocus={warm}
       title={area.label}
+      aria-label={area.label}
+      aria-current={active ? "page" : undefined}
       className={`relative w-full flex flex-col items-center gap-1 py-3 px-1 rounded-lg transition-colors ${
         active ? "text-brand-light" : "text-slate-400 hover:text-white hover:bg-white/5"
       }`}
