@@ -450,6 +450,10 @@ class NotificationSettings(BaseModel):
     # NotificationSettingsOut in api/v1/settings.py.
     discord_enabled: bool = False
     discord_webhook_url: str = ""
+    # Integration outage alerts — one push when a service's circuit breaker opens
+    # and one when it recovers. On by default: it only fires if a channel above
+    # is already enabled, and an outage is the thing you most want to hear about.
+    notify_integration_outages: bool = True
 
 
 class IntegrationConfig(BaseModel):

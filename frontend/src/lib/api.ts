@@ -529,6 +529,7 @@ export interface NotificationSettings {
   discord_enabled: boolean;
   discord_webhook_url: string;   // blank on read — leave blank on save to keep the stored value
   discord_webhook_url_set: boolean;
+  notify_integration_outages: boolean;
 }
 
 export const settingsApi = {
