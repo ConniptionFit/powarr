@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckCircle, Recycle, Clock, CalendarClock, Activity, AlertTriangle, Shuffle, ChevronRight } from "lucide-react";
 import { mediaApi, integrationsApi, importsApi, systemApi, settingsApi, fmtBytes, parseApiDate, type DepHealth, type ImportFunnel } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
 import ScrollFadeX from "../../components/ScrollFadeX";
+import { usePersistedState } from "../../lib/usePersistedState";
 import SetupChecklist from "../../components/SetupChecklist";
 
 function PipelineChip({ icon: Icon, label, count, color, onClick }: {
@@ -168,6 +169,30 @@ function StatCard({ icon: Icon, label, value, sub, color, error, attention }: {
         {sub && <p className={`text-xs mt-0.5 ${error ? "text-red-400/80" : "text-slate-500"}`}>{sub}</p>}
       </div>
     </div>
+  );
+}
+
+// Shown only once a capacity has been entered on Library > Health (kept per browser).
+function StorageRunwayStat() {
+  const [capTb] = usePersistedState<string>("powarr.storageCapacityTb", "");
+  const cap = Number(capTb) > 0 ? Math.round(Number(capTb) * 1024 ** 4) : undefined;
+  const { data } = useQuery({
+    queryKey: ["storage-forecast", 90, cap ?? 0],
+    queryFn: () => mediaApi.storageForecast(90, cap),
+    enabled: !!cap,
+  });
+  if (!cap || !data) return null;
+  const value = data.status === "growing" ? `${data.days_until_full} days`
+    : data.status === "full" ? "Full"
+    : data.status === "distant" ? "10+ years" : "Stable";
+  const sub = data.status === "growing" ? `until full (${data.full_date}) · ${data.used_pct}% used`
+    : `${data.used_pct}% of capacity used`;
+  return (
+    <Link to="/library/health" className="block hover:opacity-90">
+      <StatCard icon={HardDrive} label="Storage Runway" value={value} sub={sub}
+                color="bg-orange-700" attention={data.status === "full" ||
+                  (data.status === "growing" && (data.days_until_full ?? 999) < 60)} />
+    </Link>
   );
 }
 
@@ -423,6 +448,7 @@ export default function Dashboard() {
             color="bg-green-800"
             error={delErr}
           />
+          <StorageRunwayStat />
           <StatCard
             icon={Trash2}
             label="Push Failures"
@@ -443,7 +469,7 @@ export default function Dashboard() {
           />
           <CountdownStat
             icon={CalendarClock}
-            label="Next Plex Sync"
+            label="Next Library Sync"
             targetIso={schedule?.next_sync_at ?? null}
             disabledLabel="Manual only"
             sub="Settings → Sync Interval"
