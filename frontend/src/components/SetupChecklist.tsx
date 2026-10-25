@@ -15,7 +15,7 @@ export default function SetupChecklist() {
   if (dismissed || !integrations) return null;
 
   const steps = [
-    { label: "Connect Plex", hint: "Required for library sync", done: connected(integrations, "plex") },
+    { label: "Connect Plex or Jellyfin", hint: "Required for library sync", done: connected(integrations, "plex", "jellyfin") },
     { label: "Connect Sonarr or Radarr", hint: "Lets Powarr act on shows and movies", done: connected(integrations, "sonarr", "radarr") },
     { label: "Connect a download client", hint: "qBittorrent or Transmission, for import matching", done: connected(integrations, "qbittorrent", "transmission") },
     { label: "Connect Tautulli or Seerr", hint: "Protects watched and requested media from deletion", done: connected(integrations, "tautulli", "seerr") },

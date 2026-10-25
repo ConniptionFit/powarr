@@ -55,6 +55,12 @@ async def _scheduled_plex_sync(db) -> None:
     sync_cfg = _get_setting(db, "sync", SyncSettings)
     if sync_cfg.plex_sync_interval_hours <= 0:
         return
+    # A Jellyfin-only install has no enabled Plex row; without this the sync
+    # would raise every tick and cut the rest of the maintenance pass short.
+    from app.models.integration import Integration
+    plex_row = db.query(Integration).filter_by(name="plex").first()
+    if not plex_row or not plex_row.enabled:
+        return
     row = db.query(AppSetting).filter_by(key="last_synced").first()
     if row and row.value:
         try:
@@ -66,6 +72,29 @@ async def _scheduled_plex_sync(db) -> None:
     from app.services.plex_sync import run_plex_sync
     result = await run_plex_sync(db)
     logger.info(f"Scheduled Plex sync: {result}")
+
+
+async def _scheduled_jellyfin_sync(db) -> None:
+    """Same cadence setting as Plex (sync.plex_sync_interval_hours), tracked
+    with its own timestamp so the two sources don't starve each other."""
+    sync_cfg = _get_setting(db, "sync", SyncSettings)
+    if sync_cfg.plex_sync_interval_hours <= 0:
+        return
+    from app.models.integration import Integration
+    row = db.query(Integration).filter_by(name="jellyfin").first()
+    if not row or not row.enabled or not row.url or not row.api_key:
+        return
+    stamp = db.query(AppSetting).filter_by(key="last_synced_jellyfin").first()
+    if stamp and stamp.value:
+        try:
+            if datetime.utcnow() - datetime.fromisoformat(stamp.value) < timedelta(
+                    hours=sync_cfg.plex_sync_interval_hours):
+                return
+        except ValueError:
+            pass
+    from app.services.jellyfin_sync import run_jellyfin_sync
+    result = await run_jellyfin_sync(db)
+    logger.info(f"Scheduled Jellyfin sync: {result}")
 
 
 def in_quiet_hours(hour: int, start: int, end: int) -> bool:
@@ -336,6 +365,7 @@ async def maintenance_loop():
             try:
                 await _purge_due_soft_deletes(db)
                 await _scheduled_plex_sync(db)
+                await _scheduled_jellyfin_sync(db)
                 await _scheduled_llm_run(db)
                 await _scheduled_backup(db)
                 await _scheduled_settings_export(db)

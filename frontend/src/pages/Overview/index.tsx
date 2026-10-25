@@ -287,7 +287,7 @@ export default function Dashboard() {
     setSyncing(true);
     setSyncMsg(null);
     try {
-      const result = await integrationsApi.syncPlex();
+      const result = await integrationsApi.syncLibrary();
       setSyncMsg(`Synced ${result.synced} items`);
       qc.invalidateQueries({ queryKey: ["stats"] });
       qc.invalidateQueries({ queryKey: ["media"] });

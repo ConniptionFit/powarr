@@ -31,8 +31,8 @@ const ACTIONS: Entry[] = [
     run: async t => { await importsApi.scan(); t.success("Import scan started"); },
   },
   {
-    path: "action:sync-plex", area: "Action", label: "Sync Plex watch data",
-    run: async t => { const r = await integrationsApi.syncPlex(); t.success(`Plex sync done (${r.synced} items)`); },
+    path: "action:sync-plex", area: "Action", label: "Sync library from media server",
+    run: async t => { const r = await integrationsApi.syncLibrary(); t.success(`Library sync done (${r.synced} items)`); },
   },
   {
     path: "action:sync-seerr", area: "Action", label: "Sync Seerr requests",
