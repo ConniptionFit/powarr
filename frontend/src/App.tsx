@@ -1,19 +1,6 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from "react-router-dom";
 import { Menu, X } from "lucide-react";
-import Overview from "./pages/Overview";
-import DeletionSuggestions from "./pages/Library/DeletionSuggestions";
-import Duplicates from "./pages/Library/Duplicates";
-import Health from "./pages/Library/Health";
-import DeletionHistory from "./pages/Library/DeletionHistory";
-import MatchReview from "./pages/Imports/MatchReview";
-import RecentDownloads from "./pages/Imports/RecentDownloads";
-import LlmAccuracy from "./pages/Imports/LlmAccuracy";
-import ArtistDiscovery from "./pages/Music/ArtistDiscovery";
-import RelatedArtists from "./pages/Music/RelatedArtists";
-import Playlists from "./pages/Music/Playlists";
-import SettingsPage from "./pages/Settings";
-import LogsPage from "./pages/Logs";
 import AuthGate from "./components/AuthGate";
 import ActiveProcessesTray from "./components/ActiveProcessesTray";
 import IconRail from "./components/IconRail";
@@ -21,6 +8,34 @@ import AreaTabs from "./components/AreaTabs";
 import Breadcrumb from "./components/Breadcrumb";
 import { AREAS, LOGS_AREA } from "./lib/navConfig";
 import { TaskProvider } from "./context/TaskContext";
+import ErrorBoundary from "./components/ErrorBoundary";
+import CommandPalette from "./components/CommandPalette";
+
+// Each page is its own chunk so first paint only ships the shell + the route being viewed.
+const Overview = lazy(() => import("./pages/Overview"));
+const DeletionSuggestions = lazy(() => import("./pages/Library/DeletionSuggestions"));
+const Duplicates = lazy(() => import("./pages/Library/Duplicates"));
+const Health = lazy(() => import("./pages/Library/Health"));
+const DeletionHistory = lazy(() => import("./pages/Library/DeletionHistory"));
+const MatchReview = lazy(() => import("./pages/Imports/MatchReview"));
+const RecentDownloads = lazy(() => import("./pages/Imports/RecentDownloads"));
+const LlmAccuracy = lazy(() => import("./pages/Imports/LlmAccuracy"));
+const ArtistDiscovery = lazy(() => import("./pages/Music/ArtistDiscovery"));
+const RelatedArtists = lazy(() => import("./pages/Music/RelatedArtists"));
+const Playlists = lazy(() => import("./pages/Music/Playlists"));
+const SettingsPage = lazy(() => import("./pages/Settings"));
+const LogsPage = lazy(() => import("./pages/Logs"));
+
+function PageFallback() {
+  return (
+    <div role="status" aria-live="polite" className="p-4 sm:p-8 space-y-4 animate-pulse">
+      <div className="h-7 w-48 rounded bg-white/5" />
+      <div className="h-4 w-72 rounded bg-white/5" />
+      <div className="h-64 rounded-xl bg-white/5" />
+      <span className="sr-only">Loading…</span>
+    </div>
+  );
+}
 
 function MobileNav({ onNavigate }: { onNavigate: () => void }) {
   const { pathname } = useLocation();
@@ -119,6 +134,8 @@ export default function App() {
           <Breadcrumb />
           <AreaTabs />
           <main className="flex-1 overflow-y-auto">
+            <ErrorBoundary>
+            <Suspense fallback={<PageFallback />}>
             <Routes>
               <Route path="/" element={<Overview />} />
 
@@ -149,10 +166,13 @@ export default function App() {
               {/* Back-compat redirect for the old top-level Integrations page */}
               <Route path="/integrations" element={<Navigate to="/settings/integrations" replace />} />
             </Routes>
+            </Suspense>
+            </ErrorBoundary>
           </main>
         </div>
       </div>
       <ActiveProcessesTray />
+      <CommandPalette />
       </TaskProvider>
       </AuthGate>
     </BrowserRouter>
