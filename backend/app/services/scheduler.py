@@ -97,6 +97,39 @@ async def _scheduled_jellyfin_sync(db) -> None:
     logger.info(f"Scheduled Jellyfin sync: {result}")
 
 
+_outage_notified: set[str] = set()
+
+
+def breaker_transitions(open_now: set[str], notified: set[str]) -> tuple[set[str], set[str]]:
+    """Pure: (newly_open, recovered) given which breakers are open now and which
+    we have already alerted on. Alerting only on transitions keeps a service
+    that stays down from producing a push every maintenance tick."""
+    return open_now - notified, notified - open_now
+
+
+async def _notify_integration_outages(db) -> None:
+    from app.services import circuit_breaker, notifier
+    cfg = notifier.load_settings(db)
+    if not cfg.notify_integration_outages or not (cfg.enabled or cfg.discord_enabled):
+        return
+    stats = circuit_breaker.get_stats()
+    open_now = {s["name"] for s in stats if s["breaker_open"]}
+    newly, recovered = breaker_transitions(open_now, _outage_notified)
+    by_name = {s["name"]: s for s in stats}
+    for name in sorted(newly):
+        err = by_name[name].get("last_error") or "repeated failures"
+        sent = await notifier.notify(
+            db, f"{name.capitalize()} is unreachable",
+            f"Powarr paused calls to {name} after repeated failures. Last error: {err}",
+            priority="high", tags="warning")
+        if sent:
+            _outage_notified.add(name)
+    for name in sorted(recovered):
+        await notifier.notify(db, f"{name.capitalize()} recovered",
+                              f"Powarr can reach {name} again.", tags="white_check_mark")
+        _outage_notified.discard(name)
+
+
 def in_quiet_hours(hour: int, start: int, end: int) -> bool:
     """Pure hour-of-day window check (0-23), wrapping past midnight when
     end <= start (e.g. start=22, end=6 covers 22:00-05:59). end == start means
@@ -366,6 +399,7 @@ async def maintenance_loop():
                 await _purge_due_soft_deletes(db)
                 await _scheduled_plex_sync(db)
                 await _scheduled_jellyfin_sync(db)
+                await _notify_integration_outages(db)
                 await _scheduled_llm_run(db)
                 await _scheduled_backup(db)
                 await _scheduled_settings_export(db)

@@ -72,6 +72,17 @@ export function NotificationsSection() {
         </div>
         <div className="pt-2 border-t border-purple-900/20">
           <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={cfg.notify_integration_outages}
+                   onChange={e => setCfg(c => c ? { ...c, notify_integration_outages: e.target.checked } : c)}
+                   className="accent-purple-500" />
+            Alert when an integration goes down
+          </label>
+          <p className="text-slate-500 text-xs mt-1">
+            One push when Powarr pauses a service after repeated failures, and one when it recovers.
+          </p>
+        </div>
+        <div className="pt-2 border-t border-purple-900/20">
+          <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
             <input type="checkbox" checked={cfg.digest_enabled}
                    onChange={e => setCfg(c => c ? { ...c, digest_enabled: e.target.checked } : c)}
                    className="accent-purple-500" />
