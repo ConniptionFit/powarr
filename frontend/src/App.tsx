@@ -21,6 +21,7 @@ const Overview = lazy(PAGE_LOADERS.Overview);
 const DeletionSuggestions = lazy(PAGE_LOADERS.DeletionSuggestions);
 const Duplicates = lazy(PAGE_LOADERS.Duplicates);
 const Health = lazy(PAGE_LOADERS.Health);
+const Rules = lazy(PAGE_LOADERS.Rules);
 const DeletionHistory = lazy(PAGE_LOADERS.DeletionHistory);
 const MatchReview = lazy(PAGE_LOADERS.MatchReview);
 const RecentDownloads = lazy(PAGE_LOADERS.RecentDownloads);
@@ -151,6 +152,7 @@ export default function App() {
               <Route path="/library/deletion-suggestions" element={<DeletionSuggestions />} />
               <Route path="/library/duplicates" element={<Duplicates />} />
               <Route path="/library/health" element={<Health />} />
+              <Route path="/library/rules" element={<Rules />} />
               <Route path="/library/deletion-history" element={<DeletionHistory />} />
 
               <Route path="/imports" element={<MatchReview />} />

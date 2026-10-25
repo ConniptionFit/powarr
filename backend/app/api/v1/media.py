@@ -338,6 +338,54 @@ def storage_forecast(db: Session = Depends(get_db),
     return build_forecast(db, days=days, capacity_bytes=capacity_bytes)
 
 
+@router.get("/rules")
+def get_rules(db: Session = Depends(get_db)):
+    """Saved filter rules plus the field/operator catalogue the builder UI uses."""
+    from app.services import rules as rules_svc
+    return {
+        "rules": rules_svc.load_rules(db),
+        "fields": {k: {"kind": v[0], "label": v[1], "ops": list(rules_svc.OPS_BY_KIND[v[0]])}
+                   for k, v in rules_svc.FIELDS.items()},
+    }
+
+
+@router.put("/rules")
+def put_rules(rules: list = Body(...), db: Session = Depends(get_db)):
+    from app.services import rules as rules_svc
+    try:
+        return {"rules": rules_svc.save_rules(db, rules)}
+    except rules_svc.RuleError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.post("/rules/preview")
+def preview_rule(rule: dict = Body(...), db: Session = Depends(get_db)):
+    """How many items (and bytes) a rule matches right now, plus the biggest few.
+    Advisory only: nothing is changed."""
+    from app.services import rules as rules_svc
+    try:
+        return rules_svc.preview_rule(db, rules_svc.clean_rule(rule))
+    except rules_svc.RuleError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/rules/{rule_id}/export.csv")
+def export_rule_csv(rule_id: str, db: Session = Depends(get_db)):
+    from app.services import rules as rules_svc
+    from app.services.csv_export import streaming_csv, _dt
+    rule = next((r for r in rules_svc.load_rules(db) if r.get("id") == rule_id), None)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    items = rules_svc.matching_items(db, rule)
+    rows = [[i.id, i.title, i.parent_title or "", i.media_type, i.library_section or "",
+             i.file_size or 0, i.watch_count or 0, _dt(i.last_watched_at), _dt(i.added_at)]
+            for i in items]
+    safe = "".join(c if c.isalnum() else "-" for c in rule["name"]).strip("-") or "rule"
+    return streaming_csv(f"powarr-rule-{safe}.csv",
+                         ["id", "title", "parent_title", "media_type", "library",
+                          "file_size", "watch_count", "last_watched_at", "added_at"], rows)
+
+
 @router.post("/preview-delete", response_model=DeletionPreview)
 def preview_delete(ids: list[int] = Body(...), delete_mode: Optional[str] = Query(None),
                    db: Session = Depends(get_db)):
