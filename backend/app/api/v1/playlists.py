@@ -212,6 +212,32 @@ def get_playlist_tracks(playlist_id: int, limit: int = Query(500, ge=1, le=1000)
     return tracks
 
 
+@router.get("/{playlist_id}/export.m3u")
+def export_playlist_m3u(playlist_id: int, db: Session = Depends(get_db)):
+    """Extended M3U of the tracks Powarr has put in this playlist, with the file
+    paths as Plex sees them (so players on the same host, or with a matching
+    mount, can open it). Tracks Plex no longer reports a file for keep their
+    EXTINF line but get no path, which most players skip."""
+    from fastapi.responses import Response
+    from app.models.media import MediaItem
+    pl = db.query(SmartPlaylist).filter_by(id=playlist_id).first()
+    if not pl:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    rows = (db.query(SmartPlaylistTrack, MediaItem.file_path)
+            .outerjoin(MediaItem, MediaItem.plex_rating_key == SmartPlaylistTrack.plex_key)
+            .filter(SmartPlaylistTrack.playlist_id == playlist_id)
+            .order_by(SmartPlaylistTrack.added_at, SmartPlaylistTrack.id).all())
+    out = ["#EXTM3U", f"#PLAYLIST:{pl.title}"]
+    for t, path in rows:
+        label = " - ".join(x for x in (t.artist_name, t.track_title) if x)
+        out.append(f"#EXTINF:-1,{label}".replace("\n", " "))
+        if path:
+            out.append(path)
+    safe = "".join(c if c.isalnum() else "-" for c in pl.title).strip("-") or "playlist"
+    return Response("\n".join(out) + "\n", media_type="audio/x-mpegurl; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}.m3u"'})
+
+
 @router.put("/{playlist_id}", response_model=PlaylistDetailOut)
 async def update_playlist(playlist_id: int, body: dict = Body(...),
                           db: Session = Depends(get_db)):

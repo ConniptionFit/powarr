@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ListMusic, Play, Music, Pencil, Settings, Sparkles, Upload, Trash2,
-  Ban, Library,
+  Ban, Library, Download,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { req, fmtRelative } from "../../lib/api";
@@ -155,6 +155,11 @@ function PlaylistCard({ pl, onMsg, suggested }: { pl: Playlist; onMsg: (m: strin
               Plex
             </span>
           )}
+          <a href={`/api/v1/smart-playlists/${pl.id}/export.m3u`} download
+            className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-brand-light"
+            title="Download as M3U" aria-label={`Download ${pl.title} as M3U`}>
+            <Download size={14} />
+          </a>
           <button onClick={() => suggestMut.mutate()} disabled={suggestMut.isPending}
             className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-brand-light"
             title="Suggest LLM name">
