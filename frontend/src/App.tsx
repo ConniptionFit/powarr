@@ -8,6 +8,7 @@ import AreaTabs from "./components/AreaTabs";
 import Breadcrumb from "./components/Breadcrumb";
 import { AREAS, LOGS_AREA } from "./lib/navConfig";
 import { TaskProvider } from "./context/TaskContext";
+import { ToastProvider } from "./context/ToastContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import CommandPalette from "./components/CommandPalette";
 
@@ -102,6 +103,7 @@ export default function App() {
     <BrowserRouter>
       <AuthGate>
       <TaskProvider>
+      <ToastProvider>
       <div className="flex h-screen overflow-hidden">
         {/* Desktop icon rail */}
         <aside className="hidden md:flex w-[92px] flex-shrink-0 bg-surface-raised border-r border-purple-900/40 flex-col">
@@ -173,6 +175,7 @@ export default function App() {
       </div>
       <ActiveProcessesTray />
       <CommandPalette />
+      </ToastProvider>
       </TaskProvider>
       </AuthGate>
     </BrowserRouter>
