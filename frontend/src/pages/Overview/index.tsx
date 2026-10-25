@@ -5,6 +5,7 @@ import { HardDrive, Film, Trash2, TrendingDown, RefreshCw, DownloadCloud, CheckC
 import { mediaApi, integrationsApi, importsApi, systemApi, settingsApi, fmtBytes, parseApiDate, type DepHealth, type ImportFunnel } from "../../lib/api";
 import { SkeletonGrid } from "../../components/Skeleton";
 import ScrollFadeX from "../../components/ScrollFadeX";
+import SetupChecklist from "../../components/SetupChecklist";
 
 function PipelineChip({ icon: Icon, label, count, color, onClick }: {
   icon: React.ElementType;
@@ -332,6 +333,8 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      <SetupChecklist />
 
       {backupStatus?.stale && (
         <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-700/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">

@@ -4,6 +4,7 @@ import { Compass, Play, Check, X, Sparkles, Settings, Search, Zap, Network, Chec
 import { Link } from "react-router-dom";
 import { fmtRelative } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
+import { subscribeEvents } from "../../lib/eventBus";
 import ArtistSuggestionModal from "../../components/ArtistSuggestionModal";
 import { useToast } from "../../context/ToastContext";
 import { type Candidate, type CandidateSort, sortCandidates, type Stats, api } from "./artist-discovery/shared";
@@ -82,23 +83,16 @@ export default function ArtistDiscovery() {
 
   // Live SSE updates
   useEffect(() => {
-    const es = new EventSource("/api/v1/imports/events");
-    es.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        if (data.type === "task_update" && data.task?.kind === "artist_discovery") {
-          qc.invalidateQueries({ queryKey: ["ad-stats"] });
-          qc.invalidateQueries({ queryKey: ["ad-candidates"] });
-          qc.invalidateQueries({ queryKey: ["ad-runs"] });
-          if (data.task.status === "done" || data.task.status === "failed") {
-            setMsg(data.task.message || null);
-          }
+    return subscribeEvents((data) => {
+      if (data?.type === "task_update" && data.task?.kind === "artist_discovery") {
+        qc.invalidateQueries({ queryKey: ["ad-stats"] });
+        qc.invalidateQueries({ queryKey: ["ad-candidates"] });
+        qc.invalidateQueries({ queryKey: ["ad-runs"] });
+        if (data.task.status === "done" || data.task.status === "failed") {
+          setMsg(data.task.message || null);
         }
-      } catch {
-        /* keepalive */
       }
-    };
-    return () => es.close();
+    });
   }, [qc]);
 
   const enabled = !!settings?.enabled;
