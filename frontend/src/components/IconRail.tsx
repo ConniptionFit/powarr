@@ -1,13 +1,17 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import { Zap, Sun, Moon } from "lucide-react";
 import { useTheme } from "../lib/useTheme";
+import { prefetchPath } from "../lib/pageChunks";
 import { AREAS, LOGS_AREA, areaForPath, type AreaDef } from "../lib/navConfig";
 
 function RailItem({ area, active, onClick }: { area: AreaDef; active: boolean; onClick: () => void }) {
+  const warm = () => prefetchPath(area.screens[0].path);
   const Icon = area.icon;
   return (
     <button
       onClick={onClick}
+      onMouseEnter={warm}
+      onFocus={warm}
       title={area.label}
       className={`relative w-full flex flex-col items-center gap-1 py-3 px-1 rounded-lg transition-colors ${
         active ? "text-brand-light" : "text-slate-400 hover:text-white hover:bg-white/5"

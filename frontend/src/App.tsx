@@ -12,21 +12,23 @@ import { ToastProvider } from "./context/ToastContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import CommandPalette from "./components/CommandPalette";
 import ShortcutHelp from "./components/ShortcutHelp";
+import { PAGE_LOADERS } from "./lib/pageChunks";
 
 // Each page is its own chunk so first paint only ships the shell + the route being viewed.
-const Overview = lazy(() => import("./pages/Overview"));
-const DeletionSuggestions = lazy(() => import("./pages/Library/DeletionSuggestions"));
-const Duplicates = lazy(() => import("./pages/Library/Duplicates"));
-const Health = lazy(() => import("./pages/Library/Health"));
-const DeletionHistory = lazy(() => import("./pages/Library/DeletionHistory"));
-const MatchReview = lazy(() => import("./pages/Imports/MatchReview"));
-const RecentDownloads = lazy(() => import("./pages/Imports/RecentDownloads"));
-const LlmAccuracy = lazy(() => import("./pages/Imports/LlmAccuracy"));
-const ArtistDiscovery = lazy(() => import("./pages/Music/ArtistDiscovery"));
-const RelatedArtists = lazy(() => import("./pages/Music/RelatedArtists"));
-const Playlists = lazy(() => import("./pages/Music/Playlists"));
-const SettingsPage = lazy(() => import("./pages/Settings"));
-const LogsPage = lazy(() => import("./pages/Logs"));
+// Loaders live in lib/pageChunks so the rail can warm them on hover.
+const Overview = lazy(PAGE_LOADERS.Overview);
+const DeletionSuggestions = lazy(PAGE_LOADERS.DeletionSuggestions);
+const Duplicates = lazy(PAGE_LOADERS.Duplicates);
+const Health = lazy(PAGE_LOADERS.Health);
+const DeletionHistory = lazy(PAGE_LOADERS.DeletionHistory);
+const MatchReview = lazy(PAGE_LOADERS.MatchReview);
+const RecentDownloads = lazy(PAGE_LOADERS.RecentDownloads);
+const LlmAccuracy = lazy(PAGE_LOADERS.LlmAccuracy);
+const ArtistDiscovery = lazy(PAGE_LOADERS.ArtistDiscovery);
+const RelatedArtists = lazy(PAGE_LOADERS.RelatedArtists);
+const Playlists = lazy(PAGE_LOADERS.Playlists);
+const SettingsPage = lazy(PAGE_LOADERS.SettingsPage);
+const LogsPage = lazy(PAGE_LOADERS.LogsPage);
 
 function PageFallback() {
   return (
