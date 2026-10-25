@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -24,6 +25,13 @@ def health(db: Session = Depends(get_db)):
     except Exception:
         db_ok = False
     return {"status": "ok" if db_ok else "degraded", "db": "ok" if db_ok else "error"}
+
+
+@router.get("/metrics", response_class=PlainTextResponse)
+def metrics(db: Session = Depends(get_db)):
+    """Prometheus scrape target. Behind the normal API auth (use a session or API credentials)."""
+    from app.services.metrics import render_metrics
+    return PlainTextResponse(render_metrics(db), media_type="text/plain; version=0.0.4")
 
 
 @router.get("/dependencies")
