@@ -15,6 +15,7 @@ export const PAGE_LOADERS = {
   Playlists: () => import("../pages/Music/Playlists"),
   SettingsPage: () => import("../pages/Settings"),
   LogsPage: () => import("../pages/Logs"),
+  Status: () => import("../pages/Logs/Status"),
 } as const;
 
 // First screen of each area, keyed by URL prefix (longest match wins).
@@ -32,6 +33,7 @@ const BY_PATH: [string, keyof typeof PAGE_LOADERS][] = [
   ["/music/playlists", "Playlists"],
   ["/music", "ArtistDiscovery"],
   ["/settings", "SettingsPage"],
+  ["/logs/status", "Status"],
   ["/logs", "LogsPage"],
 ];
 

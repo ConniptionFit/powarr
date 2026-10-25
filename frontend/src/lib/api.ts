@@ -865,11 +865,28 @@ export interface DepHealth {
   last_error: string | null;
 }
 
+export interface BreakerStat {
+  name: string;
+  calls: number;
+  successes: number;
+  failures: number;
+  consecutive_failures: number;
+  last_error: string | null;
+  last_error_at: number | null;   // epoch seconds
+  last_success_at: number | null; // epoch seconds
+  breaker_open: boolean;
+  breaker_seconds_remaining: number;
+  breaker_trips: number;
+}
+
 export const systemApi = {
   health: () => req<{ status: string; db: string }>("/system/health"),
   dependencies: (probe = false) =>
-    req<{ integrations: DepHealth[]; breakers: unknown }>(
+    req<{ integrations: DepHealth[]; breakers: BreakerStat[] }>(
       `/system/dependencies${probe ? "?probe=true" : ""}`),
+  resetBreaker: (name?: string) =>
+    req<{ ok: boolean }>(`/system/dependencies/breaker/reset${name ? `?name=${encodeURIComponent(name)}` : ""}`,
+      { method: "POST" }),
   logs: (lines = 200) => req<{ lines: string[] }>(`/system/logs?lines=${lines}`),
   schedule: () => req<ScheduleInfo>("/system/schedule"),
 };
