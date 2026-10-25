@@ -110,6 +110,10 @@ export default function App() {
       <AuthGate>
       <TaskProvider>
       <ToastProvider>
+      <a href="#main"
+         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[70] focus:px-3 focus:py-2 focus:rounded-lg focus:bg-brand focus:text-white focus:text-sm">
+        Skip to main content
+      </a>
       <div className="flex h-screen overflow-hidden">
         {/* Desktop icon rail */}
         <aside className="hidden md:flex w-[92px] flex-shrink-0 bg-surface-raised border-r border-purple-900/40 flex-col">
@@ -141,7 +145,7 @@ export default function App() {
           <MobileTopBar onOpen={() => setMobileNavOpen(true)} />
           <Breadcrumb />
           <AreaTabs />
-          <main className="flex-1 overflow-y-auto">
+          <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none">
             <ErrorBoundary>
             <Suspense fallback={<PageFallback />}>
             <Routes>
