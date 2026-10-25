@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X, RefreshCw, Bot, ChevronDown, ChevronRight, ChevronUp, Trash2, Search, Columns3, Lightbulb, ThumbsUp, ThumbsDown, ListEnd, Download, Rows3, Split, LayoutGrid, Table2, HelpCircle, CheckCircle2, XCircle } from "lucide-react";
 import { importsApi, settingsApi, fmtDate, fmtBytes, type FailedImport, type AutoGateStatus } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
+import { subscribeEvents } from "../../lib/eventBus";
 import SavedViews from "../../components/SavedViews";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
@@ -621,28 +622,24 @@ export default function MatchReview() {
 
   // Live updates: poller scans + on-demand LLM runs + async batch accepts
   useEffect(() => {
-    const es = new EventSource("/api/v1/imports/events");
-    es.onmessage = ev => {
+    return subscribeEvents(data => {
       qc.invalidateQueries({ queryKey: ["imports"] });
       qc.invalidateQueries({ queryKey: ["import-stats"] });
       qc.invalidateQueries({ queryKey: ["import-auto-eligible"] });
-      try {
-        const data = JSON.parse(ev.data);
-        if (data.type === "llm_run") setActionMsg(`LLM run finished: ${data.scored} scored, ${data.skipped} skipped${data.auto_queued ? `, ${data.auto_queued} queued for auto-import` : ""}`);
-        if (data.type === "llm_run_started") setLlmQueued(null);
-        if (data.type === "rescore") setActionMsg(`Rescore finished: ${data.rescored} rescored, ${data.skipped} skipped${data.auto_queued ? `, ${data.auto_queued} queued for auto-import` : ""}`);
-        if (data.type === "import_batch") {
-          const parts = [`${data.ok ?? 0} imported`];
-          if (data.orphaned) parts.push(`${data.orphaned} gone (orphaned)`);
-          if (data.failed) parts.push(`${data.failed} failed`);
-          setActionMsg(`Import finished: ${parts.join(", ")}`);
-          setSelected(new Set());
-          setAcceptingIds(new Set());
-          setConfirmAccept(null);
-        }
-      } catch { /* keepalive */ }
-    };
-    return () => es.close();
+      if (!data) return;
+      if (data.type === "llm_run") setActionMsg(`LLM run finished: ${data.scored} scored, ${data.skipped} skipped${data.auto_queued ? `, ${data.auto_queued} queued for auto-import` : ""}`);
+      if (data.type === "llm_run_started") setLlmQueued(null);
+      if (data.type === "rescore") setActionMsg(`Rescore finished: ${data.rescored} rescored, ${data.skipped} skipped${data.auto_queued ? `, ${data.auto_queued} queued for auto-import` : ""}`);
+      if (data.type === "import_batch") {
+        const parts = [`${data.ok ?? 0} imported`];
+        if (data.orphaned) parts.push(`${data.orphaned} gone (orphaned)`);
+        if (data.failed) parts.push(`${data.failed} failed`);
+        setActionMsg(`Import finished: ${parts.join(", ")}`);
+        setSelected(new Set());
+        setAcceptingIds(new Set());
+        setConfirmAccept(null);
+      }
+    });
   }, [qc]);
 
   const acceptMut = useMutation({
