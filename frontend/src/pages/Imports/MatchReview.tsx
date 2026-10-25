@@ -450,6 +450,8 @@ function AutoGateInspector({ item }: { item: FailedImport }) {
 
 const FILTERS = ["suggested", "resolve_failed", "orphan_pending", "auto_resolved", "accepted", "rejected", "orphaned", ""] as const;
 
+const PAGE_SIZE = 200;
+
 export default function MatchReview() {
   const qc = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -466,6 +468,8 @@ export default function MatchReview() {
   const [expanded, setExpanded] = useState<number | null>(null);
   // UX-05 — row the keyboard shortcuts act on (ring-highlighted in both views).
   const [focusedId, setFocusedId] = useState<number | null>(null);
+  // Large queues render in pages of PAGE_SIZE rows so thousands of expandable rows never mount at once.
+  const [shown, setShown] = useState(PAGE_SIZE);
 
   // table view state (persisted per-browser)
   const [visibleCols, setVisibleCols] = useState<Set<ColKey>>(loadVisible);
@@ -785,7 +789,9 @@ export default function MatchReview() {
       return next;
     });
   };
-  const allSelectable = sortedItems.filter(i =>
+  const visibleItems = sortedItems.slice(0, shown);
+  // Select-all only covers rows actually on screen, so bulk actions never touch unseen items.
+  const allSelectable = visibleItems.filter(i =>
     i.status === "suggested" || i.status === "resolve_failed" || i.status === "orphan_pending");
   // Orphan-pending rows take confirm/keep, not accept/reject — the batch bar
   // switches wholesale when the selection is entirely orphan-pending.
@@ -821,6 +827,7 @@ export default function MatchReview() {
           : e.key === "j" ? Math.min(idx + 1, sortedItems.length - 1)
           : Math.max(idx - 1, 0);
         const next = sortedItems[nextIdx];
+        if (nextIdx >= shown) setShown(n => n + PAGE_SIZE);
         setFocusedId(next.id);
         document.getElementById(`import-item-${next.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
         return;
@@ -1385,7 +1392,7 @@ export default function MatchReview() {
               </tr>
             </thead>
             <tbody className="divide-y divide-purple-900/20">
-              {sortedItems.map((item: FailedImport) => {
+              {visibleItems.map((item: FailedImport) => {
                 const actionable = item.status === "suggested" || item.status === "resolve_failed";
                 const orphanPending = item.status === "orphan_pending";
                 const selectable = actionable || orphanPending;
@@ -1434,7 +1441,7 @@ export default function MatchReview() {
         </ScrollFadeX>
       ) : (
         <div className="space-y-3">
-          {sortedItems.map((item: FailedImport) => {
+          {visibleItems.map((item: FailedImport) => {
             const actionable = item.status === "suggested" || item.status === "resolve_failed";
             const orphanPending = item.status === "orphan_pending";
             const selectable = actionable || orphanPending;
@@ -1507,6 +1514,16 @@ export default function MatchReview() {
               </div>
             );
           })}
+        </div>
+      )}
+      {sortedItems.length > shown && (
+        <div className="mt-4 flex justify-center">
+          <button
+            onClick={() => setShown(n => n + PAGE_SIZE)}
+            className="px-4 py-2 rounded-lg border border-purple-900/40 bg-surface-raised text-sm text-slate-300 hover:text-white"
+          >
+            Show {Math.min(PAGE_SIZE, sortedItems.length - shown)} more ({sortedItems.length - shown} hidden)
+          </button>
         </div>
       )}
     </div>
