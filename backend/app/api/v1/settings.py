@@ -217,6 +217,16 @@ def export_settings_now(request: Request, db: Session = Depends(get_db)):
     )
 
 
+@router.post("/import/preview")
+def preview_import_now(payload: dict = Body(...), db: Session = Depends(get_db)):
+    """Dry run of POST /settings/import: lists what would change; writes nothing."""
+    from app.services.settings_export import preview_import
+    try:
+        return preview_import(db, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/import")
 def import_settings_now(payload: dict = Body(...), db: Session = Depends(get_db)):
     """OPS-02 — restore a settings export produced by GET /settings/export.
