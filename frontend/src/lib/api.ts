@@ -889,6 +889,10 @@ export const systemApi = {
     req<{ ok: boolean }>(`/system/dependencies/breaker/reset${name ? `?name=${encodeURIComponent(name)}` : ""}`,
       { method: "POST" }),
   logs: (lines = 200) => req<{ lines: string[] }>(`/system/logs?lines=${lines}`),
+  // Incremental tail: pass the previous `next` as `since` to fetch only new lines.
+  logsSince: (since: number | null, lines = 1000) =>
+    req<{ lines: string[]; next: number; reset: boolean }>(
+      `/system/logs?lines=${lines}${since === null ? "" : `&since=${since}`}`),
   schedule: () => req<ScheduleInfo>("/system/schedule"),
 };
 

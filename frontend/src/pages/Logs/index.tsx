@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, Pause, Play, Search, Copy, Download, Check } from "lucide-react";
 import { systemApi } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
@@ -18,6 +17,46 @@ function levelOf(line: string): Level | null {
   return LEVELS.find(l => line.includes(` ${l} `)) ?? null;
 }
 
+const MAX_LINES = 1000;
+
+// Polls /system/logs with a cursor so each tick transfers only the new lines
+// (previously the whole 500-line tail every 5 seconds).
+function useLogTail(autoRefresh: boolean) {
+  const [lines, setLines] = useState<string[]>([]);
+  const [fetching, setFetching] = useState(false);
+  const cursor = useRef<number | null>(null);
+  const busy = useRef(false);
+
+  const refetch = useCallback(async () => {
+    if (busy.current) return;
+    busy.current = true;
+    setFetching(true);
+    try {
+      const res = await systemApi.logsSince(cursor.current, MAX_LINES);
+      cursor.current = res.next;
+      setLines(prev => {
+        if (res.reset) return res.lines;
+        if (res.lines.length === 0) return prev;
+        const merged = prev.concat(res.lines);
+        return merged.length > MAX_LINES ? merged.slice(-MAX_LINES) : merged;
+      });
+    } catch { /* keep what we have; the next tick retries */ }
+    finally {
+      busy.current = false;
+      setFetching(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refetch();
+    if (!autoRefresh) return;
+    const t = setInterval(refetch, 5000);
+    return () => clearInterval(t);
+  }, [autoRefresh, refetch]);
+
+  return { lines, refetch, isFetching: fetching };
+}
+
 export default function LogsPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [search, setSearch] = useState("");
@@ -26,13 +65,7 @@ export default function LogsPage() {
   const [copied, setCopied] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const { data, refetch, isFetching } = useQuery({
-    queryKey: ["logs"],
-    queryFn: () => systemApi.logs(500),
-    refetchInterval: autoRefresh ? 5000 : false,
-  });
-
-  const lines = data?.lines ?? [];
+  const { lines, refetch, isFetching } = useLogTail(autoRefresh);
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return lines.filter(l => {
