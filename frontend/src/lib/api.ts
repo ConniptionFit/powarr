@@ -172,6 +172,21 @@ export interface StorageForecast {
   points: { date: string; added: number; removed: number }[];
 }
 
+export type RuleKind = "num" | "str" | "bool";
+export interface RuleCondition { field: string; op: string; value: string | number | boolean }
+export interface MediaRule { id?: string; name: string; match: "all" | "any"; conditions: RuleCondition[] }
+export interface RuleCatalog {
+  rules: (MediaRule & { id: string })[];
+  fields: Record<string, { kind: RuleKind; label: string; ops: string[] }>;
+}
+export interface RulePreview {
+  count: number;
+  total_bytes: number;
+  sample: { id: number; title: string; parent_title: string | null; media_type: string;
+            library_section: string | null; file_size: number; last_watched_at: string | null;
+            added_at: string | null; watch_count: number }[];
+}
+
 export interface ScoringPreviewSide {
   above_threshold: number;
   total_size_bytes: number;
@@ -266,6 +281,12 @@ export const mediaApi = {
   scoreBreakdown: (id: number) => req<ScoreBreakdown>(`/media/${id}/score-breakdown`),
   // LIB-11 — reclaimed space per day, from the deletion log Powarr already keeps.
   reclaimTrend: (days = 90) => req<ReclaimTrend>(`/media/reclaim-trend?days=${days}`),
+  rules: () => req<RuleCatalog>("/media/rules"),
+  saveRules: (rules: MediaRule[]) =>
+    req<{ rules: (MediaRule & { id: string })[] }>("/media/rules", { method: "PUT", body: JSON.stringify(rules) }),
+  previewRule: (rule: MediaRule) =>
+    req<RulePreview>("/media/rules/preview", { method: "POST", body: JSON.stringify(rule) }),
+  exportRuleCsv: (id: string) => downloadCsv(`/media/rules/${encodeURIComponent(id)}/export.csv`),
   storageForecast: (days = 90, capacityBytes?: number) =>
     req<StorageForecast>(`/media/storage-forecast?days=${days}${capacityBytes ? `&capacity_bytes=${capacityBytes}` : ""}`),
   restore: (id: number) => req<{ id: number; restored: boolean }>(`/media/${id}/restore`, { method: "POST" }),
