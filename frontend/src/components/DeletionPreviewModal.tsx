@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ShieldAlert, X } from "lucide-react";
 import { mediaApi, fmtBytes, type EpisodeDeleteMode } from "../lib/api";
+import Modal from "./Modal";
 
 // LIB-02 — explicit Sonarr episode delete policy, shown only when every
 // previewed item is a Sonarr-linked episode. Sonarr has no native per-episode
@@ -65,8 +66,7 @@ export default function DeletionPreviewModal({
   const cascadeWarnings = data?.items.filter(i => i.cascade_warning) ?? [];
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-surface-raised border border-purple-900/40 rounded-2xl w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col">
+    <Modal onClose={onCancel} label="Deletion preview" className="w-full max-w-lg max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-purple-900/20">
           <h2 className="text-lg font-bold text-white">
             {data?.would_pend ? "Confirm Soft-Delete" : "Confirm Delete"}
@@ -206,7 +206,6 @@ export default function DeletionPreviewModal({
             {confirming ? "Deleting…" : data?.would_pend ? "Confirm Soft-Delete" : "Confirm Delete"}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

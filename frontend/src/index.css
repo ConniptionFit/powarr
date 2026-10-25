@@ -2,11 +2,55 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --c-surface: 21 21 44;
+  --c-surface-raised: 17 18 38;
+  --c-surface-overlay: 22 26 46;
+  --c-page: 26 26 46;
+  color-scheme: dark;
+}
+
 body {
-  background-color: #1a1a2e;
+  background-color: rgb(var(--c-page));
   color: #e2e8f0;
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
+
+/* Light theme (toggle in the icon rail / Ctrl+K). The app styles with fixed
+   Tailwind slate/white utilities, so light mode remaps those few foreground,
+   border and overlay tones instead of touching every component. */
+html.light {
+  --c-surface: 245 243 255;
+  --c-surface-raised: 255 255 255;
+  --c-surface-overlay: 237 233 254;
+  --c-page: 243 241 251;
+  color-scheme: light;
+}
+html.light body { color: #2b2750; }
+html.light .text-white { color: #1e1b3a; }
+html.light .text-slate-200 { color: #2b2750; }
+html.light .text-slate-300 { color: #3f3b66; }
+html.light .text-slate-400 { color: #55517a; }
+html.light .text-slate-500 { color: #6b6890; }
+html.light .text-slate-600 { color: #8582a8; }
+html.light .text-brand-light { color: #6d28d9; }
+html.light .text-purple-200, html.light .text-purple-300, html.light .text-purple-400 { color: #6d28d9; }
+html.light .text-red-300, html.light .text-red-400 { color: #b91c1c; }
+html.light .text-green-300, html.light .text-green-400 { color: #15803d; }
+html.light .text-yellow-400, html.light .text-yellow-200 { color: #a16207; }
+/* Solid coloured controls keep white labels. */
+html.light .bg-brand.text-white, html.light .bg-brand-dark.text-white, html.light .bg-brand-light.text-white,
+html.light [class*="bg-indigo-"].text-white, html.light [class*="bg-red-"].text-white,
+html.light [class*="bg-green-"].text-white, html.light [class*="bg-orange-"].text-white,
+html.light [class*="bg-amber-"].text-white, html.light [class*="bg-sky-"].text-white,
+html.light .bg-violet-600.text-white, html.light .bg-purple-700.text-white { color: #fff; }
+html.light [class*="border-purple-"] { border-color: rgb(124 58 237 / 0.2); }
+html.light .bg-white\/5 { background-color: rgb(30 27 58 / 0.05); }
+html.light .bg-white\/10, html.light .hover\:bg-white\/10:hover { background-color: rgb(30 27 58 / 0.08); }
+html.light .hover\:bg-white\/5:hover { background-color: rgb(30 27 58 / 0.05); }
+html.light .bg-black\/60, html.light .bg-black\/70 { background-color: rgb(30 27 58 / 0.45); }
+html.light ::-webkit-scrollbar-track { background: rgb(var(--c-page)); }
+html.light ::-webkit-scrollbar-thumb { background: #c4b5fd; }
 
 /* Keyboard focus ring — a visible brand-light outline on every interactive
    control for keyboard / assistive-tech users. :focus-visible fires only for
