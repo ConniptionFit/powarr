@@ -1,5 +1,4 @@
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
 import asyncio
@@ -12,12 +11,14 @@ from fastapi.responses import JSONResponse
 from app.database import init_db
 from app.api.v1 import media, settings, integrations, imports, system, auth, tasks, playlists, artist_discovery
 from app import log_buffer
+from app.http_perf import ImmutableStaticFiles, SelectiveGZipMiddleware
 
 logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
 app = FastAPI(title="Powarr", version="0.99.0", docs_url="/api/docs", openapi_url=None)
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1024)
 
 # Paths that stay reachable without a session: the auth flow itself, the
 # health endpoint (Docker healthcheck probes from inside the container), and
@@ -228,7 +229,7 @@ app.include_router(artist_discovery.router, prefix="/api/v1")
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
 if STATIC_DIR.exists():
-    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
+    app.mount("/assets", ImmutableStaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
