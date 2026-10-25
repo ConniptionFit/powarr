@@ -1,5 +1,5 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3, ShieldAlert, Link2, Calculator } from "lucide-react";
 import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem, type EpisodeDeleteMode } from "../../lib/api";
 import ScoreBreakdownModal from "../../components/ScoreBreakdownModal";
@@ -48,12 +48,16 @@ export default function DeletionSuggestions() {
     return () => clearTimeout(t);
   }, [search]);
 
+  // The list is windowed (the table can match tens of thousands of rows);
+  // "Load more" grows the window by one page.
+  const PAGE = 500;
+  const [limit, setLimit] = useState(PAGE);
   const fetchType = mediaType || undefined;
   const params: Record<string, string | number | boolean> = {
     min_score: minScore,
     sort_by: sortBy,
     order,
-    limit: 500,
+    limit,
     ...(debouncedSearch.trim() ? { search: debouncedSearch.trim() } : {}),
     // When show mode is active, always fetch episodes
     ...(showMode === "show" && !mediaType ? { media_type: "episode" } : {}),
@@ -63,6 +67,15 @@ export default function DeletionSuggestions() {
   const { data: rawItems = [], isLoading } = useQuery({
     queryKey: ["media", params],
     queryFn: () => mediaApi.list(params),
+    placeholderData: keepPreviousData, // growing the window shouldn't blank the table
+  });
+
+  // Total matching rows for the current filters (limit/sort don't change it).
+  const { limit: _l, sort_by: _s, order: _o, ...countParams } = params;
+  const { data: matchTotal } = useQuery({
+    queryKey: ["media-count", countParams],
+    queryFn: () => mediaApi.count(countParams),
+    select: r => r.total,
   });
 
   const { data: matchSettings } = useQuery({
@@ -76,6 +89,9 @@ export default function DeletionSuggestions() {
     if (!matchSettings) return deletionPlatforms;
     return deletionPlatforms.filter(p => matchSettings[`${p}_enabled` as keyof typeof matchSettings] !== false);
   }, [matchSettings]);
+
+  const filterSig = JSON.stringify(countParams);
+  useEffect(() => { setLimit(PAGE); }, [filterSig]);
 
   const filteredItems = useMemo(() => {
     let arr = rawItems;
@@ -657,6 +673,18 @@ export default function DeletionSuggestions() {
             </tbody>
           </table>
         </ScrollFadeX>
+      )}
+
+      {!isLoading && matchTotal !== undefined && rawItems.length > 0 && (
+        <div className="flex items-center justify-center gap-3 mt-4 text-xs text-slate-400">
+          <span>Showing {rawItems.length.toLocaleString()} of {matchTotal.toLocaleString()}{isShowMode ? " episodes" : ""}</span>
+          {rawItems.length < matchTotal && (
+            <button onClick={() => setLimit(l => l + PAGE)}
+              className="px-3 py-1.5 rounded-lg bg-surface-overlay hover:bg-white/10 text-slate-200">
+              Load {Math.min(PAGE, matchTotal - rawItems.length).toLocaleString()} more
+            </button>
+          )}
+        </div>
       )}
 
       {previewIds && (
