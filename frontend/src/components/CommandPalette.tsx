@@ -4,6 +4,7 @@ import { Search, CornerDownLeft, Zap } from "lucide-react";
 import { AREAS, LOGS_AREA } from "../lib/navConfig";
 import Kbd from "./Kbd";
 import { useToast } from "../context/ToastContext";
+import { setTheme } from "../lib/useTheme";
 import { importsApi, integrationsApi, settingsApi } from "../lib/api";
 
 interface Entry {
@@ -16,6 +17,10 @@ interface Entry {
 
 // One-shot, user-initiated maintenance actions. Each reports its outcome via toast.
 const ACTIONS: Entry[] = [
+  {
+    path: "action:toggle-theme", area: "Action", label: "Toggle light / dark theme",
+    run: async () => { setTheme(document.documentElement.classList.contains("light") ? "dark" : "light"); },
+  },
   {
     path: "action:scan-imports", area: "Action", label: "Scan failed imports now",
     run: async t => { await importsApi.scan(); t.success("Import scan started"); },

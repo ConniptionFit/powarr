@@ -1,5 +1,6 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import { Zap } from "lucide-react";
+import { Zap, Sun, Moon } from "lucide-react";
+import { useTheme } from "../lib/useTheme";
 import { AREAS, LOGS_AREA, areaForPath, type AreaDef } from "../lib/navConfig";
 
 function RailItem({ area, active, onClick }: { area: AreaDef; active: boolean; onClick: () => void }) {
@@ -26,6 +27,7 @@ export default function IconRail({ onNavigate }: { onNavigate?: () => void }) {
   const navigate = useNavigate();
   const location = useLocation();
   const activeArea = areaForPath(location.pathname);
+  const { theme, toggle } = useTheme();
 
   const go = (area: AreaDef) => {
     navigate(area.screens[0].path);
@@ -54,6 +56,14 @@ export default function IconRail({ onNavigate }: { onNavigate?: () => void }) {
           onClick={() => go(LOGS_AREA)}
         />
       </div>
+      <button
+        onClick={toggle}
+        title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+        aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+        className="mb-1 p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
+      >
+        {theme === "light" ? <Moon size={16} /> : <Sun size={16} />}
+      </button>
       <div className="w-full text-center pb-2 text-[9px] text-slate-600">v0.99.0</div>
     </div>
   );
