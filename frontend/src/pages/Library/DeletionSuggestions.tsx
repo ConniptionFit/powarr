@@ -4,6 +4,7 @@ import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Do
 import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem, type EpisodeDeleteMode } from "../../lib/api";
 import ScoreBreakdownModal from "../../components/ScoreBreakdownModal";
 import { usePersistedState } from "../../lib/usePersistedState";
+import { subscribeEvents } from "../../lib/eventBus";
 import SavedViews from "../../components/SavedViews";
 import { DENSITY_CLASSES, DENSITY_STORAGE_KEY, type TableDensity } from "../../lib/tableDensity";
 import ClampedText from "../../components/ClampedText";
@@ -264,15 +265,10 @@ export default function DeletionSuggestions() {
   // A finished batch LLM run publishes over the same SSE channel the import
   // scanner uses — refresh so freshly cached rationales appear without a reload.
   useEffect(() => {
-    const es = new EventSource("/api/v1/imports/events");
-    es.onmessage = ev => {
-      try {
-        const data = JSON.parse(ev.data);
-        if (data.type === "media_llm_run" || data.type === "media_llm_second_opinion_run")
-          qc.invalidateQueries({ queryKey: ["media"] });
-      } catch { /* keepalive */ }
-    };
-    return () => es.close();
+    return subscribeEvents(data => {
+      if (data?.type === "media_llm_run" || data?.type === "media_llm_second_opinion_run")
+        qc.invalidateQueries({ queryKey: ["media"] });
+    });
   }, [qc]);
 
   // Batch "explain all visible" (v0.27.0, Approved Queue #8): one background LLM
