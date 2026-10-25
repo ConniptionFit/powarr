@@ -91,11 +91,20 @@ export default function CommandPalette() {
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return ENTRIES
+    const matches = ENTRIES
       .map(e => ({ e, s: score(e, q) }))
       .filter(r => r.s > 0)
       .sort((a, b) => b.s - a.s)
       .map(r => r.e);
+    // Anything typed can also be a title search: jump to Deletion Suggestions filtered by it
+    // (with the score floor lifted so low-scoring titles still show up).
+    if (q.length >= 2) {
+      matches.push({
+        path: `/library/deletion-suggestions?q=${encodeURIComponent(query.trim())}`,
+        area: "Library", label: `Find “${query.trim()}” in the library`,
+      });
+    }
+    return matches;
   }, [query]);
 
   if (!open) return null;

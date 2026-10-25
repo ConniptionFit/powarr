@@ -1,5 +1,6 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { Trash2, EyeOff, Eye, ChevronUp, ChevronDown, RefreshCw, Bot, Search, Download, Rows3, ShieldAlert, Link2, Calculator } from "lucide-react";
 import { mediaApi, integrationsApi, settingsApi, fmtBytes, fmtDate, type MediaItem, type EpisodeDeleteMode } from "../../lib/api";
 import ScoreBreakdownModal from "../../components/ScoreBreakdownModal";
@@ -26,6 +27,19 @@ export default function DeletionSuggestions() {
   const [sortBy, setSortBy] = usePersistedState<SortKey>("powarr.deletionSuggestions.sortBy", "score");
   const [order, setOrder] = usePersistedState<"asc" | "desc">("powarr.deletionSuggestions.order", "desc");
   const [search, setSearch] = usePersistedState("powarr.deletionSuggestions.search", "");
+
+  // Arriving from the command palette ("Find … in the library"): apply the term, drop the
+  // score floor so low-scoring titles are visible, then clear the param.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const incomingQuery = searchParams.get("q");
+  useEffect(() => {
+    if (incomingQuery === null) return;
+    setSearch(incomingQuery);
+    setMinScore(0);
+    setMediaType("");      // any type
+    setShowMode("episode"); // flat list; grouped show mode only fetches episodes
+    setSearchParams({}, { replace: true });
+  }, [incomingQuery, setSearch, setMinScore, setMediaType, setShowMode, setSearchParams]);
   const [platformFilter, setPlatformFilter] = usePersistedState<PlatformName | "">("powarr.deletionSuggestions.platformFilter", "");
   const [density, setDensity] = usePersistedState<TableDensity>(DENSITY_STORAGE_KEY, "comfortable");
   const [selected, setSelected] = useState<Set<number>>(new Set());
