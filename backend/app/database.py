@@ -91,6 +91,11 @@ def _migrate():
             # several genres) rather than a single real genre.
             "is_template": "BOOLEAN DEFAULT FALSE",
         },
+        "artist_discovery_runs": {
+            "trigger": "VARCHAR",
+            "preset": "VARCHAR",
+            "candidates_skipped": "INTEGER DEFAULT 0",
+        },
         "discovered_artists": {
             "image_url": "VARCHAR",
             "bio": "TEXT",

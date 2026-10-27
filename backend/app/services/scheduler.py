@@ -331,7 +331,7 @@ async def _scheduled_artist_discovery(db) -> None:
         except ValueError:
             pass
     from app.services.artist_discovery import run_full_discovery_cycle
-    result = await run_full_discovery_cycle(db)
+    result = await run_full_discovery_cycle(db, trigger="schedule")
     if not row:
         row = AppSetting(key="last_artist_discovery_run")
         db.add(row)
@@ -414,6 +414,8 @@ async def maintenance_loop():
                 # AD-08 — drop enrichment art on accepted artists past retention.
                 from app.services.artist_discovery import purge_stale_thumbnails
                 purge_stale_thumbnails(db)
+                from app.services.discovery_engine import prune_decisions
+                prune_decisions(db)
                 # LLM-LOG-01: backfill ground-truth resolutions onto match-review
                 # log rows + retention prune (90 days / 5k rows). Sync + cheap.
                 from app.services import llm_match_log

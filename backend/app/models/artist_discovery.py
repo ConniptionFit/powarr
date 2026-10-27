@@ -48,3 +48,27 @@ class ArtistDiscoveryRun(Base):
     candidates_found = Column(Integer, default=0)
     candidates_added = Column(Integer, default=0)
     message = Column(Text, nullable=True)
+    # v2 additions: what started the run, which aggressiveness it ran under, and
+    # how many candidates it looked at / skipped (the skips are in the decisions table).
+    trigger = Column(String, nullable=True)  # manual | schedule
+    preset = Column(String, nullable=True)
+    candidates_skipped = Column(Integer, default=0)
+
+
+class ArtistDiscoveryDecision(Base):
+    """One row per candidate the direct lane judged during a run — added, queued,
+    skipped or failed — with the reason in plain words. This is the answer to
+    "why didn't it add X?". Pruned by the maintenance loop."""
+    __tablename__ = "artist_discovery_decisions"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    artist_name = Column(String, nullable=False)
+    musicbrainz_id = Column(String, nullable=True)
+    action = Column(String, nullable=False, index=True)  # added|queued|skipped|failed
+    reason = Column(Text, nullable=True)
+    score = Column(Float, nullable=True)
+    connections = Column(Integer, nullable=True)
+    seeds = Column(Text, nullable=True)  # JSON list of seed names
+    candidate_id = Column(Integer, nullable=True)

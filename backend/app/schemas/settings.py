@@ -418,6 +418,35 @@ class ArtistDiscoverySettings(BaseModel):
     # same "taxonomy left to the user" precedent as Smart Playlists' genre_aliases.
     mood_discovery_lanes: list[str] = []
 
+    # --- Direct lane (v2 engine) -------------------------------------------------
+    # Qdrant-free pipeline: Last.fm top artists for a period become weighted seeds,
+    # each seed's Last.fm "similar artists" are scored and summed, and the best
+    # unowned candidates are queued or added to Lidarr. How hard it pushes is set by
+    # `aggressiveness` (a preset) or, when "custom", by the knobs below. For any
+    # preset other than "custom" the preset table in discovery_engine is authoritative.
+    direct_lane_enabled: bool = True
+    # off | conservative | balanced | aggressive | custom
+    aggressiveness: str = "balanced"
+    # Master switch for the direct lane adding straight to Lidarr. Off = candidates
+    # only ever reach the review queue. Separate from the preset so picking
+    # "aggressive" never silently starts adding artists.
+    auto_add_enabled: bool = False
+    seed_period: str = "3month"  # 7day | 1month | 3month | 6month | 12month | overall
+    min_seed_plays: int = 3  # a seed needs at least this many plays in the period
+    max_seeds: int = 40
+    similar_per_seed: int = 15
+    min_match: float = 0.4  # Last.fm similarity floor (0-1) for one seed -> candidate link
+    suggest_score: float = 0.6  # summed weighted score needed to enter the review queue
+    auto_add_score: float = 1.2  # summed weighted score needed to auto-add
+    auto_add_min_connections: int = 2  # distinct seeds that must point at the candidate
+    max_adds_per_run: int = 3
+    max_adds_per_day: int = 5  # rolling 24h cap across all auto-adds (0 = no daily cap)
+    max_queue_per_run: int = 20
+    # Lidarr add options. monitor is Lidarr's addOptions.monitor value.
+    lidarr_monitor: str = "all"  # all | future | missing | existing | first | latest | none
+    search_on_add: bool = True  # searchForMissingAlbums
+    excluded_genres: list[str] = []  # skip candidates whose Last.fm tags hit these (needs a tag lookup)
+
 
 class NotificationSettings(BaseModel):
     enabled: bool = False

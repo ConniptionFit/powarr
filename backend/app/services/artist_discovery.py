@@ -148,6 +148,14 @@ def load_settings(db) -> ArtistDiscoverySettings:
     if "embeddings_enabled" not in data:
         data["embeddings_enabled"] = bool((data.get("ollama_host") or "").strip())
         dirty = True
+    if "auto_add_enabled" not in data:
+        # Pre-direct-lane installs that had any auto-add threshold set clearly meant
+        # to auto-add; keep that intent when the explicit switch appears.
+        data["auto_add_enabled"] = bool(
+            (data.get("auto_add_connection_threshold") or 0) > 0
+            or (data.get("auto_add_all_time_threshold") or 0) > 0
+            or data.get("auto_promote"))
+        dirty = True
     if dirty:
         row.value = json.dumps(data)
         db.commit()
@@ -592,8 +600,12 @@ async def _run_centroid_lane(db, qdrant, centroid: list[float], cfg: ArtistDisco
     whether it's queued for review or, once well-connected enough, skips the
     queue via the same connection-count auto-add gate graph-sync/ingestion use
     (_gate_centroid_candidate)."""
+    # Over-fetch: the best-scoring hits are the same ones every run, and once they
+    # have a candidate row (any status) they can never be re-created. Asking for only
+    # max_candidates_per_run hits meant the lane went permanently quiet after its
+    # first few runs. Walk deeper and let only genuinely new artists use up the cap.
     hits = await qdrant.search(
-        centroid, limit=cfg.max_candidates_per_run, score_threshold=cfg.similarity_threshold,
+        centroid, limit=max(cfg.max_candidates_per_run * 10, 50), score_threshold=cfg.similarity_threshold,
         must=[{"key": "is_discovered", "match": {"value": False}}],
         must_not=[{"key": "in_plex", "match": {"value": True}},
                   {"key": "in_lidarr", "match": {"value": True}}])
@@ -605,6 +617,11 @@ async def _run_centroid_lane(db, qdrant, centroid: list[float], cfg: ArtistDisco
         if not name:
             continue
         mbid = payload.get("musicbrainz_id") or None
+        if created >= cfg.max_candidates_per_run:
+            break
+        known = _find_candidate(db, mbid, name)
+        if known is not None and known.status != "pending":
+            continue  # rejected/accepted rows are permanent blockers, don't spend the cap on them
         result = await _gate_centroid_candidate(
             db, qdrant, cfg, recent_keys, mbid=mbid, name=name,
             source_label=source_label, similarity_score=h.get("score"), payload=payload)
@@ -1384,7 +1401,7 @@ async def run_discovery(db=None) -> dict[str, Any]:
         raise
 
 
-async def run_full_discovery_cycle(db=None, task_id: str | None = None) -> dict[str, Any]:
+async def run_full_discovery_cycle(db=None, task_id: str | None = None, trigger: str = "manual") -> dict[str, Any]:
     """AD-02: `task_id` is optional so existing callers/tests are unaffected —
     when supplied (by run_discovery()'s tray wrapper), each phase reports its
     progress via tasks.update_task(). No natural item count exists up front for
@@ -1398,11 +1415,34 @@ async def run_full_discovery_cycle(db=None, task_id: str | None = None) -> dict[
     db.flush()
     try:
         cfg = load_settings(db)
-        if not cfg.enabled or not _qdrant(db):
-            run.message = "Artist Discovery disabled or Qdrant not configured"
+        run.trigger = trigger
+        run.preset = cfg.aggressiveness
+        if not cfg.enabled:
+            run.message = "Artist Discovery is switched off (Settings → Music → Artist Discovery → Enable)"
             run.finished_at = datetime.utcnow()
             db.commit()
             return {"ok": False, "message": run.message}
+        has_qdrant = _qdrant(db) is not None
+        # The direct lane needs no Qdrant, so it runs first and on its own: a Qdrant
+        # or Ollama outage can no longer stop discovery from reaching Lidarr.
+        tasks.update_task(task_id, message="Scoring similar artists from your listening…")
+        direct: dict[str, Any] = {"ok": False, "message": "direct lane skipped", "queued": 0, "added": 0, "skipped": 0}
+        if cfg.direct_lane_enabled and cfg.aggressiveness != "off":
+            try:
+                from app.services.discovery_engine import run_direct_discovery
+                direct = await run_direct_discovery(db, cfg, run=run)
+            except Exception as e:
+                logger.error(f"Artist Discovery direct lane failed: {e}", exc_info=True)
+                direct = {"ok": False, "message": f"direct lane error: {e}", "queued": 0, "added": 0, "skipped": 0}
+            db.commit()
+        if not has_qdrant:
+            run.candidates_found = direct.get("queued", 0) + direct.get("added", 0)
+            run.candidates_added = direct.get("added", 0)
+            run.candidates_skipped = direct.get("skipped", 0)
+            run.message = f"Direct lane: {direct.get('message')} (Qdrant not configured, legacy lanes skipped)"
+            run.finished_at = datetime.utcnow()
+            db.commit()
+            return {"ok": bool(direct.get("ok")), "message": run.message, "direct": direct}
         # Freshen Qdrant before the centroid/graph steps: pull current Lidarr
         # monitored/fulfillment state and Last.fm play counts into every point,
         # so this run's taste centroid and connection counts reflect recent play
@@ -1447,13 +1487,18 @@ async def run_full_discovery_cycle(db=None, task_id: str | None = None) -> dict[
         tasks.update_task(task_id, message="Enriching candidate images/bios…")
         await re_enrich_missing(db)
         db.commit()
-        found = ingest.get("expanded", 0) + centroid.get("candidates", 0) + graph.get("candidates", 0)
-        added = ingest.get("promoted", 0) + centroid.get("promoted", 0) + graph.get("promoted", 0)
+        found = (ingest.get("expanded", 0) + centroid.get("candidates", 0) + graph.get("candidates", 0)
+                 + direct.get("queued", 0) + direct.get("added", 0))
+        added = (ingest.get("promoted", 0) + centroid.get("promoted", 0) + graph.get("promoted", 0)
+                 + direct.get("added", 0))
         run.candidates_found = found
         run.candidates_added = added
+        run.candidates_skipped = direct.get("skipped", 0)
         run.finished_at = datetime.utcnow()
         run.message = (f"Synced {sync.get('updated', 0)} point(s), ingested {ingest.get('ingested', 0)}, "
                        f"{found} new candidate(s), {added} auto-promoted")
+        if direct.get("message"):
+            run.message += f". Direct lane: {direct['message']}"
         if backfill.get("filled"):
             run.message += f", backfilled {backfill['filled']} embedding(s)"
         if not embeddings_available(cfg):
@@ -1462,7 +1507,7 @@ async def run_full_discovery_cycle(db=None, task_id: str | None = None) -> dict[
             run.message += " (embeddings off — connection lane only)"
         db.commit()
         return {"ok": True, "message": run.message, "sync": sync, "ingest": ingest,
-                "centroid": centroid, "graph": graph, "backfill": backfill}
+                "centroid": centroid, "graph": graph, "backfill": backfill, "direct": direct}
     except Exception as e:
         logger.error(f"Artist Discovery full cycle failed: {e}", exc_info=True)
         run.message = f"Error: {e}"
@@ -1635,7 +1680,8 @@ async def _add_artist_to_lidarr(lidarr, cfg: ArtistDiscoverySettings,
     match["qualityProfileId"] = quality_profile_id
     match["metadataProfileId"] = metadata_profile_id
     match["monitored"] = True
-    match["addOptions"] = {"searchForMissingAlbums": True}
+    monitor = cfg.lidarr_monitor or "all"
+    match["addOptions"] = {"monitor": monitor, "searchForMissingAlbums": bool(cfg.search_on_add)}
 
     try:
         added = await lidarr.add_artist(match)
@@ -2085,6 +2131,9 @@ async def get_candidate_insights(db, candidate_id: int) -> dict[str, Any] | None
     elif source == "ingest":
         lane_label = "Scrobble Ingestion Expansion"
         lane_desc = "Discovered via similar-artist expansion of recent Last.fm listening scrobbles."
+    elif source == "direct":
+        lane_label = "Direct (Last.fm similar artists)"
+        lane_desc = "Scored from Last.fm similar-artist links to your most-played artists in the seed window."
     else:
         lane_label = source.capitalize()
         lane_desc = "Discovered through the taste curation pipeline."

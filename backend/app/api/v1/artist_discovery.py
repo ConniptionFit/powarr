@@ -249,6 +249,44 @@ async def run_discovery(db: Session = Depends(get_db)):
     return await service.run_discovery(db)
 
 
+@router.get("/presets")
+def presets():
+    """Aggressiveness presets and the knob values each one applies."""
+    from app.services.discovery_engine import presets_payload
+    return presets_payload()
+
+
+@router.get("/status")
+async def status(deep: bool = Query(False, description="Also ping Last.fm and Lidarr"),
+                 db: Session = Depends(get_db)):
+    """Why-isn't-it-adding checklist: config problems, caps, schedule, last run."""
+    from app.services.discovery_engine import get_status
+    return await get_status(db, deep=deep)
+
+
+@router.post("/preview")
+async def preview(db: Session = Depends(get_db)):
+    """Dry run of the direct lane with the saved settings: returns what it would
+    add or queue and why, and writes nothing."""
+    from app.services.discovery_engine import run_direct_discovery
+    return await run_direct_discovery(db, service.load_settings(db), dry_run=True)
+
+
+@router.post("/preview-settings")
+async def preview_with_settings(body: ArtistDiscoverySettings, db: Session = Depends(get_db)):
+    """Dry run with unsaved settings, so a preset or knob can be tried before saving."""
+    from app.services.discovery_engine import run_direct_discovery
+    return await run_direct_discovery(db, body, dry_run=True)
+
+
+@router.get("/decisions")
+def decisions(run_id: Optional[int] = None, action: Optional[str] = None,
+              limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)):
+    """Per-artist outcomes (added / queued / skipped / failed) with reasons."""
+    from app.services.discovery_engine import list_decisions
+    return list_decisions(db, run_id=run_id, action=action, limit=limit)
+
+
 @router.post("/sync")
 async def run_sync(db: Session = Depends(get_db)):
     return await service.run_differential_sync(db)
@@ -343,6 +381,9 @@ class RunOut(BaseModel):
     candidates_found: int = 0
     candidates_added: int = 0
     message: Optional[str] = None
+    trigger: Optional[str] = None
+    preset: Optional[str] = None
+    candidates_skipped: int = 0
 
 
 class RecentAddOut(BaseModel):
@@ -380,7 +421,8 @@ def list_runs(limit: int = Query(20, le=100), db: Session = Depends(get_db)):
             .order_by(ArtistDiscoveryRun.started_at.desc()).limit(limit).all())
     return [RunOut(id=r.id, run_type=r.run_type, started_at=r.started_at,
                    finished_at=r.finished_at, candidates_found=r.candidates_found or 0,
-                   candidates_added=r.candidates_added or 0, message=r.message)
+                   candidates_added=r.candidates_added or 0, message=r.message,
+                   trigger=r.trigger, preset=r.preset, candidates_skipped=r.candidates_skipped or 0)
             for r in rows]
 
 
