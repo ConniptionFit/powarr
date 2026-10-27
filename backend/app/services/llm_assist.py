@@ -43,6 +43,9 @@ def _fresh_stats() -> dict[str, Any]:
 
 
 _stats = _fresh_stats()
+# (base_url, model) pairs that have answered at least once this process — the
+# first call to anything else gets COLD_START_GRACE added to its read timeout.
+_warm_models: set[tuple[str, str]] = set()
 
 
 def set_breaker_config(threshold: int, cooldown_minutes: int) -> None:
@@ -114,6 +117,11 @@ def get_stats() -> dict[str, Any]:
     }
 
 TAGS_TIMEOUT = 5
+CONNECT_TIMEOUT = 5
+# Extra read-timeout headroom for the first call to a (host, model) pair this
+# process: Ollama loads the weights from disk on that call (often 10-60+ s on a
+# fresh host), which blew the 20 s generation budget and fed the circuit breaker.
+COLD_START_GRACE = 90
 GENERATE_TIMEOUT = 20
 GENERATE_TIMEOUT_VERBOSE = 45
 
@@ -173,13 +181,62 @@ def _truncate(text: Any, limit: int) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+OLLAMA_DEFAULT_PORT = 11434
+_HOST_SUFFIX_RE = re.compile(r"/(?:v1|api)(?:/.*)?$", re.IGNORECASE)
+
+
 def _base_url(host: str) -> str:
+    """Normalize a user-typed host into a bare base URL (no path).
+
+    - scheme-less "192.168.1.5" / "ollama" gets http:// AND Ollama's default port
+      (11434) — before this, a bare host silently hit port 80;
+    - scheme-less "host:port" just gets http://;
+    - a pasted endpoint ("http://h:11434/api/tags", ".../v1", ".../api") is cut
+      back to the origin, since callers append their own /api/... or /v1/... path
+      (a trailing /v1 used to produce /v1/v1/models)."""
     host = (host or "").strip().rstrip("/")
     if not host:
         return ""
     if not host.startswith(("http://", "https://")):
+        bare_authority = host.split("/", 1)[0]
+        if ":" not in bare_authority.rsplit("]", 1)[-1]:  # no port (IPv6-safe)
+            host = host.replace(bare_authority, f"{bare_authority}:{OLLAMA_DEFAULT_PORT}", 1)
         host = f"http://{host}"
-    return host
+    return _HOST_SUFFIX_RE.sub("", host).rstrip("/")
+
+
+def _timeout(read_s: float) -> httpx.Timeout:
+    """Split timeout: a wrong IP/port fails in CONNECT_TIMEOUT seconds instead of
+    burning the whole generation budget (the single-number form applied it to
+    connect too, so a dead host stalled every call for the full read timeout)."""
+    return httpx.Timeout(read_s, connect=CONNECT_TIMEOUT)
+
+
+def describe_error(exc: Exception) -> str:
+    """Human-usable failure text. httpx timeouts stringify empty, and Ollama puts
+    the actionable reason ('model "x" not found, try pulling it first') in a JSON
+    {"error": ...} body that raise_for_status() discards — surface both."""
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        detail = ""
+        try:
+            body = resp.json()
+            detail = (body.get("error") if isinstance(body, dict) else "") or ""
+            if isinstance(detail, dict):
+                detail = detail.get("message") or str(detail)
+        except Exception:
+            detail = (getattr(resp, "text", "") or "")[:200]
+        base = f"HTTP {resp.status_code}"
+        return f"{base}: {detail}" if detail else base
+    return str(exc) or type(exc).__name__
+
+
+def _model_matches(wanted: str, available: list[str]) -> bool:
+    """Ollama treats 'llama3' and 'llama3:latest' as the same model."""
+    def norm(name: str) -> str:
+        name = (name or "").strip()
+        return name[:-7] if name.endswith(":latest") else name
+    return norm(wanted) in {norm(m) for m in available}
 
 
 def compact_det_summary(match_rationale: str, heuristic_confidence: float | None,
@@ -544,7 +601,7 @@ async def list_models(host: str, api_style: str = "ollama") -> dict[str, Any]:
     if not base:
         return {"ok": False, "models": [], "message": "No LLM host configured"}
     try:
-        async with httpx.AsyncClient(timeout=TAGS_TIMEOUT, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=_timeout(TAGS_TIMEOUT), follow_redirects=True) as client:
             if api_style == "openai":
                 r = await client.get(f"{base}/v1/models")
                 r.raise_for_status()
@@ -555,7 +612,8 @@ async def list_models(host: str, api_style: str = "ollama") -> dict[str, Any]:
                 models = [m.get("name") for m in r.json().get("models", []) if m.get("name")]
             return {"ok": True, "models": models, "message": f"{len(models)} model(s) available"}
     except Exception as e:
-        return {"ok": False, "models": [], "message": f"LLM host unreachable: {e}"}
+        return {"ok": False, "models": [],
+                "message": f"LLM host unreachable at {base}: {describe_error(e)}"}
 
 
 async def get_model_context_length(host: str, model: str,
@@ -568,7 +626,7 @@ async def get_model_context_length(host: str, model: str,
     if not base or not model or api_style == "openai":
         return None
     try:
-        async with httpx.AsyncClient(timeout=TAGS_TIMEOUT, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=_timeout(TAGS_TIMEOUT), follow_redirects=True) as client:
             r = await client.post(f"{base}/api/show", json={"model": model, "name": model})
             r.raise_for_status()
             info = r.json().get("model_info") or {}
@@ -576,17 +634,32 @@ async def get_model_context_length(host: str, model: str,
                 if key.endswith(".context_length") and isinstance(value, (int, float)):
                     return int(value)
     except Exception as e:
-        logger.info(f"Context-length lookup unavailable: {e}")
+        logger.info(f"Context-length lookup unavailable: {describe_error(e)}")
     return None
+
+
+async def _server_version(base: str) -> Optional[str]:
+    """Ollama's /api/version (None on any failure, or for openai-style servers)."""
+    try:
+        async with httpx.AsyncClient(timeout=_timeout(TAGS_TIMEOUT), follow_redirects=True) as client:
+            r = await client.get(f"{base}/api/version")
+            r.raise_for_status()
+            return r.json().get("version")
+    except Exception:
+        return None
 
 
 async def test_connection(host: str, model: str = "", api_style: str = "ollama") -> dict[str, Any]:
     result = await list_models(host, api_style)
     if not result["ok"]:
         return {"ok": False, "message": result["message"], "version": None}
-    if model and model not in result["models"]:
-        return {"ok": True, "message": f"Connected, but model '{model}' not in list (may still work)", "version": None}
-    return {"ok": True, "message": f"Connected — {result['message']}", "version": None}
+    version = await _server_version(_base_url(host)) if api_style != "openai" else None
+    if model and not _model_matches(model, result["models"]):
+        return {"ok": True, "version": version,
+                "message": f"Connected, but model '{model}' is not installed on this host "
+                           f"(available: {', '.join(result['models'][:8]) or 'none'}). "
+                           f"Run `ollama pull {model}` on the host."}
+    return {"ok": True, "message": f"Connected — {result['message']}", "version": version}
 
 
 def _limits(model_size: str, verbose: bool) -> tuple[int, int]:
@@ -641,8 +714,11 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
         model_size, verbose, temperature=temperature,
         max_tokens=max_tokens, timeout_seconds=timeout_seconds)
     started = time.monotonic()
+    warm_key = (base, model)
+    if warm_key not in _warm_models:
+        timeout += COLD_START_GRACE
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=_timeout(timeout), follow_redirects=True) as client:
             if api_style == "openai":
                 body: dict[str, Any] = {
                     "model": model,
@@ -660,6 +736,10 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
+                    # Reasoning-capable models (qwen3, deepseek-r1, gpt-oss...) spend
+                    # num_predict on hidden thinking and return an EMPTY response;
+                    # this app never wants the reasoning. Older servers ignore it.
+                    "think": False,
                     "options": {"temperature": temperature, "num_predict": max_tokens},
                 }
                 if keep_alive_minutes and keep_alive_minutes > 0:
@@ -671,13 +751,14 @@ async def _generate(host: str, model: str, prompt: str, api_style: str = "ollama
                 r = await client.post(f"{base}/api/generate", json=body)
                 r.raise_for_status()
                 out = r.json().get("response", "")
+            _warm_models.add(warm_key)
             record_result(True, round((time.monotonic() - started) * 1000))
             return out
     except Exception as e:
         # httpx timeout exceptions often stringify empty — keep the class name.
-        record_result(False, round((time.monotonic() - started) * 1000),
-                      str(e) or type(e).__name__)
-        logger.info(f"LLM assist unavailable: {e}")
+        err = describe_error(e)
+        record_result(False, round((time.monotonic() - started) * 1000), err)
+        logger.info(f"LLM assist unavailable ({base}, model={model}): {err}")
         return None
 
 
@@ -725,8 +806,11 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
         max_tokens=max_tokens, timeout_seconds=timeout_seconds)
     started = time.monotonic()
     emitted_any = False
+    warm_key = (base, model)
+    if warm_key not in _warm_models:
+        timeout += COLD_START_GRACE
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=_timeout(timeout), follow_redirects=True) as client:
             if api_style == "openai":
                 body: dict[str, Any] = {
                     "model": model,
@@ -747,12 +831,14 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
                         if delta:
                             emitted_any = True
                             yield delta
+                _warm_models.add(warm_key)
                 record_result(True, round((time.monotonic() - started) * 1000))
                 return
             body = {
                 "model": model,
                 "prompt": prompt,
                 "stream": True,
+                "think": False,  # see _generate
                 "options": {"temperature": temperature, "num_predict": max_tokens},
             }
             if keep_alive_minutes and keep_alive_minutes > 0:
@@ -763,11 +849,16 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
                     if not line.strip():
                         continue
                     obj = json.loads(line)
+                    if obj.get("error"):
+                        # Ollama reports mid-stream failures (OOM, model crash) as an
+                        # in-band {"error": ...} line on an HTTP 200.
+                        raise RuntimeError(f"Ollama error: {obj['error']}")
                     if obj.get("response"):
                         emitted_any = True
                         yield obj["response"]
                     if obj.get("done"):
                         break
+            _warm_models.add(warm_key)
             record_result(True, round((time.monotonic() - started) * 1000))
     except GeneratorExit:
         # Consumer closed the stream early (hit its display cap) — the call itself
@@ -777,9 +868,9 @@ async def _generate_stream(host: str, model: str, prompt: str, api_style: str = 
     except Exception as e:
         # A stream that already emitted text still counts as a success for the
         # breaker — only a call that produced nothing is a real failure.
-        record_result(emitted_any, round((time.monotonic() - started) * 1000),
-                      str(e) or type(e).__name__)
-        logger.info(f"LLM stream unavailable: {e}")
+        err = describe_error(e)
+        record_result(emitted_any, round((time.monotonic() - started) * 1000), err)
+        logger.info(f"LLM stream unavailable ({base}, model={model}): {err}")
 
 
 async def explain_deletion_stream(host: str, model: str, item_summary: str,
