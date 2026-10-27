@@ -759,6 +759,20 @@ async def get_cached_recent_keys_and_status(db, ttl_seconds: int = 60) -> tuple[
         return set(), True
 
 
+async def _recent_count_with_names(qdrant, seeds_list: list[str], recent_keys: set[str]) -> int:
+    """Recent-connection count that also tries each seed's resolved artist name.
+
+    associated_seed_mbids stores MBIDs for most seeds, but recent_keys only holds
+    an MBID when Last.fm attached one to the scrobble — it always holds the name.
+    Counting MBIDs alone undercounts, so a candidate the review page shows as
+    3/3 recent (it counts by name) never reached the auto-add bar at run time."""
+    n = _recent_connection_count(seeds_list, recent_keys)
+    if recent_keys and seeds_list and n < len(seeds_list):
+        names = await _resolve_seed_names(qdrant, seeds_list)
+        n = max(n, _recent_connection_count(names, recent_keys))
+    return n
+
+
 def _recent_connection_count(seeds_list: list[str], recent_keys: set[str]) -> int:
     """Count associated_seed_mbids entries that resolve to a recently-listened seed.
     Falls back to the full list length when recent_keys is empty (Last.fm unavailable)
@@ -884,6 +898,8 @@ async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: st
                 result = await add_to_lidarr(db, row.id)
                 if result.get("ok"):
                     promoted = 1
+                else:
+                    logger.warning(f"Artist Discovery: auto-add of '{name}' to Lidarr failed: {result.get('message')}")
         return {"created": 0, "promoted": promoted}  # any prior row (any status) blocks re-creation
 
     enrichment = await _enrich_candidate(db, mbid, name)
@@ -948,6 +964,7 @@ async def _create_or_promote_candidate(db, qdrant, *, mbid: str | None, name: st
         result = await add_to_lidarr(db, cand.id)
         if result.get("ok"):
             return {"created": 0, "promoted": 1}
+        logger.warning(f"Artist Discovery: auto-add of '{name}' to Lidarr failed: {result.get('message')}")
         return {"created": 1, "promoted": 0}  # left pending if Lidarr add failed
     return {"created": 1, "promoted": 0}
 
@@ -964,7 +981,7 @@ async def _gate_and_create_candidate(db, qdrant, cfg: ArtistDiscoverySettings, r
     suggest_n = max(cfg.suggest_connection_threshold, 1)
     auto_add_n = _effective_auto_add_threshold(cfg)
     auto_add_all_time_n = cfg.auto_add_all_time_threshold or 0
-    recent_n = _recent_connection_count(seeds_list, recent_keys)
+    recent_n = await _recent_count_with_names(qdrant, seeds_list, recent_keys)
     row = _find_candidate(db, mbid, name)
     if row is None and recent_n < suggest_n:
         return {"created": 0, "promoted": 0}
@@ -990,7 +1007,7 @@ async def _gate_centroid_candidate(db, qdrant, cfg: ArtistDiscoverySettings, rec
     seeds_list = list(payload.get("associated_seed_mbids") or [])
     auto_add_n = _effective_auto_add_threshold(cfg)
     auto_add_all_time_n = cfg.auto_add_all_time_threshold or 0
-    recent_n = _recent_connection_count(seeds_list, recent_keys)
+    recent_n = await _recent_count_with_names(qdrant, seeds_list, recent_keys)
     return await _create_or_promote_candidate(
         db, qdrant, mbid=mbid, name=name, seeds_list=seeds_list, source_label=source_label,
         auto_add_n=auto_add_n, recent_n=recent_n, auto_add_all_time_n=auto_add_all_time_n,
@@ -999,6 +1016,43 @@ async def _gate_centroid_candidate(db, qdrant, cfg: ArtistDiscoverySettings, rec
         filter_youtube=cfg.filter_youtube_channels,
         blocked_channels=cfg.blocked_channels,
         require_seed_grounding=cfg.require_seed_library_grounding)
+
+
+async def promote_eligible_pending(db, cfg: ArtistDiscoverySettings) -> int:
+    """Auto-add pending candidates that already meet the auto-add thresholds.
+
+    A pending row is otherwise only re-evaluated when one of its seeds is
+    expanded again (every related_artists_refresh_days), so a candidate whose
+    counts reached the bar — or that was left pending by a failed Lidarr add or
+    a settings change — would sit in the queue indefinitely. Uses the same
+    name-based counting as get_candidate_insights, so the run agrees with the
+    eligibility the review page shows."""
+    recent_thresh = _effective_auto_add_threshold(cfg)
+    all_time_thresh = cfg.auto_add_all_time_threshold or 0
+    if recent_thresh <= 0 and all_time_thresh <= 0:
+        return 0
+    recent_keys, has_lastfm = await get_cached_recent_keys_and_status(db)
+    promoted = 0
+    for row in db.query(DiscoveredArtist).filter_by(status="pending").all():
+        seed_mbids = json.loads(row.associated_seed_mbids) if row.associated_seed_mbids else []
+        seed_names = json.loads(row.seed_artist_names) if row.seed_artist_names else []
+        if not seed_names and row.seed_artist_name:
+            seed_names = [row.seed_artist_name]
+        all_time_n = max(len(seed_mbids), len(seed_names))
+        if has_lastfm:
+            recent_n = max(_recent_connection_count(seed_mbids, recent_keys),
+                           _recent_connection_count(seed_names, recent_keys))
+        else:
+            recent_n = all_time_n
+        if not ((recent_thresh > 0 and recent_n >= recent_thresh)
+                or (all_time_thresh > 0 and all_time_n >= all_time_thresh)):
+            continue
+        result = await add_to_lidarr(db, row.id)
+        if result.get("ok"):
+            promoted += 1
+        else:
+            logger.warning(f"Artist Discovery: auto-add of pending '{row.artist_name}' to Lidarr failed: {result.get('message')}")
+    return promoted
 
 
 async def run_graph_sync(db, cfg: ArtistDiscoverySettings) -> dict[str, Any]:
@@ -1484,13 +1538,15 @@ async def run_full_discovery_cycle(db=None, task_id: str | None = None, trigger:
         tasks.update_task(task_id, message="Expanding related-artist graph…")
         graph = await run_graph_sync(db, cfg)
         db.commit()
+        swept = await promote_eligible_pending(db, cfg)
+        db.commit()
         tasks.update_task(task_id, message="Enriching candidate images/bios…")
         await re_enrich_missing(db)
         db.commit()
         found = (ingest.get("expanded", 0) + centroid.get("candidates", 0) + graph.get("candidates", 0)
                  + direct.get("queued", 0) + direct.get("added", 0))
         added = (ingest.get("promoted", 0) + centroid.get("promoted", 0) + graph.get("promoted", 0)
-                 + direct.get("added", 0))
+                 + direct.get("added", 0) + swept)
         run.candidates_found = found
         run.candidates_added = added
         run.candidates_skipped = direct.get("skipped", 0)

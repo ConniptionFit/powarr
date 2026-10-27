@@ -1,9 +1,11 @@
 # Copy this file to docker-compose.yml and fill in your own values.
-# docker-compose.yml is gitignored because it contains the Postgres password.
+# Put POWARR_DB_PASSWORD in a gitignored .env next to the compose file.
+# For the auto-updating Komodo setup see deploy/komodo/ and docs/DEPLOYMENT.md.
 
 services:
   powarr:
-    build: .
+    # Pull the published image. For a local build instead, swap this for `build: .`
+    image: git.pwrs.dev/powers/powarr:latest
     container_name: powarr
     ports:
       - "7979:7979"
@@ -13,7 +15,9 @@ services:
     environment:
       - POWARR_DATA_DIR=/config
       # Set to your Postgres connection string. Omit entirely to use the SQLite fallback.
-      - POWARR_DB_URL=postgresql://powarr:CHANGE_ME@postgres:5432/powarr
+      - POWARR_DB_URL=postgresql://powarr:${POWARR_DB_PASSWORD}@postgres:5432/powarr
+    labels:
+      - com.centurylinklabs.watchtower.enable=false  # Komodo does the updating
     networks:
       - default
       - postgres_net  # the network your existing postgres container is on
