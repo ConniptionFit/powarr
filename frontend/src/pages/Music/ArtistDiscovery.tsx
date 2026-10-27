@@ -10,6 +10,7 @@ import { useToast } from "../../context/ToastContext";
 import { type Candidate, type CandidateSort, sortCandidates, type Stats, api } from "./artist-discovery/shared";
 import { CandidateCard } from "./artist-discovery/CandidateCard";
 import { RecentlyAdded, RecentRuns } from "./artist-discovery/RecentPanels";
+import { PreviewButton, StatusPanel } from "./artist-discovery/DiscoveryTools";
 
 export default function ArtistDiscovery() {
   const qc = useQueryClient();
@@ -109,6 +110,7 @@ export default function ArtistDiscovery() {
     if (laneFilter === "centroid") return c.source === "centroid";
     if (laneFilter === "recent") return c.source === "centroid_recent";
     if (laneFilter === "graph_ingest") return c.source === "graph" || c.source === "ingest";
+    if (laneFilter === "direct") return c.source === "direct";
     if (laneFilter === "low_metadata") return !!c.is_low_metadata;
     return true;
   });
@@ -149,6 +151,7 @@ export default function ArtistDiscovery() {
   const countCentroid = candidates.filter((c) => c.source === "centroid").length;
   const countRecent = candidates.filter((c) => c.source === "centroid_recent").length;
   const countGraphIngest = candidates.filter((c) => c.source === "graph" || c.source === "ingest").length;
+  const countDirect = candidates.filter((c) => c.source === "direct").length;
   const countLowMeta = candidates.filter((c) => c.is_low_metadata).length;
 
   return (
@@ -160,7 +163,7 @@ export default function ArtistDiscovery() {
           <div>
             <h1 className="text-2xl font-bold text-white">Artist Discovery</h1>
             <p className="text-slate-400 text-sm">
-              Last.fm taste mapping → Qdrant similarity + related-artist graph → Lidarr
+              Last.fm listening → similar artists, scored → review queue or Lidarr
             </p>
           </div>
         </div>
@@ -181,6 +184,8 @@ export default function ArtistDiscovery() {
           </Link>
         </div>
       )}
+
+      <StatusPanel />
 
       {/* KPI Stats Grid */}
       {stats && (
@@ -218,6 +223,7 @@ export default function ArtistDiscovery() {
         >
           <Play size={14} /> {runMut.isPending ? "Running discovery cycle…" : "Run Discovery Now"}
         </button>
+        <PreviewButton disabled={!enabled} />
         {msg && <span className="text-xs text-slate-300 font-medium">{msg}</span>}
       </div>
 
@@ -291,6 +297,20 @@ export default function ArtistDiscovery() {
                 All ({candidates.length})
               </button>
 
+              {countDirect > 0 && (
+                <button
+                  onClick={() => setLaneFilter("direct")}
+                  className={`px-3 py-1 rounded-full border flex items-center gap-1.5 transition-all ${
+                    laneFilter === "direct"
+                      ? "bg-green-900/70 text-green-200 border-green-600 font-semibold"
+                      : "bg-surface text-slate-400 border-purple-900/30 hover:border-purple-800"
+                  }`}
+                >
+                  <Sparkles size={12} className="text-green-400" />
+                  Direct ({countDirect})
+                </button>
+              )}
+
               {countCentroid > 0 && (
                 <button
                   onClick={() => setLaneFilter("centroid")}
@@ -353,7 +373,7 @@ export default function ArtistDiscovery() {
         {/* Candidate List */}
         {candidates.length === 0 ? (
           <p className="text-slate-500 text-sm">
-            No pending candidates — configure Last.fm/Qdrant/Lidarr and Run Discovery.
+            No pending candidates. Try Preview (dry run) to see what a run would do and why.
           </p>
         ) : sortedCandidates.length === 0 ? (
           <div className="p-8 text-center bg-surface-raised/40 border border-purple-900/20 rounded-xl space-y-2">

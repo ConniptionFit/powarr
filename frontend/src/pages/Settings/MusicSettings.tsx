@@ -3,9 +3,27 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Compass, ListMusic, Info, Trash2, Plus, X } from "lucide-react";
 import { req } from "../../lib/api";
+import { DirectLaneSettings } from "./DirectLaneSettings";
 
-interface ADSettings {
+export interface ADSettings {
   enabled: boolean;
+  direct_lane_enabled?: boolean;
+  aggressiveness?: string;
+  auto_add_enabled?: boolean;
+  seed_period?: string;
+  min_seed_plays?: number;
+  max_seeds?: number;
+  similar_per_seed?: number;
+  min_match?: number;
+  suggest_score?: number;
+  auto_add_score?: number;
+  auto_add_min_connections?: number;
+  max_adds_per_run?: number;
+  max_adds_per_day?: number;
+  max_queue_per_run?: number;
+  lidarr_monitor?: string;
+  search_on_add?: boolean;
+  excluded_genres?: string[];
   embeddings_enabled: boolean;
   ollama_host: string;
   embed_model: string;
@@ -163,6 +181,9 @@ function ArtistDiscoverySettingsCard() {
   const set = <K extends keyof ADSettings>(k: K, v: ADSettings[K]) =>
     setDraft(prev => ({ ...(prev ?? settings ?? {}), [k]: v }));
 
+  const patch = (p: Partial<ADSettings>) =>
+    setDraft(prev => ({ ...(prev ?? settings ?? {}), ...p }));
+
   const handleRequireMbidToggle = (checked: boolean) => {
     set("require_musicbrainz_id", checked);
     if (checked) {
@@ -181,6 +202,8 @@ function ArtistDiscoverySettingsCard() {
         <input type="checkbox" checked={!!form.enabled} onChange={e => set("enabled", e.target.checked)} />
         Enabled
       </label>
+
+      <DirectLaneSettings form={form as ADSettings} set={set} patch={patch} />
 
       <QdrantHint />
 

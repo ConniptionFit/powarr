@@ -133,6 +133,33 @@ Automation, LLM Assist, Notifications, Security, Music — replaces the separate
 Integrations page). Logs sits below a divider as a utility item. Match Review defaults to a
 card-per-item layout with a table-view toggle for the old dense table.
 
+### Artist Discovery direct lane (v0.100.0)
+
+Auto-add used to do nothing without saying why: it needed Qdrant, and an artist only reached Lidarr
+when several *recently played* seeds all linked to it, with nothing logged about the artists that
+missed. The **direct lane** replaces that guesswork and needs only Last.fm and Lidarr.
+
+- **How it scores**: your top artists for a period (default 3 months) become seeds, weighted by plays.
+  Each seed's Last.fm similar artists are scored (`seed weight x similarity`) and summed per candidate.
+  Artists already in Lidarr, Plex or your seed list, rejected before, or on the non-music filter are dropped.
+- **Aggressiveness** (Settings → Music → Artist Discovery): `off`, `conservative`, `balanced`,
+  `aggressive` or `custom`. Presets set the seed period, minimum plays, seed count, minimum similarity,
+  queue score, auto-add score, minimum seeds, and the per-run, per-day and queue caps. Editing any number
+  switches to custom. **Add artists to Lidarr automatically** is a separate switch (off = review queue only),
+  so choosing "aggressive" never starts adding on its own. Existing installs that had an auto-add threshold
+  keep it switched on.
+- **Lidarr options**: monitor mode (all, future, missing, existing, first, latest, none) and search on add.
+- **Dry run**: **Preview (dry run)** on the Artist Discovery page lists what a run would add or queue and
+  the reason for each, without changing anything (`POST /artist-discovery/preview`; `/preview-settings`
+  tries unsaved settings).
+- **Why-not log**: every run records each artist as added, queued, skipped or failed with a plain-language
+  reason (`GET /artist-discovery/decisions`); click a run under Recent runs to read them. Kept 90 days.
+- **Health check**: the status panel (`GET /artist-discovery/status`, optional `?deep=true`) lists what is
+  stopping discovery: module off, Last.fm or Lidarr missing, auto-add off, schedule off, caps used.
+- **Runs without Qdrant**: the full cycle runs the direct lane first, so a Qdrant or Ollama outage no longer
+  stops discovery. The taste-centroid lane also now looks past hits that already have a candidate row, which
+  used to leave it permanently empty after a few runs.
+
 ### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0; UX cleanup + tray + Related Artists v0.48.0; Related Artists filters v0.49.0; candidate-pool fix + auto-add parity v0.87.0; optional embeddings v0.88.0–v0.88.1)
 Native port of an external n8n taste-mapping pipeline: **Last.fm** scrobble history is optionally
 embedded via a standalone **Ollama** connection (`all-minilm`, independent of the separate LLM

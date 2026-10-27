@@ -8,7 +8,7 @@ export interface Candidate {
   genres: string[];
   mood_tags: string[];
   era: string | null;
-  source: string; // "centroid" | "centroid_recent" | "graph" | "ingest" | "centroid_mood_{slug}" (AD-19)
+  source: string; // "direct" | "centroid" | "centroid_recent" | "graph" | "ingest" | "centroid_mood_{slug}" (AD-19)
   similarity_score: number | null;
   associated_seed_mbids: string[];
   seed_artist_name: string | null;
@@ -90,7 +90,55 @@ export interface DiscoveryRun {
   finished_at: string | null;
   candidates_found: number;
   candidates_added: number;
+  candidates_skipped?: number;
+  trigger?: string | null;
+  preset?: string | null;
   message: string | null;
+}
+
+export interface Decision {
+  id?: number;
+  run_id?: number | null;
+  created_at?: string | null;
+  artist_name: string;
+  musicbrainz_id: string | null;
+  action: "added" | "queued" | "skipped" | "failed" | "would_add" | "would_queue";
+  reason: string;
+  score: number | null;
+  connections: number | null;
+  seeds: string[];
+  candidate_id: number | null;
+}
+
+export interface PreviewResult {
+  ok: boolean;
+  dry_run: boolean;
+  preset: string;
+  message: string;
+  blockers: string[];
+  warnings: string[];
+  seeds: number;
+  candidates_scored: number;
+  queued: number;
+  added: number;
+  failed: number;
+  skipped: number;
+  skip_counts: Record<string, number>;
+  decisions: Decision[];
+}
+
+export interface StatusCheck {
+  key: string;
+  status: "ok" | "warn" | "error";
+  label: string;
+  detail: string;
+}
+
+export interface DiscoveryStatus {
+  overall: "ok" | "warn" | "error";
+  preset: string;
+  checks: StatusCheck[];
+  effective: Record<string, string | number | boolean>;
 }
 
 export interface RecentAdd {
@@ -126,6 +174,9 @@ export const api = {
   candidates: (status = "pending") =>
     req<Candidate[]>(`/artist-discovery/candidates?status=${status}`),
   run: () => req<{ ok: boolean; message: string }>("/artist-discovery/run", { method: "POST" }),
+  status: (deep = false) => req<DiscoveryStatus>(`/artist-discovery/status${deep ? "?deep=true" : ""}`),
+  preview: () => req<PreviewResult>("/artist-discovery/preview", { method: "POST" }),
+  decisions: (runId: number) => req<Decision[]>(`/artist-discovery/decisions?run_id=${runId}&limit=200`),
   runs: () => req<DiscoveryRun[]>("/artist-discovery/runs?limit=10"),
   recentAdds: (limit: number) => req<RecentAdd[]>(`/artist-discovery/recent-adds?limit=${limit}`),
   accept: (id: number) =>
@@ -167,6 +218,12 @@ export function whySuggested(c: Candidate | Pick<Candidate, "source" | "similari
       profile = `artists tagged "${mood}" in your library`;
     }
     return `${pct} ${profile}${seedConnectionSuffix(c)}`;
+  }
+  if (c.source === "direct") {
+    const seeds = c.seed_artist_names.length > 0 ? c.seed_artist_names : c.seed_artist_name ? [c.seed_artist_name] : [];
+    const listed = seeds.slice(0, 4).join(", ") + (seeds.length > 4 ? ` +${seeds.length - 4} more` : "");
+    return `Last.fm lists it as similar to ${listed || "artists you play"}`
+      + (c.similarity_score != null ? ` (best link ${Math.round(c.similarity_score * 100)}%)` : "");
   }
   const names = c.seed_artist_names.length > 0
     ? c.seed_artist_names
