@@ -56,7 +56,7 @@ class DirectLaneTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self, cfg, dry_run=False, lastfm=None, lidarr=True, add_ok=True, run=None):
         added = []
 
-        async def fake_add(db, cid):
+        async def fake_add(db, cid, auto=False):
             row = db.query(DiscoveredArtist).filter_by(id=cid).first()
             if not add_ok:
                 return {"ok": False, "message": "Lidarr add failed: boom"}
@@ -70,6 +70,8 @@ class DirectLaneTests(unittest.IsolatedAsyncioTestCase):
                    return_value=({}, {"owned": {}})), \
              patch("app.services.artist_discovery._plex_artist_names", return_value=set()), \
              patch("app.services.artist_discovery._enrich_candidate", return_value=_ENR), \
+             patch("app.services.discovery_ranker.deezer_related", return_value=[]), \
+             patch("app.integrations.musicbrainz.latest_release", return_value=None), \
              patch("app.services.artist_discovery.add_to_lidarr", side_effect=fake_add):
             res = await de.run_direct_discovery(self.db, cfg, dry_run=dry_run, run=run)
         res["_added_calls"] = added

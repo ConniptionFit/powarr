@@ -447,6 +447,63 @@ class ArtistDiscoverySettings(BaseModel):
     search_on_add: bool = True  # searchForMissingAlbums
     excluded_genres: list[str] = []  # skip candidates whose Last.fm tags hit these (needs a tag lookup)
 
+    # --- v0.101.0: listening log (Last.fm + Plex/Tautulli + ListenBrainz, de-duplicated) ---
+    # When on, seeds come from the unified listen log instead of Last.fm top artists
+    # alone. The same play reported by two sources counts once.
+    listening_enabled: bool = True
+    listening_sources: list[str] = ["lastfm", "plex", "listenbrainz"]  # plex falls back to tautulli
+    plex_history_via: str = "plex"  # plex | tautulli (Plex direct is the default)
+    listening_users: list[str] = []  # Plex/Tautulli accounts that count; [] = everyone
+    listening_dedupe_tolerance_s: int = 180  # same track within this (or half the track) = one play
+    listening_min_play_s: int = 30  # shorter plays are ignored (matches Last.fm's scrobble rule)
+    # Which source's timestamp and metadata win when one play is seen twice.
+    listening_source_priority: list[str] = ["plex", "tautulli", "lastfm", "listenbrainz"]
+    listening_backfill_days: int = 90  # how far back the first sync reaches
+    listening_retention_days: int = 365  # older events are pruned
+    seed_half_life_days: int = 0  # >0: older plays count less (half weight every N days); 0 = flat
+
+    # --- v0.101.0: seed hygiene (optional) ---
+    seed_exclude_artists: list[str] = []  # never use these as taste seeds
+    seed_exclude_tags: list[str] = []  # skip seeds whose Last.fm tags hit these (kids, sleep, holiday...)
+
+    # --- v0.101.0: ranking (evidence blended per candidate; all optional) ---
+    advanced_ranking: bool = True
+    weight_similarity: float = 1.0  # seed similarity (the v1 score)
+    weight_agreement: float = 0.25  # bonus per extra distinct source/seed agreeing
+    weight_tag_fit: float = 0.5
+    weight_obscurity: float = 0.2  # prefers artists below the listener ceiling
+    weight_freshness: float = 0.2  # recent release bonus
+    weight_feedback: float = 0.4  # More-like-this / Not-for-me learning
+    evidence_top_n: int = 60  # candidates that get the (slower) tag/listener lookups
+    evidence_ttl_days: int = 14
+    min_listeners: int = 0  # 0 = no floor
+    max_listeners: int = 0  # 0 = no ceiling; also the point where the obscurity bonus fades out
+    freshness_days: int = 120
+    diversity_strength: float = 0.5  # 0 = pure score order, 1 = strongly spread shelves
+    max_per_seed: int = 4  # shelf results led by one seed
+    # Familiarity buckets. tag_fit >= close_fit is Close; < wildcard_fit is Wildcard.
+    close_fit: float = 0.5
+    wildcard_fit: float = 0.2
+    default_adventure: float = 0.3  # 0 familiar ... 1 adventurous (the Discover slider default)
+    wildcard_max_share: float = 0.25  # admin ceiling on wildcards in the mixed shelf
+    use_deezer_related: bool = True
+    use_musicbrainz_releases: bool = True
+    use_listenbrainz_similar: bool = True
+    listenbrainz_algorithm: str = "session_based_days_9000_session_300_contribution_5_threshold_15_limit_50_skip_30"
+    # --- v0.101.0: auto-add scope (applies on top of auto_add_score / min connections) ---
+    auto_add_buckets: list[str] = ["close", "branching"]
+    auto_add_genres: list[str] = []  # non-empty = candidate needs at least one of these tags
+    auto_add_excluded_genres: list[str] = []
+    auto_add_min_sources: int = 1  # distinct evidence sources (Last.fm counts as one)
+    auto_add_require_mbid: bool = True
+    max_adds_per_week: int = 0  # 0 = no weekly cap
+    lidarr_tag: str = "powarr-discovered"  # "" = do not tag
+    # --- v0.101.0: Ollama blurbs ---
+    blurbs_enabled: bool = True  # only does anything when LLM Assist is configured
+    blurbs_max_per_run: int = 12
+    # --- v0.101.0: scorecard ---
+    scorecard_window_days: int = 30  # "played within N days of being added"
+
 
 class NotificationSettings(BaseModel):
     enabled: bool = False

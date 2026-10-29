@@ -108,7 +108,127 @@ export interface Decision {
   connections: number | null;
   seeds: string[];
   candidate_id: number | null;
+  // v0.101.0 ranking detail (present on direct-lane decisions)
+  bucket?: Bucket | null;
+  tags?: string[];
+  listeners?: number | null;
+  sources?: string[];
+  reason_line?: string;
+  breakdown?: Breakdown;
 }
+
+export type Bucket = "close" | "branching" | "wildcard";
+export type Breakdown = Record<string, { value: number | null; weight: number; points: number }>;
+
+export interface DiscoverCardData {
+  id: number;
+  artist_name: string;
+  musicbrainz_id: string | null;
+  image_url: string | null;
+  bucket: Bucket | null;
+  rank_score: number;
+  match: number; // 0..100, relative to the best current candidate
+  reason: string;
+  blurb: string | null;
+  tags: string[];
+  seeds: string[];
+  listeners: number | null;
+  latest_release: { title: string; date: string } | null;
+  sources: string[];
+  years_active: string | null;
+  breakdown: Breakdown;
+}
+
+export interface Shelf {
+  id: string;
+  title: string;
+  subtitle: string;
+  items: DiscoverCardData[];
+}
+
+export interface ShelvesResponse {
+  adventure: number;
+  total_pending: number;
+  shelves: Shelf[];
+}
+
+export interface ListeningSource {
+  source: string;
+  label: string;
+  enabled: boolean;
+  configured: boolean;
+  events: number;
+  last_play: string | null;
+  last_sync: string | null;
+}
+
+export interface ListeningStatus {
+  enabled: boolean;
+  sources: ListeningSource[];
+  plays_in_log: number;
+  users: string[];
+  counted_users: string[];
+}
+
+export interface DedupePreview {
+  days: number;
+  raw_reports: number;
+  real_plays: number;
+  duplicates_merged: number;
+  seen_by_multiple_sources: number;
+  per_source: Record<string, number>;
+  examples: { artist: string; track: string; played_at: string; sources: string[]; gap_seconds: number }[];
+}
+
+export interface TasteSummary {
+  period: string;
+  log_events: number;
+  top_artists: { name: string; plays: number; excluded: boolean }[];
+  top_tags: { tag: string; weight: number }[];
+  excluded_artists: string[];
+  excluded_tags: string[];
+  users: string[];
+  counted_users: string[];
+}
+
+export interface ScoreRow {
+  key: string;
+  suggested: number;
+  added: number;
+  rejected: number;
+  hits: number;
+  measurable: number;
+  hit_rate: number | null;
+}
+
+export interface Scorecard {
+  days: number;
+  window_days: number;
+  totals: { suggested: number; added: number; rejected: number; pending: number; hits: number; measurable: number };
+  hit_rate: number | null;
+  by_bucket: ScoreRow[];
+  by_source: ScoreRow[];
+  insights: string[];
+}
+
+export interface SamplerTrack {
+  id: number;
+  artist_name: string;
+  image_url: string | null;
+  bucket: Bucket | null;
+  title: string;
+  preview: string;
+  album_cover: string | null;
+}
+
+export interface GenreResult {
+  ok: boolean;
+  message: string;
+  tag?: string;
+  results: { artist_name: string; musicbrainz_id: string | null; rank: number; already_triaged: boolean }[];
+}
+
+export type FeedbackKind = "more_like_this" | "not_for_me" | "known";
 
 export interface PreviewResult {
   ok: boolean;
@@ -185,6 +305,27 @@ export const api = {
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/reject`, { method: "POST" }),
   unreject: (id: number) =>
     req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/unreject`, { method: "POST" }),
+  shelves: (adventure?: number) =>
+    req<ShelvesResponse>(`/artist-discovery/shelves${adventure === undefined ? "" : `?adventure=${adventure}`}`),
+  taste: () => req<TasteSummary>("/artist-discovery/taste"),
+  scorecard: () => req<Scorecard>("/artist-discovery/scorecard"),
+  sampler: (limit = 10) => req<SamplerTrack[]>(`/artist-discovery/sampler?limit=${limit}`),
+  genreExplore: (tag: string, offset = 0) =>
+    req<GenreResult>(`/artist-discovery/genre-explore?tag=${encodeURIComponent(tag)}&offset=${offset}`),
+  feedback: (id: number, kind: FeedbackKind, reason?: string) =>
+    req<{ ok: boolean; message: string }>(`/artist-discovery/candidates/${id}/feedback`, {
+      method: "POST", body: JSON.stringify({ kind, reason }),
+    }),
+  blurb: (id: number) =>
+    req<{ ok: boolean; blurb?: string; message?: string }>(`/artist-discovery/candidates/${id}/blurb`, { method: "POST" }),
+  listeningStatus: () => req<ListeningStatus>("/artist-discovery/listening/status"),
+  listeningSync: () =>
+    req<{ ok: boolean; message: string; new: number; merged: number }>("/artist-discovery/listening/sync", { method: "POST" }),
+  listeningPreview: (days: number) => req<DedupePreview>(`/artist-discovery/listening/preview?days=${days}`),
+  relatedAdd: (artist_name: string, mbid?: string | null) =>
+    req<{ ok: boolean; message: string }>("/artist-discovery/related/add", {
+      method: "POST", body: JSON.stringify({ artist_name, mbid }),
+    }),
   batch: (ids: number[], action: "accept" | "reject") =>
     req<{ results: any[] }>("/artist-discovery/batch", {
       method: "POST",

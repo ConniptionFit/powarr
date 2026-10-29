@@ -340,6 +340,30 @@ async def _scheduled_artist_discovery(db) -> None:
     logger.info(f"Scheduled Artist Discovery run: {result.get('message')}")
 
 
+async def _scheduled_listening_sync(db) -> None:
+    """v0.101.0 — keep the de-duplicated listen log fresh (every 30 minutes) so seeds,
+    the dedupe preview and the scorecard reflect recent plays."""
+    cfg = _get_setting(db, "artist_discovery", ArtistDiscoverySettings)
+    if not cfg.enabled or not cfg.listening_enabled:
+        return
+    row = db.query(AppSetting).filter_by(key="last_listening_sync").first()
+    if row and row.value:
+        try:
+            if datetime.utcnow() - datetime.fromisoformat(row.value) < timedelta(minutes=30):
+                return
+        except ValueError:
+            pass
+    from app.services.listening import sync_listening
+    result = await sync_listening(db, cfg)
+    if not row:
+        row = AppSetting(key="last_listening_sync")
+        db.add(row)
+    row.value = datetime.utcnow().isoformat()
+    db.commit()
+    if result.get("new") or result.get("merged"):
+        logger.info(f"Listening sync: {result.get('message')}")
+
+
 async def _scheduled_artist_discovery_sync(db) -> None:
     """Scheduled differential sync (Lidarr/Last.fm stats -> Qdrant)."""
     cfg = _get_setting(db, "artist_discovery", ArtistDiscoverySettings)
@@ -407,6 +431,7 @@ async def maintenance_loop():
                 await _scheduled_malformed_audit(db)
                 # SP-06 — artist DB refresh before playlist auto-updates so
                 # generation sees fresh Qdrant taste/connection state.
+                await _scheduled_listening_sync(db)
                 await _scheduled_artist_discovery(db)
                 await _scheduled_artist_discovery_sync(db)
                 await _scheduled_playlist_generation(db)
@@ -416,6 +441,8 @@ async def maintenance_loop():
                 purge_stale_thumbnails(db)
                 from app.services.discovery_engine import prune_decisions
                 prune_decisions(db)
+                from app.services.discovery_ranker import prune_evidence
+                prune_evidence(db)
                 # LLM-LOG-01: backfill ground-truth resolutions onto match-review
                 # log rows + retention prune (90 days / 5k rows). Sync + cheap.
                 from app.services import llm_match_log

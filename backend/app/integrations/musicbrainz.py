@@ -114,3 +114,28 @@ def deezer_artist_id(data: dict[str, Any]) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+async def latest_release(mbid: str) -> dict[str, Any] | None:
+    """Newest album/EP release-group for an artist (v0.101.0): {title, date}. Used for the
+    freshness signal and the New Releases shelf. One throttled request."""
+    if not mbid:
+        return None
+    await _throttle()
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(
+                f"{_API}/release-group",
+                params={"artist": mbid, "type": "album|ep", "fmt": "json", "limit": 100},
+                headers={"User-Agent": _USER_AGENT})
+            r.raise_for_status()
+            best = None
+            for rg in r.json().get("release-groups") or []:
+                if rg.get("secondary-types"):  # skip live, compilation, remix...
+                    continue
+                date = rg.get("first-release-date") or ""
+                if len(date) >= 4 and (best is None or date > best["date"]):
+                    best = {"title": rg.get("title") or "", "date": date}
+            return best
+    except Exception:
+        return None

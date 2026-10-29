@@ -11,7 +11,7 @@ router = APIRouter(prefix="/integrations", tags=["integrations"])
 
 INTEGRATION_NAMES = ("plex", "jellyfin", "tautulli", "sonarr", "radarr", "lidarr",
                      "readarr", "seerr", "qbittorrent", "transmission", "lastfm", "bazarr",
-                     "youtube", "spotify")
+                     "youtube", "spotify", "listenbrainz")
 
 # Integrations that are torrent/download clients — anything needing "which client
 # holds this download?" (orphan cleanup, reject-and-remove) iterates this, never
@@ -70,6 +70,10 @@ def _get_client(integration: Integration):
         from app.integrations.spotify import SpotifyIntegration
         return SpotifyIntegration(integration.url, api_key, extra,
                                   username=integration.username or "")
+    if integration.name == "listenbrainz":
+        from app.integrations.listenbrainz import ListenBrainzIntegration
+        return ListenBrainzIntegration(integration.url, api_key, extra,
+                                       username=integration.username or "")
     raise HTTPException(status_code=404, detail=f"Unknown integration: {integration.name}")
 
 

@@ -33,6 +33,7 @@ def init_db():
     from app.models import media, integration, app_setting, failed_import, deletion_log  # noqa: F401
     from app.models import smart_playlist  # noqa: F401
     from app.models import artist_discovery  # noqa: F401
+    from app.models import discovery_v2  # noqa: F401
     from app.models import llm_match_log  # noqa: F401
     from app.models import artist_add_log  # noqa: F401
     from app.models import malformed_import_flag  # noqa: F401
@@ -101,6 +102,15 @@ def _migrate():
             "bio": "TEXT",
             "years_active": "VARCHAR",
             "seed_artist_names": "TEXT",
+            # v0.101.0 — v2 ranking output (see models/artist_discovery.py)
+            "rank_score": "FLOAT",
+            "bucket": "VARCHAR",
+            "breakdown": "TEXT",
+            "reason": "TEXT",
+            "blurb": "TEXT",
+            "listeners": "INTEGER",
+            "tags": "TEXT",
+            "latest_release": "TEXT",
         },
     }
     with engine.connect() as conn:

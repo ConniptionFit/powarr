@@ -34,10 +34,12 @@ class LastFmIntegration(BaseIntegration):
         except Exception as e:
             return {"ok": False, "message": str(e), "version": None}
 
-    async def get_recent_tracks(self, from_ts: int | None = None, limit: int = 200) -> list[dict]:
+    async def get_recent_tracks(self, from_ts: int | None = None, limit: int = 200,
+                                page: int | None = None) -> list[dict]:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             r = await client.get(_API, params=self._params(
-                "user.getrecenttracks", user=self.username, limit=limit, **({"from": from_ts} if from_ts else {})))
+                "user.getrecenttracks", user=self.username, limit=limit, page=page,
+                **({"from": from_ts} if from_ts else {})))
             r.raise_for_status()
             data = r.json()
             tracks = ((data.get("recenttracks") or {}).get("track")) or []
@@ -89,3 +91,38 @@ class LastFmIntegration(BaseIntegration):
             tags = ((data.get("toptags") or {}).get("tag")) or []
             tags = tags if isinstance(tags, list) else [tags]
             return [t["name"] for t in tags if t.get("name")][:10]
+
+    async def get_artist_info(self, artist: str, mbid: str | None = None) -> dict[str, Any]:
+        """artist.getinfo — listener/play counts and tags in one call (v0.101.0).
+        Returns {} on any error so ranking can proceed without it."""
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+                r = await client.get(_API, params=self._params(
+                    "artist.getinfo", artist=artist, mbid=mbid, autocorrect=1))
+                r.raise_for_status()
+                data = r.json()
+                if "error" in data:
+                    return {}
+                a = data.get("artist") or {}
+                stats = a.get("stats") or {}
+                tags = ((a.get("tags") or {}).get("tag")) or []
+                tags = tags if isinstance(tags, list) else [tags]
+                return {
+                    "listeners": int(stats.get("listeners") or 0),
+                    "playcount": int(stats.get("playcount") or 0),
+                    "tags": [t["name"] for t in tags if isinstance(t, dict) and t.get("name")][:10],
+                    "mbid": a.get("mbid") or None,
+                }
+        except Exception:
+            return {}
+
+    async def get_tag_top_artists(self, tag: str, limit: int = 50) -> list[dict]:
+        """tag.gettopartists — the genre explorer's source list."""
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            r = await client.get(_API, params=self._params("tag.gettopartists", tag=tag, limit=limit))
+            r.raise_for_status()
+            data = r.json()
+            if "error" in data:
+                return []
+            arts = ((data.get("topartists") or {}).get("artist")) or []
+            return arts if isinstance(arts, list) else [arts]
