@@ -1,0 +1,42 @@
+# Komodo Resource Sync definitions for Powarr.
+# Template: check field names against your Komodo version (Resources > Syncs shows
+# the schema) before committing it to a Sync. Names in <angle brackets> are yours.
+#
+# Flow: push to master -> Forgejo webhook -> Build "powarr" -> image pushed to the
+# Forgejo registry -> Stack "powarr" detects the new image and redeploys.
+
+[[build]]
+name = "powarr"
+[build.config]
+builder = "<your-builder>"          # Komodo Builder (usually the docker host's periphery)
+git_provider = "git.pwrs.dev"
+git_https = true
+git_account = "<komodo-git-account>"  # Forgejo account with read access to powers/powarr
+repo = "powers/powarr"
+branch = "master"
+dockerfile_path = "Dockerfile"
+image_name = "powers/powarr"
+image_registry = { domain = "git.pwrs.dev", account = "<komodo-registry-account>" }
+version = "0.1.0"
+auto_increment_version = true      # pushes :<version> as well as :latest
+webhook_enabled = true
+webhook_secret = ""                # leave empty to use the Komodo default secret
+
+[[stack]]
+name = "powarr"
+[stack.config]
+server = "<docker-host-server>"
+git_provider = "git.pwrs.dev"
+git_https = true
+git_account = "<komodo-git-account>"
+repo = "powers/powarr"
+branch = "master"
+run_directory = "deploy/komodo"
+file_paths = ["compose.yaml"]
+registry_provider = "git.pwrs.dev"
+registry_account = "<komodo-registry-account>"
+poll_for_updates = true            # check the registry for a newer :latest digest
+auto_update = true                 # redeploy when one is found
+environment = """
+POWARR_DB_PASSWORD=[[POWARR_DB_PASSWORD]]
+"""
