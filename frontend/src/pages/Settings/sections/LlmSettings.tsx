@@ -235,17 +235,10 @@ export function LLMAssistSection() {
               {t === "match"
                 ? "LLM review of failed-import matches and season-pack files. Untick to keep the deterministic scorer only."
                 : "LLM rationales for Cleanup deletion candidates."}
-              {" "}Model field empty = use the shared model from the Integrations page.
+              {" "}Uses the model set in Integrations.
             </p>
           </div>
           <div className="flex items-center gap-3 ml-6 flex-shrink-0">
-            <input
-              type="text"
-              placeholder={cfg.model || "shared model"}
-              value={t === "match" ? cfg.match_model : cfg.explain_model}
-              onChange={e => setCfg(c => c ? { ...c, [t === "match" ? "match_model" : "explain_model"]: e.target.value } : c)}
-              className="w-44 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white placeholder:text-slate-600"
-            />
             <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400">
               <input
                 type="checkbox"
@@ -269,17 +262,10 @@ export function LLMAssistSection() {
             Independent "risky delete" check on Cleanup deletion candidates — flags a KEEP verdict
             that conflicts with a high deletion score (e.g. active watch-progress, seeding) for a
             second look. Advisory only; never blocks or auto-resolves a deletion.
-            {" "}Model field empty = use the shared model from the Integrations page. Off by default.
+            {" "}Uses the model set in Integrations. Off by default.
           </p>
         </div>
         <div className="flex items-center gap-3 ml-6 flex-shrink-0">
-          <input
-            type="text"
-            placeholder={cfg.model || "shared model"}
-            value={cfg.second_opinion_model}
-            onChange={e => setCfg(c => c ? { ...c, second_opinion_model: e.target.value } : c)}
-            className="w-44 bg-surface border border-purple-900/40 rounded px-2 py-1.5 text-sm text-white placeholder:text-slate-600"
-          />
           <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400">
             <input
               type="checkbox"
@@ -689,16 +675,6 @@ export function LlmPoliciesSection() {
           </select>
         </div>
         <div className="flex items-center justify-between py-2">
-          <span className="text-slate-400 text-xs">Match model</span>
-          <input
-            type="text"
-            placeholder="inherit"
-            value={appOverlay.match_model ?? ""}
-            onChange={e => setAppField("match_model", e.target.value || undefined)}
-            className="w-44 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white placeholder:text-slate-600"
-          />
-        </div>
-        <div className="flex items-center justify-between py-2">
           <span className="text-slate-400 text-xs">LLM blend weight (0-1)</span>
           <input
             type="number" min={0} max={1} step={0.1}
@@ -737,16 +713,6 @@ export function LlmPoliciesSection() {
               <option value="true">on</option>
               <option value="false">off</option>
             </select>
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <span className="text-slate-400 text-xs">Explain model</span>
-            <input
-              type="text"
-              placeholder="inherit"
-              value={libOverlay.explain_model ?? ""}
-              onChange={e => setLibField("explain_model", e.target.value || undefined)}
-              className="w-44 bg-surface border border-purple-900/40 rounded px-2 py-1 text-sm text-white placeholder:text-slate-600"
-            />
           </div>
         </div>
       )}

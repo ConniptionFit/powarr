@@ -55,8 +55,7 @@ export const AREAS: AreaDef[] = [
     icon: Music,
     base: "/music",
     screens: [
-      { path: "/music/discovery", label: "Artist Discovery" },
-      { path: "/music/related", label: "Related Artists" },
+      { path: "/music/discovery", label: "Discover" },
       { path: "/music/playlists", label: "Playlists" },
     ],
   },

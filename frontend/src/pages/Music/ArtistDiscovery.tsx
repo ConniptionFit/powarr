@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Compass, Play, Check, X, Sparkles, Settings, Search, Zap, Network, CheckSquare, Square, AlertTriangle } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Compass, Play, Check, X, Sparkles, Settings, Search, CheckSquare, Square, AlertTriangle } from "lucide-react";
 import { fmtRelative } from "../../lib/api";
 import { usePersistedState } from "../../lib/usePersistedState";
 import { subscribeEvents } from "../../lib/eventBus";
@@ -13,8 +12,10 @@ import { RecentlyAdded, RecentRuns } from "./artist-discovery/RecentPanels";
 import { PreviewButton, StatusPanel } from "./artist-discovery/DiscoveryTools";
 import { DiscoverView } from "./artist-discovery/DiscoverView";
 import { InsightsView } from "./artist-discovery/InsightsView";
+import { AutoAddModeBar } from "./artist-discovery/AutoAddModeBar";
+import MusicSetupPanel from "./artist-discovery/MusicSetupPanel";
 
-type Tab = "discover" | "queue" | "insights";
+type Tab = "discover" | "review" | "activity";
 
 export default function ArtistDiscovery() {
   const qc = useQueryClient();
@@ -27,14 +28,15 @@ export default function ArtistDiscovery() {
   });
 
   const [msg, setMsg] = useState<string | null>(null);
-  const [tab, setTab] = usePersistedState<Tab>("powarr.artistDiscovery.tab", "discover");
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [tab, setTab] = usePersistedState<Tab>("powarr.music.tab", "discover");
   const [candidateSort, setCandidateSort] = usePersistedState<CandidateSort>(
     "powarr.artistDiscovery.candidateSort",
     "match"
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [laneFilter, setLaneFilter] = usePersistedState<string>(
-    "powarr.artistDiscovery.laneFilter",
+    "powarr.music.reviewFilter",
     "all"
   );
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -113,10 +115,8 @@ export default function ArtistDiscovery() {
       const matchSeed = c.seed_artist_names.some((s) => s.toLowerCase().includes(q));
       if (!matchName && !matchGenre && !matchSeed) return false;
     }
-    if (laneFilter === "centroid") return c.source === "centroid";
-    if (laneFilter === "recent") return c.source === "centroid_recent";
-    if (laneFilter === "graph_ingest") return c.source === "graph" || c.source === "ingest";
-    if (laneFilter === "direct") return c.source === "direct";
+    if (laneFilter === "close" || laneFilter === "branching" || laneFilter === "wildcard") return c.bucket === laneFilter;
+    if (laneFilter === "unrated") return !c.bucket;
     if (laneFilter === "low_metadata") return !!c.is_low_metadata;
     return true;
   });
@@ -153,11 +153,9 @@ export default function ArtistDiscovery() {
     }
   };
 
-  // Counts for filter chips
-  const countCentroid = candidates.filter((c) => c.source === "centroid").length;
-  const countRecent = candidates.filter((c) => c.source === "centroid_recent").length;
-  const countGraphIngest = candidates.filter((c) => c.source === "graph" || c.source === "ingest").length;
-  const countDirect = candidates.filter((c) => c.source === "direct").length;
+  // Counts for filter chips (v0.102.0: same words as the Discover tab)
+  const countBy = (b: string) => candidates.filter((c) => c.bucket === b).length;
+  const countUnrated = candidates.filter((c) => !c.bucket).length;
   const countLowMeta = candidates.filter((c) => c.is_low_metadata).length;
 
   return (
@@ -167,40 +165,54 @@ export default function ArtistDiscovery() {
         <div className="flex items-center gap-3">
           <Compass className="text-brand-light" size={24} />
           <div>
-            <h1 className="text-2xl font-bold text-white">Artist Discovery</h1>
+            <h1 className="text-2xl font-bold text-white">Discover music</h1>
             <p className="text-slate-400 text-sm">
               Your listening (Last.fm, Plex, ListenBrainz) → similar artists, scored → shelves, review queue or Lidarr
             </p>
           </div>
         </div>
-        <Link
-          to="/settings/music"
-          title="Configure"
-          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-surface-raised transition-colors border border-purple-900/30"
+        <button
+          onClick={() => setSetupOpen(true)}
+          title="Music setup"
+          className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-slate-300 hover:text-white hover:bg-surface-raised transition-colors border border-purple-900/30"
         >
-          <Settings size={18} />
-        </Link>
+          <Settings size={16} /> Setup
+        </button>
       </div>
 
       {!enabled && (
         <div className="mb-6 bg-amber-900/20 border border-amber-800/40 rounded-xl px-4 py-3 text-sm text-amber-200 flex items-center justify-between">
           <span>Artist Discovery is disabled.</span>
-          <Link to="/settings/music" className="underline hover:text-white font-medium">
-            Configure it →
-          </Link>
+          <button onClick={() => setSetupOpen(true)} className="underline hover:text-white font-medium">
+            Open setup →
+          </button>
         </div>
       )}
 
       <StatusPanel />
 
-      {/* KPI Stats Grid */}
+      {/* Tabs */}
+      <div className="flex gap-1 mb-6 border-b border-purple-900/30" role="tablist">
+        {([["discover", "Discover"], ["review", `Review (${candidates.length})`], ["activity", "Activity"]] as [Tab, string][]).map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
+            className={`px-4 py-2 text-sm font-medium -mb-px border-b-2 transition-colors ${
+              tab === id ? "text-white border-brand" : "text-slate-400 border-transparent hover:text-white"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {msg && tab !== "review" && <p className="text-xs text-slate-300 font-medium mb-4">{msg}</p>}
+      {tab === "discover" && <DiscoverView enabled={enabled} onRun={() => runMut.mutate()} running={runMut.isPending} />}
+      {tab === "activity" && (<>
+      {/* What it did and why */}
       {stats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
           <div
             className="bg-surface-raised border border-purple-900/30 rounded-xl p-3.5 shadow-sm"
-            title="Total artists in Powarr's shared taste vector space — your monitored artists plus every related artist ever discovered. Never shrinks (points are soft-deleted, not removed)."
+            title="Every artist Powarr has looked at: the ones you own plus everything it has ever suggested. It only grows, so it is not a score."
           >
-            <p className="text-xs text-slate-500 font-medium">Taste model size</p>
+            <p className="text-xs text-slate-500 font-medium">Artists looked at</p>
             <p className="text-white text-lg font-bold mt-0.5">{stats.tracked_artists ?? "—"}</p>
           </div>
           <div className="bg-surface-raised border border-purple-900/30 rounded-xl p-3.5 shadow-sm">
@@ -220,22 +232,14 @@ export default function ArtistDiscovery() {
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b border-purple-900/30" role="tablist">
-        {([["discover", "Discover"], ["queue", `Review queue (${candidates.length})`], ["insights", "Insights"]] as [Tab, string][]).map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
-            className={`px-4 py-2 text-sm font-medium -mb-px border-b-2 transition-colors ${
-              tab === id ? "text-white border-brand" : "text-slate-400 border-transparent hover:text-white"}`}>
-            {label}
-          </button>
-        ))}
-      </div>
+        <InsightsView />
+        <RecentlyAdded />
+        <RecentRuns />
+      </>)}
 
-      {msg && tab !== "queue" && <p className="text-xs text-slate-300 font-medium mb-4">{msg}</p>}
-      {tab === "discover" && <DiscoverView enabled={enabled} onRun={() => runMut.mutate()} running={runMut.isPending} />}
-      {tab === "insights" && <InsightsView />}
+      {tab === "review" && (<>
+      <AutoAddModeBar enabled={enabled} onOpenSetup={() => setSetupOpen(true)} />
 
-      {tab === "queue" && (<>
       {/* Action Bar */}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <button
@@ -319,61 +323,19 @@ export default function ArtistDiscovery() {
                 All ({candidates.length})
               </button>
 
-              {countDirect > 0 && (
-                <button
-                  onClick={() => setLaneFilter("direct")}
-                  className={`px-3 py-1 rounded-full border flex items-center gap-1.5 transition-all ${
-                    laneFilter === "direct"
-                      ? "bg-green-900/70 text-green-200 border-green-600 font-semibold"
-                      : "bg-surface text-slate-400 border-purple-900/30 hover:border-purple-800"
-                  }`}
-                >
-                  <Sparkles size={12} className="text-green-400" />
-                  Direct ({countDirect})
-                </button>
-              )}
-
-              {countCentroid > 0 && (
-                <button
-                  onClick={() => setLaneFilter("centroid")}
-                  className={`px-3 py-1 rounded-full border flex items-center gap-1.5 transition-all ${
-                    laneFilter === "centroid"
-                      ? "bg-purple-900/70 text-purple-200 border-purple-600 font-semibold"
-                      : "bg-surface text-slate-400 border-purple-900/30 hover:border-purple-800"
-                  }`}
-                >
-                  <Compass size={12} className="text-purple-400" />
-                  Taste Centroid ({countCentroid})
-                </button>
-              )}
-
-              {countRecent > 0 && (
-                <button
-                  onClick={() => setLaneFilter("recent")}
-                  className={`px-3 py-1 rounded-full border flex items-center gap-1.5 transition-all ${
-                    laneFilter === "recent"
-                      ? "bg-amber-900/70 text-amber-200 border-amber-600 font-semibold"
-                      : "bg-surface text-slate-400 border-purple-900/30 hover:border-purple-800"
-                  }`}
-                >
-                  <Zap size={12} className="text-amber-400" />
-                  Recent Taste ({countRecent})
-                </button>
-              )}
-
-              {countGraphIngest > 0 && (
-                <button
-                  onClick={() => setLaneFilter("graph_ingest")}
-                  className={`px-3 py-1 rounded-full border flex items-center gap-1.5 transition-all ${
-                    laneFilter === "graph_ingest"
-                      ? "bg-cyan-900/70 text-cyan-200 border-cyan-600 font-semibold"
-                      : "bg-surface text-slate-400 border-purple-900/30 hover:border-purple-800"
-                  }`}
-                >
-                  <Network size={12} className="text-cyan-400" />
-                  Graph & Ingest ({countGraphIngest})
-                </button>
-              )}
+              {([["close", "Close"], ["branching", "Branching out"], ["wildcard", "Wildcard"], ["unrated", "Not rated yet"]] as [string, string][]).map(([id, label]) => {
+                const n = id === "unrated" ? countUnrated : countBy(id);
+                if (n === 0) return null;
+                return (
+                  <button key={id} onClick={() => setLaneFilter(id)}
+                    className={`px-3 py-1 rounded-full border transition-all ${
+                      laneFilter === id
+                        ? "bg-brand text-white border-brand shadow-sm font-semibold"
+                        : "bg-surface text-slate-400 border-purple-900/30 hover:border-purple-800"}`}>
+                    {label} ({n})
+                  </button>
+                );
+              })}
 
               {countLowMeta > 0 && (
                 <button
@@ -385,7 +347,7 @@ export default function ArtistDiscovery() {
                   }`}
                 >
                   <AlertTriangle size={12} />
-                  Low Metadata ({countLowMeta})
+                  Missing info ({countLowMeta})
                 </button>
               )}
             </div>
@@ -431,7 +393,7 @@ export default function ArtistDiscovery() {
       </>)}
 
       {/* Floating Sticky Batch Action Bar */}
-      {tab === "queue" && selectedIds.size > 0 && (
+      {tab === "review" && selectedIds.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-[#141424]/95 border border-purple-700/60 shadow-2xl rounded-2xl px-5 py-3.5 flex items-center gap-4 backdrop-blur-md animate-in fade-in slide-in-from-bottom-3 duration-200">
           <span className="text-xs font-semibold text-white">
             {selectedIds.size} artist{selectedIds.size === 1 ? "" : "s"} selected
@@ -476,9 +438,7 @@ export default function ArtistDiscovery() {
         />
       )}
 
-      <RecentlyAdded />
-
-      <RecentRuns />
+      {setupOpen && <MusicSetupPanel onClose={() => setSetupOpen(false)} />}
     </div>
   );
 }

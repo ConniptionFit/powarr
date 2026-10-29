@@ -69,7 +69,7 @@ class MatchPolicyTests(unittest.TestCase):
         cfg = _cfg()
         policies = LlmPolicies(by_app={"radarr": {"match_model": "llama3:8b"}})
         _, model, _ = _match_policy(ollama, cfg, policies, "radarr")
-        self.assertEqual(model, "llama3:8b")
+        self.assertEqual(model, "qwen2.5:7b")  # v0.102.0: overlays no longer pick a model
         _, sonarr_model, _ = _match_policy(ollama, cfg, policies, "sonarr")
         self.assertEqual(sonarr_model, "qwen2.5:7b")
 
@@ -133,7 +133,7 @@ class ExplainPolicyTests(unittest.TestCase):
         ollama = _ollama()
         policies = LlmPolicies(by_library={"Music": {"explain_model": "phi4:14b"}})
         _, model = _explain_policy(ollama, policies, "Music")
-        self.assertEqual(model, "phi4:14b")
+        self.assertEqual(model, "qwen2.5:7b")  # v0.102.0: overlays no longer pick a model
         _, movies_model = _explain_policy(ollama, policies, "Movies")
         self.assertEqual(movies_model, "qwen2.5:7b")
 
@@ -180,12 +180,13 @@ class EligibleCandidatesLibraryFilterTests(unittest.TestCase):
         out = eligible_candidates(self.db, ollama, [item.id], 50, policies)
         self.assertEqual(out, [])
 
-    def test_rationale_key_changes_with_library_model_override(self):
+    def test_rationale_key_ignores_library_model_override(self):
+        # v0.102.0: policies can no longer pick a model, so the key does not move.
         item = _item(library_section="Music")
         ollama = _ollama()
         k1 = rationale_key(ollama, item, LlmPolicies())
         k2 = rationale_key(ollama, item, LlmPolicies(by_library={"Music": {"explain_model": "other"}}))
-        self.assertNotEqual(k1, k2)
+        self.assertEqual(k1, k2)
 
 
 if __name__ == "__main__":

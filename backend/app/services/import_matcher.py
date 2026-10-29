@@ -141,7 +141,7 @@ def _match_policy(ollama: OllamaSettings, cfg: ImportMatchingSettings,
     specific app OFF (or override its model/blend weight) independent of the
     other apps."""
     overlay = (policies.by_app or {}).get(source_app or "") or {}
-    model = (overlay.get("match_model") or "").strip() or ollama.model_for("match")
+    model = ollama.model_for("match")  # v0.102.0: one shared model; policy overlays no longer pick a model
     toggle = overlay.get("match_enabled", ollama.match_enabled)
     enabled = bool(ollama.enabled and ollama.host and model and toggle)
     blend = overlay.get("llm_blend_weight")

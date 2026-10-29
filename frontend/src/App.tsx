@@ -29,7 +29,6 @@ const MatchReview = lazy(PAGE_LOADERS.MatchReview);
 const RecentDownloads = lazy(PAGE_LOADERS.RecentDownloads);
 const LlmAccuracy = lazy(PAGE_LOADERS.LlmAccuracy);
 const ArtistDiscovery = lazy(PAGE_LOADERS.ArtistDiscovery);
-const RelatedArtists = lazy(PAGE_LOADERS.RelatedArtists);
 const Playlists = lazy(PAGE_LOADERS.Playlists);
 const SettingsPage = lazy(PAGE_LOADERS.SettingsPage);
 const LogsPage = lazy(PAGE_LOADERS.LogsPage);
@@ -170,7 +169,7 @@ export default function App() {
 
               <Route path="/music" element={<Navigate to="/music/discovery" replace />} />
               <Route path="/music/discovery" element={<ArtistDiscovery />} />
-              <Route path="/music/related" element={<RelatedArtists />} />
+              <Route path="/music/related" element={<Navigate to="/music/discovery" replace />} />
               <Route path="/music/playlists" element={<Playlists />} />
 
               <Route path="/settings" element={<SettingsPage />} />

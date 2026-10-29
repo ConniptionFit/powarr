@@ -42,6 +42,7 @@ class CandidateOut(BaseModel):
     recent_connections: int = 0
     auto_add_progress: float = 0.0
     is_low_metadata: bool = False
+    bucket: Optional[str] = None  # v0.102.0: close | branching | wildcard, same words as Discover
 
 
 class SeedInsight(BaseModel):
@@ -206,6 +207,7 @@ def _candidate_out(row: DiscoveredArtist,
         recent_connections=recent_conn,
         auto_add_progress=round(auto_add_progress, 4),
         is_low_metadata=is_low,
+        bucket=row.bucket,
     )
 
 

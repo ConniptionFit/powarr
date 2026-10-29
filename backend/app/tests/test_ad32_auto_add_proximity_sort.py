@@ -132,7 +132,7 @@ class TestAllTimeAutoAddPromotion(unittest.IsolatedAsyncioTestCase):
         """Verifies insights modal gate calculation with dual thresholds."""
         db = _db()
         save_settings(db, ArtistDiscoverySettings(
-            auto_add_connection_threshold=3,
+            auto_add_connection_threshold=3, legacy_auto_add_migrated=True,
             auto_add_all_time_threshold=10,
             scrobble_lookback_days=30,
         ))

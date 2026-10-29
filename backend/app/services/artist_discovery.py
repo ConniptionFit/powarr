@@ -156,10 +156,47 @@ def load_settings(db) -> ArtistDiscoverySettings:
             or (data.get("auto_add_all_time_threshold") or 0) > 0
             or data.get("auto_promote"))
         dirty = True
+    if not data.get("legacy_auto_add_migrated"):
+        # v0.102.0: one Auto-add control. The old recent/all-time connection thresholds
+        # are folded into it: anyone who had either on keeps auto-adding (switch on,
+        # same minimum link count), then the thresholds are zeroed so nothing adds twice.
+        recent = int(data.get("auto_add_connection_threshold") or 0)
+        all_time = int(data.get("auto_add_all_time_threshold") or 0)
+        if recent > 0 or all_time > 0:
+            data["auto_add_enabled"] = True
+            data["auto_add_min_connections"] = max(1, recent or all_time)
+            data["auto_add_connection_threshold"] = 0
+            data["auto_add_all_time_threshold"] = 0
+            logger.info("Artist Discovery: folded legacy auto-add thresholds (recent=%s, all-time=%s) into the Auto-add rules", recent, all_time)
+        data["legacy_auto_add_migrated"] = True
+        dirty = True
     if dirty:
         row.value = json.dumps(data)
         db.commit()
-    return ArtistDiscoverySettings(**data)
+    return _with_shared_ollama(db, ArtistDiscoverySettings(**data))
+
+
+def _with_shared_ollama(db, cfg: ArtistDiscoverySettings) -> ArtistDiscoverySettings:
+    """v0.102.0: Ollama is configured once, in Integrations. Embedding calls use that
+    host and embed model. Installs that only had the old Music-level host get it copied
+    up to the shared record so nothing stops working."""
+    row = db.query(AppSetting).filter_by(key="ollama").first()
+    shared = json.loads(row.value) if row and row.value else {}
+    host = (shared.get("host") or "").strip()
+    if not host and (cfg.ollama_host or "").strip():
+        shared["host"] = cfg.ollama_host.strip()
+        shared.setdefault("embed_model", cfg.embed_model)
+        if row:
+            row.value = json.dumps(shared)
+        else:
+            db.add(AppSetting(key="ollama", value=json.dumps(shared)))
+        db.commit()
+        logger.info("Artist Discovery: copied the Music-level Ollama host into the shared Ollama integration")
+        return cfg
+    if host:
+        cfg = cfg.model_copy(update={"ollama_host": host,
+                                     "embed_model": shared.get("embed_model") or cfg.embed_model})
+    return cfg
 
 
 def save_settings(db, cfg: ArtistDiscoverySettings) -> None:
@@ -266,9 +303,8 @@ def embeddings_available(cfg: ArtistDiscoverySettings) -> bool:
 
 
 async def _embed_artist(cfg: ArtistDiscoverySettings, name: str, tags: list[str]) -> list[float] | None:
-    """Artist Discovery's Ollama connection is fully standalone — it never falls
-    back to (or depends on) the separate Local LLM Assist Ollama configuration,
-    even though both may point at the same host in practice.
+    """Uses the shared Ollama integration's host and embed model (load_settings
+    resolves them into cfg; v0.102.0).
 
     Returns None when embeddings are disabled/unconfigured/unreachable — callers
     must treat that as a vector-less write, never as a reason to drop the artist

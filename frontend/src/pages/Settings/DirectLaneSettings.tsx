@@ -23,7 +23,8 @@ const MONITOR: [string, string][] = [
 
 /** Aggressiveness presets + the knobs behind them. Choosing a preset copies its values
  * in; editing any knob switches to "custom" so what you see is what runs. */
-export function DirectLaneSettings({ form, set, patch }: {
+export function DirectLaneSettings({ form, set, patch, hideAutoToggle = false }: {
+  hideAutoToggle?: boolean;
   form: ADSettings;
   set: <K extends keyof ADSettings>(k: K, v: ADSettings[K]) => void;
   patch: (p: Partial<ADSettings>) => void;
@@ -67,6 +68,7 @@ export function DirectLaneSettings({ form, set, patch }: {
       {active && <p className="text-xs text-slate-400">{active.description}</p>}
 
       <div className={isOff ? "opacity-40 pointer-events-none space-y-4" : "space-y-4"}>
+        {!hideAutoToggle && (
         <label className="flex items-start gap-2 text-sm text-slate-300"
           title="Off: every candidate goes to the review queue and nothing is added on its own. On: candidates that clear the auto-add score and connection count are added to Lidarr, within the caps below.">
           <input type="checkbox" className="mt-1" checked={!!form.auto_add_enabled}
@@ -80,6 +82,7 @@ export function DirectLaneSettings({ form, set, patch }: {
             </span>
           </span>
         </label>
+        )}
 
         <div className="grid sm:grid-cols-3 gap-3">
           <label className={labelCls} title="Which stretch of your Last.fm history picks the seed artists.">

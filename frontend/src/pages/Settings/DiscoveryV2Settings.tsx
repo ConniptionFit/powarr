@@ -43,7 +43,7 @@ function Slider({ label, hint, value, min, max, step, onChange }: {
   );
 }
 
-function ListeningSources({ form, set }: Props) {
+export function ListeningSources({ form, set }: Props) {
   const qc = useQueryClient();
   const [days, setDays] = useState(7);
   const { data: status } = useQuery({ queryKey: ["ad-listening-status"], queryFn: api.listeningStatus });
@@ -186,7 +186,9 @@ function ListeningSources({ form, set }: Props) {
   );
 }
 
-export function DiscoveryV2Settings({ form, set }: Props) {
+export function DiscoveryV2Settings({ form, set, part = "all" }: Props & { part?: "basics" | "advanced" | "all" }) {
+  const basics = part !== "advanced";
+  const advanced = part !== "basics";
   const buckets = form.auto_add_buckets ?? ["close", "branching"];
   const toggleBucket = (b: string) => set("auto_add_buckets", buckets.includes(b) ? buckets.filter((x) => x !== b) : [...buckets, b]);
   const num = (k: keyof ADSettings, fb: number, float = false) => (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -207,9 +209,9 @@ export function DiscoveryV2Settings({ form, set }: Props) {
 
   return (
     <div className="space-y-4">
-      <ListeningSources form={form} set={set} />
+      {basics && <ListeningSources form={form} set={set} />}
 
-      <Section title="Auto-add rules" hint="What an artist must clear before Powarr adds it to Lidarr and starts a search on its own.">
+      {advanced && <Section title="Auto-add rules" hint="What an artist must clear before Powarr adds it to Lidarr and starts a search on its own.">
         <p className="text-xs text-slate-300 bg-surface rounded-lg border border-purple-900/30 p-3 leading-relaxed">{sentence}</p>
         <div>
           <p className={labelCls}>Allowed picks</p>
@@ -251,9 +253,9 @@ export function DiscoveryV2Settings({ form, set }: Props) {
           </label>
         </div>
         <p className="text-xs text-slate-500">Score, seeds, per-run and per-day caps, monitor mode and search on add are in Discovery aggressiveness above.</p>
-      </Section>
+      </Section>}
 
-      <Section title="Keep out of my taste profile" hint="Optional. Stops these from shaping suggestions, e.g. kids' music or sleep sounds on a shared server." defaultOpen={false}>
+      {basics && <Section title="Keep out of my taste profile" hint="Optional. Stops these from shaping suggestions, e.g. kids' music or sleep sounds on a shared server." defaultOpen={false}>
         <div className="grid sm:grid-cols-2 gap-3">
           <label className={labelCls}>
             Artists to ignore as seeds
@@ -266,9 +268,9 @@ export function DiscoveryV2Settings({ form, set }: Props) {
               onChange={(e) => set("seed_exclude_tags", list(e.target.value))} />
           </label>
         </div>
-      </Section>
+      </Section>}
 
-      <Section title="Matching and ranking" hint="How the final score is blended. Every score on a card can be opened to see these in action. Defaults suit most libraries." defaultOpen={false}>
+      {advanced && <Section title="Matching and ranking" hint="How the final score is blended. Every score on a card can be opened to see these in action. Defaults suit most libraries." defaultOpen={false}>
         <label className="flex items-center gap-2 text-sm text-slate-300">
           <input type="checkbox" checked={form.advanced_ranking ?? true} onChange={(e) => set("advanced_ranking", e.target.checked)} />
           Blend tags, popularity, freshness and feedback into the score (off = Last.fm similarity only)
@@ -326,11 +328,8 @@ export function DiscoveryV2Settings({ form, set }: Props) {
           <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={form.use_deezer_related ?? true} onChange={(e) => set("use_deezer_related", e.target.checked)} /> Deezer related artists</label>
           <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={form.use_listenbrainz_similar ?? true} onChange={(e) => set("use_listenbrainz_similar", e.target.checked)} /> ListenBrainz similar artists</label>
           <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={form.use_musicbrainz_releases ?? true} onChange={(e) => set("use_musicbrainz_releases", e.target.checked)} /> MusicBrainz new releases</label>
-          <label className="flex items-center gap-2 text-sm text-slate-300" title="Needs LLM Assist configured in Integrations. Written from tags and seeds only, never from the model's memory.">
-            <input type="checkbox" checked={form.blurbs_enabled ?? true} onChange={(e) => set("blurbs_enabled", e.target.checked)} /> One-line blurbs from the local LLM
-          </label>
         </div>
-      </Section>
+      </Section>}
     </div>
   );
 }

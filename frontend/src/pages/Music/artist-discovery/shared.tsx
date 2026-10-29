@@ -24,6 +24,7 @@ export interface Candidate {
   recent_connections?: number;
   auto_add_progress?: number;
   is_low_metadata?: boolean;
+  bucket?: Bucket | null;
 }
 
 // Sort options for the pending-candidates queue
@@ -379,17 +380,29 @@ export function whySuggested(c: Candidate | Pick<Candidate, "source" | "similari
   return `Similar to ${listed} (${matchStr})`;
 }
 
+export const BUCKET_BADGE: Record<Bucket, { label: string; className: string }> = {
+  close: { label: "Close", className: "bg-green-950/60 text-green-300 border border-green-700/40" },
+  branching: { label: "Branching out", className: "bg-purple-950/70 text-purple-300 border border-purple-700/50" },
+  wildcard: { label: "Wildcard", className: "bg-orange-950/60 text-orange-300 border border-orange-700/40" },
+};
+
+/** v0.102.0: the same words as the Discover tab. Rows with no rating yet fall back to a plain-language source. */
 export function getLaneBadge(c: Candidate) {
+  if (c.bucket && BUCKET_BADGE[c.bucket]) return BUCKET_BADGE[c.bucket];
+  return getSourceBadge(c);
+}
+
+function getSourceBadge(c: Candidate) {
   if (c.source === "centroid") {
     return {
-      label: "Taste Centroid",
+      label: "Matches your taste",
       className: "bg-purple-950/70 text-purple-300 border border-purple-700/50",
       icon: <Compass size={11} className="text-purple-400" />,
     };
   }
   if (c.source === "centroid_recent") {
     return {
-      label: "Recent Taste",
+      label: "Matches what you play lately",
       className: "bg-amber-950/70 text-amber-300 border border-amber-700/50",
       icon: <Zap size={11} className="text-amber-400" />,
     };
@@ -404,14 +417,14 @@ export function getLaneBadge(c: Candidate) {
   }
   if (c.source === "graph") {
     return {
-      label: "Library Graph",
+      label: "Linked to your library",
       className: "bg-cyan-950/70 text-cyan-300 border border-cyan-700/50",
       icon: <Network size={11} className="text-cyan-400" />,
     };
   }
   if (c.source === "ingest") {
     return {
-      label: "Scrobble Ingest",
+      label: "From your listening",
       className: "bg-emerald-950/70 text-emerald-300 border border-emerald-700/50",
       icon: <Radio size={11} className="text-emerald-400" />,
     };

@@ -32,6 +32,7 @@ export function OllamaCard() {
   const [enabled, setEnabled] = useState(false);
   const [host, setHost] = useState("");
   const [model, setModel] = useState("");
+  const [embedModel, setEmbedModel] = useState("all-minilm");
   const [apiStyle, setApiStyle] = useState("ollama");
   const [useOther, setUseOther] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -42,7 +43,7 @@ export function OllamaCard() {
   const [benchResult, setBenchResult] = useState<string | null>(null);
 
   useEffect(() => {
-    if (cfg) { setEnabled(cfg.enabled); setHost(cfg.host); setModel(cfg.model); setApiStyle(cfg.api_style || "ollama"); }
+    if (cfg) { setEnabled(cfg.enabled); setHost(cfg.host); setModel(cfg.model); setEmbedModel(cfg.embed_model || "all-minilm"); setApiStyle(cfg.api_style || "ollama"); }
   }, [cfg]);
 
   const { data: modelsResp, refetch: refetchModels, isFetching: loadingModels } = useQuery({
@@ -66,7 +67,7 @@ export function OllamaCard() {
     forbid_thinking: true, compact_det_summary: true,
     ...(cfg ?? {}),
     ...(presetProfile ?? {}), // a chosen model preset overrides the profile fields
-    enabled, host, model, api_style: apiStyle,
+    enabled, host, model, embed_model: embedModel, api_style: apiStyle,
   });
 
   const applyPreset = (idx: number) => {
@@ -196,6 +197,20 @@ export function OllamaCard() {
               className="w-full mt-2 bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
             />
           )}
+        </div>
+        <div>
+          <label className="text-xs text-slate-400 mb-1 block">Embedding model</label>
+          <input
+            type="text"
+            value={embedModel}
+            onChange={e => setEmbedModel(e.target.value)}
+            placeholder="all-minilm"
+            className="w-full bg-surface border border-purple-900/40 rounded px-3 py-1.5 text-sm text-white placeholder:text-slate-600"
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            Used by Music discovery to build taste vectors. Chat models cannot do this, so it is a separate name on the same host.
+            Change it before first use, because existing vectors keep their original size.
+          </p>
         </div>
         <div>
           <label className="text-xs text-slate-400 mb-1 block">Known-good small-model presets</label>

@@ -5,6 +5,7 @@ import { Compass, ListMusic, Info, Trash2, Plus, X } from "lucide-react";
 import { req } from "../../lib/api";
 import { DirectLaneSettings } from "./DirectLaneSettings";
 import { DiscoveryV2Settings } from "./DiscoveryV2Settings";
+import { AutoAddModeControl } from "./AutoAddMode";
 
 export interface ADSettings {
   enabled: boolean;
@@ -165,7 +166,7 @@ function QdrantHint() {
   );
 }
 
-function ArtistDiscoverySettingsCard() {
+export function ArtistDiscoverySettingsCard() {
   const qc = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["ad-settings"], queryFn: () => req<ADSettings>("/artist-discovery/settings") });
   const { data: profiles } = useQuery({ queryKey: ["ad-profiles"], queryFn: () => req<LidarrProfiles>("/artist-discovery/lidarr/profiles") });
@@ -246,38 +247,80 @@ function ArtistDiscoverySettingsCard() {
         Enabled
       </label>
 
-      <DirectLaneSettings form={form as ADSettings} set={set} patch={patch} />
+      <section className="space-y-5">
+        <h3 className="text-sm font-semibold text-white">Basics</h3>
+        <DiscoveryV2Settings form={form as ADSettings} set={set} part="basics" />
 
-      <DiscoveryV2Settings form={form as ADSettings} set={set} />
+        <div className="border-t border-purple-900/20 pt-4 space-y-2">
+          <h4 className="text-sm font-semibold text-white">Auto-add</h4>
+          <AutoAddModeControl form={form as ADSettings} patch={patch} />
+        </div>
 
-      <QdrantHint />
-
-      <div className="border-t border-purple-900/20 pt-4">
-        <label className="flex items-center gap-2 text-sm text-slate-300"
-          title="AD-24 — embeddings are optional. Off, Artist Discovery still runs its connection/graph lane in full: related artists are tracked in Qdrant without vectors and still accumulate seed connections, qualify, and promote. Only the taste-centroid (cosine similarity) lane needs vectors, and it stands down until you turn this back on — at which point missing vectors are backfilled automatically.">
-          <input type="checkbox" checked={form.embeddings_enabled ?? false}
-            onChange={e => set("embeddings_enabled", e.target.checked)} />
-          Use Ollama embeddings <span className="text-slate-600">(optional — enables the taste-centroid lane)</span>
-        </label>
-        {!form.embeddings_enabled && (
-          <p className="mt-2 text-xs text-slate-500">
-            Embeddings are off. Connection-based discovery (related-artist graph) runs normally;
-            taste-centroid similarity is paused.
-          </p>
-        )}
-        <div className={`grid sm:grid-cols-2 gap-3 mt-3 ${form.embeddings_enabled ? "" : "opacity-50"}`}>
-          <label className={labelCls}
-            title="Standalone Ollama connection used only for artist-embedding calls — never shares a host/config with Local LLM Assist, even if both point at the same server.">
-            Ollama host <span className="text-slate-600">(standalone — independent of LLM Assist)</span>
-            <input className={inputCls} disabled={!form.embeddings_enabled} value={form.ollama_host || ""} onChange={e => set("ollama_host", e.target.value)} placeholder="http://10.1.1.x:11434" />
-          </label>
-          <label className={labelCls}
-            title="Ollama model that turns an artist's name + tags into the taste vector stored in Qdrant (default all-minilm). Changing this after artists are already tracked can mismatch vector dimensions against existing points — best set once, before first use.">
-            Embedding model
-            <input className={inputCls} disabled={!form.embeddings_enabled} value={form.embed_model || ""} onChange={e => set("embed_model", e.target.value)} />
+        <div className="border-t border-purple-900/20 pt-4">
+          <label className={labelCls} title="Where the Familiar to adventurous slider on Discover starts. The slider there is a temporary tilt; this is the default.">
+            Adventurousness
+            <span className="flex items-center gap-3 mt-1">
+              <span className="text-slate-500">Familiar</span>
+              <input type="range" min={0} max={1} step={0.05} className="flex-1 accent-purple-500"
+                value={form.default_adventure ?? 0.3} onChange={e => set("default_adventure", parseFloat(e.target.value))} />
+              <span className="text-slate-500">Adventurous</span>
+            </span>
           </label>
         </div>
+
+      <div className="border-t border-purple-900/20 pt-4 grid sm:grid-cols-3 gap-3">
+        <label className={labelCls} title="Used when Accept adds a candidate to Lidarr. Leave as First available to use whatever Lidarr itself returns as its default.">
+          Root folder
+          <select className={inputCls} value={form.root_folder_path || ""} onChange={e => set("root_folder_path", e.target.value)}>
+            <option value="">First available</option>
+            {profiles?.root_folders.map(f => <option key={f.path} value={f.path}>{f.path}</option>)}
+          </select>
+        </label>
+        <label className={labelCls} title="Used when Accept adds a candidate to Lidarr. Leave as First available to use whatever Lidarr itself returns as its default.">
+          Quality profile
+          <select className={inputCls} value={form.quality_profile_id || 0} onChange={e => set("quality_profile_id", parseInt(e.target.value))}>
+            <option value={0}>First available</option>
+            {profiles?.quality_profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </label>
+        <label className={labelCls} title="Used when Accept adds a candidate to Lidarr. Leave as First available to use whatever Lidarr itself returns as its default.">
+          Metadata profile
+          <select className={inputCls} value={form.metadata_profile_id || 0} onChange={e => set("metadata_profile_id", parseInt(e.target.value))}>
+            <option value={0}>First available</option>
+            {profiles?.metadata_profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </label>
       </div>
+
+        <div className="border-t border-purple-900/20 pt-4 space-y-2">
+          <h4 className="text-sm font-semibold text-white">Ollama features</h4>
+          <p className="text-xs text-slate-500">
+            On and off only. The host and models are set once in Integrations.
+            {" "}<Link to="/settings/integrations" className="text-brand-light hover:underline">Open Integrations</Link>
+          </p>
+          <label className="flex items-center gap-2 text-sm text-slate-300"
+            title="Taste vectors let Powarr compare artists by sound and tags. Off, discovery still works from Last.fm links.">
+            <input type="checkbox" checked={form.embeddings_enabled ?? false} onChange={e => set("embeddings_enabled", e.target.checked)} />
+            Taste vectors (embeddings)
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-300"
+            title="Needs the Ollama integration turned on. Written from tags and seeds only, never from the model's memory.">
+            <input type="checkbox" checked={form.blurbs_enabled ?? true} onChange={e => set("blurbs_enabled", e.target.checked)} />
+            One-line blurbs on artist cards
+          </label>
+        </div>
+      </section>
+
+      <details className="rounded-xl border border-purple-900/30 bg-surface/40">
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-white">
+          Advanced <span className="text-xs text-slate-500 font-normal">ranking weights, auto-add rules, sources, schedules, Qdrant, moods, blocklists</span>
+        </summary>
+        <div className="px-4 pb-4 space-y-4">
+      <DirectLaneSettings form={form as ADSettings} set={set} patch={patch} hideAutoToggle />
+
+      <DiscoveryV2Settings form={form as ADSettings} set={set} part="advanced" />
+
+      <QdrantHint />
 
       <div className="border-t border-purple-900/20 pt-4">
         <label className="flex items-center gap-2 text-sm text-slate-300"
@@ -466,26 +509,6 @@ function ArtistDiscoverySettingsCard() {
           </span>
         </label>
         <label className={labelCls}
-          title="Minimum recently-listened connection count to skip the review queue and add straight to Lidarr. 0 disables recent auto-add entirely.">
-          Auto-add threshold (recent)
-          <input type="number" min="0" className={inputCls}
-            value={form.auto_add_connection_threshold ?? 0}
-            onChange={e => set("auto_add_connection_threshold", parseInt(e.target.value) || 0)} />
-          <span className="block text-[10px] text-slate-600 mt-0.5">
-            0 = off. At/above this recent count → Lidarr, skip queue
-          </span>
-        </label>
-        <label className={labelCls}
-          title="Minimum all-time library connection count to skip the review queue and add straight to Lidarr, regardless of recent listening. 0 disables all-time auto-add.">
-          Auto-add threshold (all-time)
-          <input type="number" min="0" className={inputCls}
-            value={form.auto_add_all_time_threshold ?? 0}
-            onChange={e => set("auto_add_all_time_threshold", parseInt(e.target.value) || 0)} />
-          <span className="block text-[10px] text-slate-600 mt-0.5">
-            0 = off. At/above this all-time count → Lidarr, skip queue
-          </span>
-        </label>
-        <label className={labelCls}
           title="Suggest/auto-add connection counts only count seed artists you've actually listened to (via Last.fm recent tracks) within this many days — long-monitored-but-unplayed artists don't count toward either threshold.">
           Scrobble lookback (days)
           <input type="number" className={inputCls}
@@ -512,35 +535,11 @@ function ArtistDiscoverySettingsCard() {
         </label>
       </div>
 
-      <div className="border-t border-purple-900/20 pt-4 grid sm:grid-cols-3 gap-3">
-        <label className={labelCls} title="Used when Accept adds a candidate to Lidarr. Leave as First available to use whatever Lidarr itself returns as its default.">
-          Root folder
-          <select className={inputCls} value={form.root_folder_path || ""} onChange={e => set("root_folder_path", e.target.value)}>
-            <option value="">First available</option>
-            {profiles?.root_folders.map(f => <option key={f.path} value={f.path}>{f.path}</option>)}
-          </select>
-        </label>
-        <label className={labelCls} title="Used when Accept adds a candidate to Lidarr. Leave as First available to use whatever Lidarr itself returns as its default.">
-          Quality profile
-          <select className={inputCls} value={form.quality_profile_id || 0} onChange={e => set("quality_profile_id", parseInt(e.target.value))}>
-            <option value={0}>First available</option>
-            {profiles?.quality_profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </label>
-        <label className={labelCls} title="Used when Accept adds a candidate to Lidarr. Leave as First available to use whatever Lidarr itself returns as its default.">
-          Metadata profile
-          <select className={inputCls} value={form.metadata_profile_id || 0} onChange={e => set("metadata_profile_id", parseInt(e.target.value))}>
-            <option value={0}>First available</option>
-            {profiles?.metadata_profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </label>
-      </div>
 
       <p className="text-xs text-slate-500 border-t border-purple-900/20 pt-4">
         Graph candidates use Qdrant connection counts to <em>recently listened</em> artists only.
-        Below the suggest threshold: ignored. Between suggest and auto-add: Suggested Artists queue.
-        At/above auto-add (when set &gt; 0): added to Lidarr and skipped in the queue.
-        Centroid (taste-match) candidates always queue regardless.
+        Below the suggest threshold: ignored. At or above it: Review. Whether anything is added without you
+        is decided once, by Auto-add above. Taste-match candidates always go to Review.
       </p>
 
       <div className="border-t border-purple-900/20 pt-4 grid sm:grid-cols-2 gap-4">
@@ -573,6 +572,9 @@ function ArtistDiscoverySettingsCard() {
           )}
         </div>
       </div>
+
+        </div>
+      </details>
 
       <div className="flex items-center gap-3 pt-2">
         <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}

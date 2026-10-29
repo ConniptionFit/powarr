@@ -113,6 +113,9 @@ class OllamaSettings(BaseModel):
     enabled: bool = False
     host: str = ""  # ip:port or http(s)://host:port
     model: str = ""
+    # v0.102.0: the one place the embedding model is configured. Artist Discovery's
+    # taste vectors read host + embed_model from here; sub-menus only toggle the feature.
+    embed_model: str = "all-minilm"
     api_style: str = "ollama"  # ollama | openai (LM Studio, llama.cpp server, etc.)
     verbosity: str = "brief"  # minimal | brief | verbose — minimal = bare verdict, no prose
     model_size: str = "medium"  # small | medium | large — scales token caps/timeouts to the model
@@ -162,9 +165,10 @@ class OllamaSettings(BaseModel):
     timeout_seconds: int = 0
 
     def model_for(self, task: str) -> str:
-        override = {"match": self.match_model, "explain": self.explain_model,
-                    "second_opinion": self.second_opinion_model}.get(task, "")
-        return (override or "").strip() or self.model
+        # v0.102.0: one Ollama endpoint and one chat model for every task, set in
+        # Integrations. The old per-task override fields stay in the schema so saved
+        # settings still load, but they no longer change which model runs.
+        return self.model
 
     def task_enabled(self, task: str) -> bool:
         """Effective on/off for one consumer ("match" | "explain" |
@@ -365,8 +369,13 @@ class ArtistDiscoverySettings(BaseModel):
     # Standalone Ollama connection for embeddings — deliberately independent of the
     # Local LLM Assist Ollama settings (no fallback/reuse), even if both happen to
     # point at the same host in practice.
+    # v0.102.0: legacy mirror only. The live values come from the shared Ollama
+    # integration (see artist_discovery.load_settings); the Music UI no longer edits these.
     ollama_host: str = ""
     embed_model: str = "all-minilm"
+    # v0.102.0: set once the old connection-count auto-add thresholds were folded into
+    # the single Auto-add switch + rules.
+    legacy_auto_add_migrated: bool = False
     max_candidates_per_run: int = 5
     related_artists_limit: int = 3  # top-N similar artists kept per seed (graph sync)
     # AD-07 — dual thresholds on *recently-listened* seed connection count only

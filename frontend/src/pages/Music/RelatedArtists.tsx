@@ -96,7 +96,7 @@ function RelatedArtistCard({ a, onAdd, adding, added }: {
   );
 }
 
-export default function RelatedArtists() {
+export default function RelatedArtists({ embedded = false }: { embedded?: boolean }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<RelatedArtist[] | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -166,16 +166,18 @@ export default function RelatedArtists() {
   const canLoadMore = (results?.length ?? 0) >= limit;
 
   return (
-    <div className="p-4 sm:p-8 max-w-4xl">
-      <div className="flex items-center gap-3 mb-6">
-        <Users className="text-brand-light" size={22} />
-        <div>
-          <h1 className="text-2xl font-bold text-white">Related Artists</h1>
-          <p className="text-slate-400 text-sm">
-            Search any artist to see who's related — bypasses the Discovery queue, add straight to Lidarr.
-          </p>
+    <div className={embedded ? "" : "p-4 sm:p-8 max-w-4xl"}>
+      {!embedded && (
+        <div className="flex items-center gap-3 mb-6">
+          <Users className="text-brand-light" size={22} />
+          <div>
+            <h1 className="text-2xl font-bold text-white">Related Artists</h1>
+            <p className="text-slate-400 text-sm">
+              Search any artist to see who's related — bypasses the Discovery queue, add straight to Lidarr.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="flex gap-2 mb-6 relative" ref={searchBoxRef}>
         <div className="flex-1 relative">
