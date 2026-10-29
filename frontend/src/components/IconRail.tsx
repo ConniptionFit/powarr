@@ -70,7 +70,7 @@ export default function IconRail({ onNavigate }: { onNavigate?: () => void }) {
       >
         {theme === "light" ? <Moon size={16} /> : <Sun size={16} />}
       </button>
-      <div className="w-full text-center pb-2 text-[9px] text-slate-600">v0.99.0</div>
+      <div className="w-full text-center pb-2 text-[9px] text-slate-600">v0.100.0</div>
     </div>
   );
 }

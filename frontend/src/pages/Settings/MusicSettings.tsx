@@ -3,9 +3,70 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Compass, ListMusic, Info, Trash2, Plus, X } from "lucide-react";
 import { req } from "../../lib/api";
+import { DirectLaneSettings } from "./DirectLaneSettings";
+import { DiscoveryV2Settings } from "./DiscoveryV2Settings";
 
-interface ADSettings {
+export interface ADSettings {
   enabled: boolean;
+  direct_lane_enabled?: boolean;
+  aggressiveness?: string;
+  auto_add_enabled?: boolean;
+  seed_period?: string;
+  min_seed_plays?: number;
+  max_seeds?: number;
+  similar_per_seed?: number;
+  min_match?: number;
+  suggest_score?: number;
+  auto_add_score?: number;
+  auto_add_min_connections?: number;
+  max_adds_per_run?: number;
+  max_adds_per_day?: number;
+  max_queue_per_run?: number;
+  lidarr_monitor?: string;
+  search_on_add?: boolean;
+  excluded_genres?: string[];
+  // v0.101.0 listening log, seed hygiene, ranking and auto-add scope
+  listening_enabled?: boolean;
+  listening_sources?: string[];
+  plex_history_via?: string;
+  listening_users?: string[];
+  listening_dedupe_tolerance_s?: number;
+  listening_min_play_s?: number;
+  listening_source_priority?: string[];
+  listening_backfill_days?: number;
+  seed_half_life_days?: number;
+  seed_exclude_artists?: string[];
+  seed_exclude_tags?: string[];
+  advanced_ranking?: boolean;
+  weight_similarity?: number;
+  weight_agreement?: number;
+  weight_tag_fit?: number;
+  weight_obscurity?: number;
+  weight_freshness?: number;
+  weight_feedback?: number;
+  evidence_top_n?: number;
+  evidence_ttl_days?: number;
+  min_listeners?: number;
+  max_listeners?: number;
+  freshness_days?: number;
+  diversity_strength?: number;
+  max_per_seed?: number;
+  close_fit?: number;
+  wildcard_fit?: number;
+  default_adventure?: number;
+  wildcard_max_share?: number;
+  use_deezer_related?: boolean;
+  use_musicbrainz_releases?: boolean;
+  use_listenbrainz_similar?: boolean;
+  auto_add_buckets?: string[];
+  auto_add_genres?: string[];
+  auto_add_excluded_genres?: string[];
+  auto_add_min_sources?: number;
+  auto_add_require_mbid?: boolean;
+  max_adds_per_week?: number;
+  lidarr_tag?: string;
+  blurbs_enabled?: boolean;
+  scorecard_window_days?: number;
   embeddings_enabled: boolean;
   ollama_host: string;
   embed_model: string;
@@ -163,6 +224,9 @@ function ArtistDiscoverySettingsCard() {
   const set = <K extends keyof ADSettings>(k: K, v: ADSettings[K]) =>
     setDraft(prev => ({ ...(prev ?? settings ?? {}), [k]: v }));
 
+  const patch = (p: Partial<ADSettings>) =>
+    setDraft(prev => ({ ...(prev ?? settings ?? {}), ...p }));
+
   const handleRequireMbidToggle = (checked: boolean) => {
     set("require_musicbrainz_id", checked);
     if (checked) {
@@ -181,6 +245,10 @@ function ArtistDiscoverySettingsCard() {
         <input type="checkbox" checked={!!form.enabled} onChange={e => set("enabled", e.target.checked)} />
         Enabled
       </label>
+
+      <DirectLaneSettings form={form as ADSettings} set={set} patch={patch} />
+
+      <DiscoveryV2Settings form={form as ADSettings} set={set} />
 
       <QdrantHint />
 

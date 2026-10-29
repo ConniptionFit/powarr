@@ -6,6 +6,7 @@ import { OllamaCard } from "./integration-cards/OllamaCard";
 import { LastFmCard } from "./integration-cards/LastFmCard";
 import { YoutubeCard } from "./integration-cards/YoutubeCard";
 import { SpotifyCard } from "./integration-cards/SpotifyCard";
+import { ListenBrainzCard } from "./integration-cards/ListenBrainzCard";
 import { QdrantCard } from "./integration-cards/QdrantCard";
 
 export default function IntegrationsPage({ embedded = false }: { embedded?: boolean }) {
@@ -15,13 +16,14 @@ export default function IntegrationsPage({ embedded = false }: { embedded?: bool
   });
 
   const order = ["plex", "jellyfin", "tautulli", "radarr", "sonarr", "lidarr", "readarr", "seerr", "bazarr", "qbittorrent", "transmission"];
-  const dedicatedCards = ["lastfm", "youtube", "spotify"];
+  const dedicatedCards = ["lastfm", "youtube", "spotify", "listenbrainz"];
   const sorted = [...integrations]
     .filter(cfg => !dedicatedCards.includes(cfg.name))
     .sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
   const lastfm = integrations.find(cfg => cfg.name === "lastfm");
   const youtube = integrations.find(cfg => cfg.name === "youtube");
   const spotify = integrations.find(cfg => cfg.name === "spotify");
+  const listenbrainz = integrations.find(cfg => cfg.name === "listenbrainz");
 
   const body = isLoading ? (
     <Skeleton className="h-20 w-full" count={4} />
@@ -30,6 +32,7 @@ export default function IntegrationsPage({ embedded = false }: { embedded?: bool
       {sorted.map(cfg => <IntegrationCard key={cfg.name} cfg={cfg} />)}
       <QdrantCard />
       {lastfm && <LastFmCard cfg={lastfm} />}
+      {listenbrainz && <ListenBrainzCard cfg={listenbrainz} />}
       {youtube && <YoutubeCard cfg={youtube} />}
       {spotify && <SpotifyCard cfg={spotify} />}
       <OllamaCard />

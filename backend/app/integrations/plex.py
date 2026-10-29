@@ -309,3 +309,56 @@ class PlexIntegration(BaseIntegration):
                 return names[:limit]
         except Exception:
             return []
+
+    async def get_track_history(self, since_ts: int, max_rows: int = 5000) -> list[dict]:
+        """Music play history straight from Plex (v0.101.0): the server's history
+        endpoint, newest first, walked until it passes `since_ts`. Account ids are
+        resolved to names via /accounts. Fail-soft -> []. History retention is a Plex
+        setting, so very old plays may simply not be there."""
+        headers = {"X-Plex-Token": self.api_key, "Accept": "application/json"}
+        out: list[dict] = []
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                names: dict[str, str] = {}
+                try:
+                    ar = await client.get(f"{self.url}/accounts", headers=headers)
+                    if ar.status_code == 200:
+                        for a in (ar.json().get("MediaContainer", {}).get("Account") or []):
+                            names[str(a.get("id"))] = a.get("name") or str(a.get("id"))
+                except Exception:
+                    pass
+                start, page = 0, 200
+                while start < max_rows:
+                    r = await client.get(
+                        f"{self.url}/status/sessions/history/all",
+                        params={"sort": "viewedAt:desc", "X-Plex-Container-Start": start,
+                                "X-Plex-Container-Size": page},
+                        headers=headers)
+                    r.raise_for_status()
+                    rows = r.json().get("MediaContainer", {}).get("Metadata") or []
+                    if not rows:
+                        break
+                    done = False
+                    for row in rows:
+                        viewed = int(row.get("viewedAt") or 0)
+                        if viewed and viewed < since_ts:
+                            done = True
+                            break
+                        if row.get("type") != "track":
+                            continue
+                        artist, title = row.get("grandparentTitle"), row.get("title")
+                        if not artist or not title:
+                            continue
+                        acct = str(row.get("accountID") or "")
+                        out.append({
+                            "id": str(row.get("historyKey") or f"{row.get('ratingKey')}:{viewed}"),
+                            "user": names.get(acct) or acct,
+                            "artist": artist, "track": title, "album": row.get("parentTitle") or "",
+                            "ts": viewed, "duration_s": int((row.get("duration") or 0) / 1000) or None,
+                        })
+                    if done or len(rows) < page:
+                        break
+                    start += page
+        except Exception:
+            return out
+        return out

@@ -112,3 +112,28 @@ async def get_artist_top_tracks(name: str, limit: int = 5) -> list[dict]:
             return tracks
     except Exception:
         return []
+
+
+async def get_related_artists(name: str, limit: int = 20) -> list[dict]:
+    """GET /artist/{id}/related — Deezer's artist-to-artist graph (v0.101.0), an
+    independent second opinion to Last.fm similarity. Same exact-name guard as the
+    top-tracks lookup. Returns [{name, fans, rank}] ordered best-first; [] on any miss."""
+    if not name:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.get(f"{_API}/search/artist", params={"q": name, "limit": 1},
+                                 headers={"User-Agent": _USER_AGENT})
+            if r.status_code != 200:
+                return []
+            hits = r.json().get("data") or []
+            if not hits or (hits[0].get("name") or "").strip().lower() != name.strip().lower():
+                return []
+            rel = await client.get(f"{_API}/artist/{hits[0]['id']}/related", params={"limit": limit},
+                                   headers={"User-Agent": _USER_AGENT})
+            if rel.status_code != 200:
+                return []
+            return [{"name": a.get("name"), "fans": a.get("nb_fan") or 0, "rank": i}
+                    for i, a in enumerate(rel.json().get("data") or []) if a.get("name")]
+    except Exception:
+        return []

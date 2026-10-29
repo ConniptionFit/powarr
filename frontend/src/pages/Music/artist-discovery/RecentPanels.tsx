@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, History, UserPlus } from "lucide-react";
 import { fmtRelative, parseApiDate } from "../../../lib/api";
 import ArtistCard from "../../../components/ArtistCard";
 import ScrollFadeX from "../../../components/ScrollFadeX";
 import { type DiscoveryRun, type RecentAdd, api, whySuggested } from "./shared";
+import { DecisionList } from "./DiscoveryTools";
 
 export function runDuration(r: DiscoveryRun): string {
   if (!r.started_at || !r.finished_at) return "—";
@@ -90,8 +91,15 @@ export function RecentlyAdded() {
   );
 }
 
+function RunDecisions({ runId }: { runId: number }) {
+  const { data = [], isLoading } = useQuery({ queryKey: ["ad-decisions", runId], queryFn: () => api.decisions(runId) });
+  if (isLoading) return <p className="text-xs text-slate-500">Loading…</p>;
+  return <DecisionList decisions={data} />;
+}
+
 export function RecentRuns() {
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const { data: runs = [] } = useQuery({ queryKey: ["ad-runs"], queryFn: api.runs, enabled: open });
 
   return (
@@ -116,19 +124,35 @@ export function RecentRuns() {
                   <th className="py-2 pr-4 font-medium">Duration</th>
                   <th className="py-2 pr-4 font-medium">Found</th>
                   <th className="py-2 pr-4 font-medium">Added</th>
+                  <th className="py-2 pr-4 font-medium">Skipped</th>
                   <th className="py-2 font-medium">Result</th>
                 </tr>
               </thead>
               <tbody>
                 {runs.map((r) => (
-                  <tr key={r.id} className="border-b border-purple-900/20 text-slate-300">
-                    <td className="py-2 pr-4 capitalize">{r.run_type}</td>
-                    <td className="py-2 pr-4 whitespace-nowrap">{fmtRelative(r.started_at)}</td>
-                    <td className="py-2 pr-4">{runDuration(r)}</td>
-                    <td className="py-2 pr-4">{r.candidates_found}</td>
-                    <td className="py-2 pr-4">{r.candidates_added}</td>
-                    <td className="py-2 text-slate-400">{r.message || "—"}</td>
-                  </tr>
+                  <Fragment key={r.id}>
+                    <tr
+                      className="border-b border-purple-900/20 text-slate-300 cursor-pointer hover:bg-surface-raised/50"
+                      onClick={() => setExpanded(expanded === r.id ? null : r.id)}
+                      title="Show why each artist was added, queued or skipped"
+                    >
+                      <td className="py-2 pr-4 capitalize">
+                        {r.run_type}
+                        {r.trigger === "schedule" && <span className="ml-1 text-[10px] text-slate-500">(scheduled)</span>}
+                      </td>
+                      <td className="py-2 pr-4 whitespace-nowrap">{fmtRelative(r.started_at)}</td>
+                      <td className="py-2 pr-4">{runDuration(r)}</td>
+                      <td className="py-2 pr-4">{r.candidates_found}</td>
+                      <td className="py-2 pr-4">{r.candidates_added}</td>
+                      <td className="py-2 pr-4">{r.candidates_skipped ?? 0}</td>
+                      <td className="py-2 text-slate-400">{r.message || "—"}</td>
+                    </tr>
+                    {expanded === r.id && (
+                      <tr className="border-b border-purple-900/20">
+                        <td colSpan={7} className="py-2 pl-2"><RunDecisions runId={r.id} /></td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

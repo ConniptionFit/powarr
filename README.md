@@ -133,6 +133,82 @@ Automation, LLM Assist, Notifications, Security, Music — replaces the separate
 Integrations page). Logs sits below a divider as a utility item. Match Review defaults to a
 card-per-item layout with a table-view toggle for the old dense table.
 
+### Artist Discovery direct lane (v0.100.0)
+
+Auto-add used to do nothing without saying why: it needed Qdrant, and an artist only reached Lidarr
+when several *recently played* seeds all linked to it, with nothing logged about the artists that
+missed. The **direct lane** replaces that guesswork and needs only Last.fm and Lidarr.
+
+- **How it scores**: your top artists for a period (default 3 months) become seeds, weighted by plays.
+  Each seed's Last.fm similar artists are scored (`seed weight x similarity`) and summed per candidate.
+  Artists already in Lidarr, Plex or your seed list, rejected before, or on the non-music filter are dropped.
+- **Aggressiveness** (Settings → Music → Artist Discovery): `off`, `conservative`, `balanced`,
+  `aggressive` or `custom`. Presets set the seed period, minimum plays, seed count, minimum similarity,
+  queue score, auto-add score, minimum seeds, and the per-run, per-day and queue caps. Editing any number
+  switches to custom. **Add artists to Lidarr automatically** is a separate switch (off = review queue only),
+  so choosing "aggressive" never starts adding on its own. Existing installs that had an auto-add threshold
+  keep it switched on.
+- **Lidarr options**: monitor mode (all, future, missing, existing, first, latest, none) and search on add.
+- **Dry run**: **Preview (dry run)** on the Artist Discovery page lists what a run would add or queue and
+  the reason for each, without changing anything (`POST /artist-discovery/preview`; `/preview-settings`
+  tries unsaved settings).
+- **Why-not log**: every run records each artist as added, queued, skipped or failed with a plain-language
+  reason (`GET /artist-discovery/decisions`); click a run under Recent runs to read them. Kept 90 days.
+- **Health check**: the status panel (`GET /artist-discovery/status`, optional `?deep=true`) lists what is
+  stopping discovery: module off, Last.fm or Lidarr missing, auto-add off, schedule off, caps used.
+- **Runs without Qdrant**: the full cycle runs the direct lane first, so a Qdrant or Ollama outage no longer
+  stops discovery. The taste-centroid lane also now looks past hits that already have a candidate row, which
+  used to leave it permanently empty after a few runs.
+
+### Artist Discovery v2: one listening log, shelves, tunable ranking (v0.101.0)
+
+Discovery now learns from everything you play, ranks with more than one signal, and shows results the way
+streaming apps do. Builds on the direct lane above.
+
+- **One listening log** (`listen_events`): Last.fm scrobbles, Plex play history (read from Plex directly by
+  default, or through Tautulli) and ListenBrainz listens are merged. A play reported by two sources counts
+  **once**: same artist and track, from different sources, started within the same-play window (default 3
+  minutes, or half the track if longer). Plex or Jellyfin playing a track while a Last.fm scrobbler reports it
+  is the typical case. A replay from the same source is never merged. When two sources saw a play, the first in
+  the source-priority list supplies its time. Plays under 30 seconds are ignored when the source says how long
+  was played. Choose which Plex/Tautulli accounts count (default all), the window, the minimum play length and
+  the priority order under Settings → Music → Listening sources, where a **Duplicate check** shows
+  "412 reports became 301 real plays" with examples. Synced every 30 minutes and before a real run. Seeds come
+  from this log once it holds 25 plays, otherwise from Last.fm top artists as before. Optional taste fade
+  (half-life in days). Jellyfin play history is not ingested.
+- **ListenBrainz** (Integrations): username plus user token. Used as a listening source and for similar
+  artists. Its endpoints could not be tested against the live service when this was written; failures only
+  switch the signal off.
+- **Ranking** (`discovery_ranker.py`): each candidate's Last.fm similarity score is blended with source
+  agreement (Last.fm, Deezer related artists, ListenBrainz), tag fit with your taste profile, obscurity
+  (Last.fm listeners), freshness (latest MusicBrainz release) and your feedback. Every weight is a setting
+  and every score has a breakdown (the info button on a card). Looked-up tags, listener counts and releases are
+  cached in `artist_discovery_evidence` so re-ranking is instant. Results are re-ordered for variety (maximal
+  marginal relevance, max per seed). Optional minimum and maximum listener counts.
+- **Familiar to adventurous**: each candidate is **Close** (fits your usual tags), **Branching out**, or a
+  **Wildcard**. The Discover slider sets how many of each appear in "Mixed for you"; an admin ceiling caps
+  wildcards.
+- **Discover tab**: shelves with a plain reason (Mixed for you, Because you play X, Close to your taste, Branching
+  out, Under the radar, New from artists like your favourites, Wildcards), cards with a match meter, tags, a
+  one-line reason, preview, **Add**, **More like this** and **Not for me** (with a reason). Feedback shifts later
+  rankings; "I already know them" excludes the artist. A **Sampler** plays one 30 second Deezer clip per top
+  suggestion in a row. **Explore a genre** lists a tag's top artists you do not own, have not played and have not
+  reviewed. The old list is the **Review queue** tab.
+- **Auto-add rules**: on top of the score and seed count, an admin can limit auto-add to chosen picks (Close /
+  Branching / Wildcard), a minimum number of agreeing sources, a required MusicBrainz ID, allowed and excluded
+  tags, and a weekly cap. Adds search immediately (existing option) and are tagged `powarr-discovered` in Lidarr.
+  Settings shows the rule as a sentence. Previews now count adds already made against the daily and weekly caps.
+- **Seed hygiene** (optional): artists and Last.fm tags that must not shape the taste profile (kids' music,
+  sleep sounds).
+- **Blurbs**: when LLM Assist is configured, the best pending candidates get a one-line "why you might like it"
+  built only from their tags and seeds. Without an LLM the data-based reason line is shown.
+- **Insights tab**: a read-only view of the current taste profile, and a **Scorecard** of suggested, added and
+  rejected artists, and how many you then actually played (from any source), by pick type and by source.
+- New API: `/artist-discovery/shelves`, `/taste`, `/scorecard`, `/sampler`, `/genre-explore`,
+  `/listening/{status,sync,preview}`, `/candidates/{id}/feedback`, `/candidates/{id}/blurb`. Additive schema
+  only (three tables, eight nullable columns on `discovered_artists`).
+- Deferred: Release Radar notifications in the weekly digest, per-user taste profiles, Jellyfin history.
+
 ### Music — Artist Discovery (v0.39.0; refined v0.40.0–v0.42.0; UX cleanup + tray + Related Artists v0.48.0; Related Artists filters v0.49.0; candidate-pool fix + auto-add parity v0.87.0; optional embeddings v0.88.0–v0.88.1)
 Native port of an external n8n taste-mapping pipeline: **Last.fm** scrobble history is optionally
 embedded via a standalone **Ollama** connection (`all-minilm`, independent of the separate LLM
