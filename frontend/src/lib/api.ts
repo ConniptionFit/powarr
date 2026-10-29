@@ -391,6 +391,7 @@ export interface OllamaSettings {
   enabled: boolean;
   host: string;
   model: string;
+  embed_model?: string; // v0.102.0: taste-vector model, same endpoint
   api_style: string;
   verbosity: string; // minimal | brief | verbose
   model_size: string; // small | medium | large — scales token caps/timeouts

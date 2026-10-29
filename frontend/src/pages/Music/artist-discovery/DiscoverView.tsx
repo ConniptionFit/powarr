@@ -1,3 +1,4 @@
+import RelatedArtists from "../RelatedArtists";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Headphones, Pause, Play, RefreshCw, Search, SkipForward } from "lucide-react";
@@ -195,6 +196,12 @@ export function DiscoverView({ enabled, onRun, running }: { enabled: boolean; on
         </section>
       ))}
 
+      <details className="rounded-xl border border-purple-900/30 bg-surface-raised">
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-white">
+          Explore: find artists similar to one you name
+        </summary>
+        <div className="px-4 pb-4"><RelatedArtists embedded /></div>
+      </details>
       <GenreExplorer />
       {explain && <ExplainDrawer c={explain} onClose={() => setExplain(null)} />}
     </div>

@@ -160,6 +160,14 @@ missed. The **direct lane** replaces that guesswork and needs only Last.fm and L
   stops discovery. The taste-centroid lane also now looks past hits that already have a candidate row, which
   used to leave it permanently empty after a few runs.
 
+### Music discovery redesign: one Auto-add control, one Ollama endpoint (v0.102.0)
+- **Music tabs are Discover, Review and Activity.** Related Artists now lives inside Discover under Explore (`/music/related` redirects). Activity holds the stats tiles, Insights, recent adds and recent runs.
+- **One vocabulary.** The Review queue filters and badges use Close / Branching out / Wildcard, the same words as Discover. Candidates with no rating show a plain-language source. "Low metadata" is now "Missing info".
+- **Setup panel.** The gear on the Music page opens Music setup: Basics (listening sources, Auto-add, adventurousness, keep-out tags, Lidarr defaults, Ollama on/off) with everything else under Advanced. Settings > Music shows the same form.
+- **Auto-add is a single control:** Off, Ask me, Automatic, with a Careful / Balanced / Eager preset and a weekly limit. The old recent / all-time connection thresholds are folded in once on upgrade (switch on, same minimum link count, thresholds zeroed) and no longer appear in the UI.
+- **One Ollama endpoint.** Integrations > Ollama holds the host, the chat model and the embedding model. Music and LLM Assist keep on/off switches only. A host previously set under Music is copied to Integrations on upgrade. The per-task and per-policy model overrides in LLM Assist are removed and ignored; every task uses the shared model.
+- Not in this change: the "New:" release label age check (separate fix).
+
 ### Artist Discovery v2: one listening log, shelves, tunable ranking (v0.101.0)
 
 Discovery now learns from everything you play, ranks with more than one signal, and shows results the way

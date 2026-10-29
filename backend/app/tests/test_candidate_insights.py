@@ -108,7 +108,7 @@ class TestCandidateInsights(unittest.IsolatedAsyncioTestCase):
 
     async def test_recent_and_all_time_connections_distinction(self):
         db = _db()
-        save_settings(db, ArtistDiscoverySettings(auto_add_connection_threshold=3, scrobble_lookback_days=30))
+        save_settings(db, ArtistDiscoverySettings(auto_add_connection_threshold=3, legacy_auto_add_migrated=True, scrobble_lookback_days=30))
         cand = DiscoveredArtist(
             artist_name="Texas in July",
             musicbrainz_id="b10bbbfc-cf9e-42e0-be17-e2c3e1d52350",

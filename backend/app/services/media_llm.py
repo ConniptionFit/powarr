@@ -33,7 +33,7 @@ def _explain_policy(ollama: OllamaSettings, policies: LlmPolicies,
     configured at all; it can turn a specific library OFF (or override its
     model) independent of the others."""
     overlay = (policies.by_library or {}).get(library_section or "") or {}
-    model = (overlay.get("explain_model") or "").strip() or ollama.model_for("explain")
+    model = ollama.model_for("explain")  # v0.102.0: one shared model; policy overlays no longer pick a model
     toggle = overlay.get("explain_enabled", ollama.explain_enabled)
     enabled = bool(ollama.enabled and ollama.host and model and toggle)
     return enabled, model

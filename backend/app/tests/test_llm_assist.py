@@ -758,8 +758,9 @@ class TestPerTaskLlmSettings(unittest.TestCase):
 
     def test_per_task_model_overrides(self):
         cfg = self._cfg(match_model="fast-model", explain_model="  ")
-        self.assertEqual(cfg.model_for("match"), "fast-model")
-        self.assertEqual(cfg.model_for("explain"), "default-model")  # whitespace = blank
+        # v0.102.0: legacy per-task fields are kept for loading but ignored.
+        self.assertEqual(cfg.model_for("match"), "default-model")
+        self.assertEqual(cfg.model_for("explain"), "default-model")
 
     def test_per_task_toggles_narrow_master_switch(self):
         cfg = self._cfg(match_enabled=False)
@@ -774,7 +775,7 @@ class TestPerTaskLlmSettings(unittest.TestCase):
     def test_no_usable_model_disables_task(self):
         cfg = self._cfg(model="", match_model="", explain_model="rat-model")
         self.assertFalse(cfg.task_enabled("match"))
-        self.assertTrue(cfg.task_enabled("explain"))
+        self.assertFalse(cfg.task_enabled("explain"))  # v0.102.0: no per-task model to fall back on
 
     def test_pre_upgrade_config_defaults_keep_behavior(self):
         # A saved pre-v0.27.0 payload has none of the new keys — everything
@@ -803,8 +804,11 @@ class TestPerTaskLlmSettings(unittest.TestCase):
         base = self._cfg()
         self.assertEqual(rationale_key(base, _Item()),
                          rationale_key(self._cfg(explain_model=""), _Item()))
+        # v0.102.0: a legacy explain override no longer changes the model, so the key holds.
+        self.assertEqual(rationale_key(base, _Item()),
+                         rationale_key(self._cfg(explain_model="other"), _Item()))
         self.assertNotEqual(rationale_key(base, _Item()),
-                            rationale_key(self._cfg(explain_model="other"), _Item()))
+                            rationale_key(self._cfg(model="other-shared"), _Item()))
         # A match-side override never touches rationale caching.
         self.assertEqual(rationale_key(base, _Item()),
                          rationale_key(self._cfg(match_model="other"), _Item()))

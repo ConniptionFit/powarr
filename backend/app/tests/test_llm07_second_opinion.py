@@ -36,9 +36,10 @@ class TaskEnabledSecondOpinionTests(unittest.TestCase):
         ollama = _ollama(second_opinion_enabled=True, enabled=False)
         self.assertFalse(ollama.task_enabled("second_opinion"))
 
-    def test_model_for_uses_override(self):
+    def test_model_for_ignores_legacy_override(self):
+        # v0.102.0: one shared model; old per-task override fields no longer apply.
         ollama = _ollama(second_opinion_model="llama3:8b")
-        self.assertEqual(ollama.model_for("second_opinion"), "llama3:8b")
+        self.assertEqual(ollama.model_for("second_opinion"), "qwen2.5:7b")
 
     def test_model_for_falls_back_to_shared_model(self):
         ollama = _ollama()
@@ -48,8 +49,8 @@ class TaskEnabledSecondOpinionTests(unittest.TestCase):
         # Ternary-to-dict refactor of model_for/task_enabled must not change
         # the existing "match"/"explain" behavior.
         ollama = _ollama(match_model="m", explain_model="e")
-        self.assertEqual(ollama.model_for("match"), "m")
-        self.assertEqual(ollama.model_for("explain"), "e")
+        self.assertEqual(ollama.model_for("match"), "qwen2.5:7b")
+        self.assertEqual(ollama.model_for("explain"), "qwen2.5:7b")
         self.assertTrue(ollama.task_enabled("match"))
         self.assertTrue(ollama.task_enabled("explain"))
 
@@ -105,17 +106,16 @@ class SecondOpinionKeyTests(unittest.TestCase):
         k2 = second_opinion_key(ollama, item)
         self.assertNotEqual(k1, k2)
 
-    def test_key_changes_when_model_override_changes(self):
+    def test_key_changes_when_shared_model_changes(self):
         item = _item()
         k1 = second_opinion_key(_ollama(second_opinion_enabled=True), item)
-        k2 = second_opinion_key(_ollama(second_opinion_enabled=True, second_opinion_model="other"), item)
+        k2 = second_opinion_key(_ollama(second_opinion_enabled=True, model="other"), item)
         self.assertNotEqual(k1, k2)
 
     def test_second_opinion_key_independent_of_rationale_key(self):
-        # Different task configs (explain_model vs second_opinion_model) must not
-        # collide even when everything else about the item is identical.
+        # Different tasks must not collide even when everything else about the item is identical.
         item = _item()
-        ollama = _ollama(second_opinion_enabled=True, explain_model="e", second_opinion_model="s")
+        ollama = _ollama(second_opinion_enabled=True)
         self.assertNotEqual(rationale_key(ollama, item), second_opinion_key(ollama, item))
 
 
