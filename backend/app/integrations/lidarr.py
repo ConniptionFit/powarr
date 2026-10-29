@@ -162,6 +162,21 @@ class LidarrIntegration(BaseIntegration):
             r.raise_for_status()
             return r.json()
 
+    async def get_or_create_tag(self, label: str) -> int | None:
+        """Lidarr tag id for `label`, creating the tag when missing (v0.101.0)."""
+        label = (label or "").strip().lower()
+        if not label:
+            return None
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(f"{self._base()}/tag", headers=self._headers())
+            r.raise_for_status()
+            for t in r.json():
+                if (t.get("label") or "").lower() == label:
+                    return t.get("id")
+            c = await client.post(f"{self._base()}/tag", headers=self._headers(), json={"label": label})
+            c.raise_for_status()
+            return c.json().get("id")
+
     async def get_root_folders(self) -> list[dict]:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             r = await client.get(f"{self._base()}/rootfolder", headers=self._headers())

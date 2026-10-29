@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 log_buffer.install()
 logger = logging.getLogger("powarr")
 
-app = FastAPI(title="Powarr", version="0.100.0", docs_url="/api/docs", openapi_url=None)
+app = FastAPI(title="Powarr", version="0.101.0", docs_url="/api/docs", openapi_url=None)
 app.add_middleware(SelectiveGZipMiddleware, minimum_size=1024)
 
 # Paths that stay reachable without a session: the auth flow itself, the
@@ -94,7 +94,7 @@ def _seed_integrations():
     try:
         for name in ("plex", "jellyfin", "tautulli", "sonarr", "radarr", "lidarr",
                      "readarr", "seerr", "qbittorrent", "transmission", "lastfm", "bazarr",
-                     "youtube", "spotify"):
+                     "youtube", "spotify", "listenbrainz"):
             if not db.query(Integration).filter_by(name=name).first():
                 db.add(Integration(name=name))
         db.commit()

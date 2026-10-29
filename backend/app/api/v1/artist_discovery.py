@@ -503,3 +503,87 @@ async def related_add(body: dict = Body(...), db: Session = Depends(get_db)):
     if not artist_name:
         raise HTTPException(status_code=400, detail="Body: {mbid?, artist_name}")
     return await service.add_related_artist(db, body.get("mbid"), artist_name)
+
+
+# --- v0.101.0: listening log, Discover shelves, feedback, scorecard ---------------------
+
+@router.get("/listening/status")
+def listening_status(db: Session = Depends(get_db)):
+    """Per-source health, log size, and the Plex/Tautulli accounts seen so far."""
+    from app.services import listening
+    cfg = service.load_settings(db)
+    return {"enabled": cfg.listening_enabled, "sources": listening.source_status(db, cfg),
+            "plays_in_log": listening.log_size(db), "users": listening.known_users(db),
+            "counted_users": cfg.listening_users}
+
+
+@router.post("/listening/sync")
+async def listening_sync(db: Session = Depends(get_db)):
+    from app.services import listening
+    return await listening.sync_listening(db)
+
+
+@router.get("/listening/preview")
+def listening_preview(days: int = Query(7, ge=1, le=90), db: Session = Depends(get_db)):
+    """"412 raw reports, 301 real plays" for the last N days, with examples of plays
+    two sources both reported."""
+    from app.services import listening
+    return listening.dedupe_preview(db, days)
+
+
+@router.get("/shelves")
+def shelves(adventure: Optional[float] = Query(None, ge=0, le=1), db: Session = Depends(get_db)):
+    from app.services import discovery_views
+    return discovery_views.build_shelves(db, service.load_settings(db), adventure)
+
+
+@router.get("/taste")
+def taste(db: Session = Depends(get_db)):
+    """What the server-wide taste profile currently looks like (read-only)."""
+    from app.services import discovery_views
+    return discovery_views.taste_summary(db, service.load_settings(db))
+
+
+@router.post("/candidates/{candidate_id}/feedback")
+def candidate_feedback(candidate_id: int, body: dict = Body(...), db: Session = Depends(get_db)):
+    """Body: {kind: more_like_this | not_for_me | known, reason?: genre|known|dislike|other}."""
+    from app.services import discovery_views
+    res = discovery_views.record_feedback(db, candidate_id, body.get("kind", ""), body.get("reason"))
+    if not res.get("ok"):
+        raise HTTPException(status_code=404 if res.get("message") == "Candidate not found" else 400,
+                            detail=res.get("message"))
+    return res
+
+
+@router.post("/candidates/{candidate_id}/blurb")
+async def candidate_blurb(candidate_id: int, db: Session = Depends(get_db)):
+    """Generate (or regenerate) the one-line local-LLM blurb for one candidate."""
+    from app.services import discovery_blurbs
+    row = db.query(DiscoveredArtist).filter_by(id=candidate_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    text = await discovery_blurbs.blurb_for(db, row)
+    if not text:
+        return {"ok": False, "message": "LLM Assist is not configured, busy, or returned nothing."}
+    row.blurb = text
+    db.commit()
+    return {"ok": True, "blurb": text}
+
+
+@router.get("/scorecard")
+def scorecard(days: int = Query(90, ge=7, le=365), db: Session = Depends(get_db)):
+    from app.services import discovery_views
+    return discovery_views.scorecard(db, service.load_settings(db), days)
+
+
+@router.get("/sampler")
+async def sampler(limit: int = Query(10, ge=1, le=25), db: Session = Depends(get_db)):
+    from app.services import discovery_views
+    return await discovery_views.sampler(db, limit)
+
+
+@router.get("/genre-explore")
+async def genre_explore(tag: str = Query(..., min_length=1), limit: int = Query(30, ge=1, le=100),
+                        offset: int = Query(0, ge=0, le=150), db: Session = Depends(get_db)):
+    from app.services import discovery_views
+    return await discovery_views.genre_explore(db, tag, limit, offset)

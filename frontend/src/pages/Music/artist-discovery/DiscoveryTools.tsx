@@ -36,6 +36,15 @@ export function DecisionList({ decisions }: { decisions: Decision[] }) {
               {d.connections != null && <span className="ml-2 text-slate-500 font-normal">{d.connections} seed{d.connections === 1 ? "" : "s"}</span>}
             </p>
             <p className="text-slate-400">{d.reason}</p>
+            {d.reason_line && <p className="text-slate-500">{d.reason_line}</p>}
+            {(d.bucket || (d.tags && d.tags.length > 0)) && (
+              <p className="text-slate-600">
+                {d.bucket && <span className="mr-2 capitalize">{d.bucket}</span>}
+                {d.tags && d.tags.slice(0, 3).join(" · ")}
+                {d.listeners != null && <span className="ml-2">{d.listeners.toLocaleString()} listeners</span>}
+                {d.sources && d.sources.length > 1 && <span className="ml-2">via {d.sources.join(" + ")}</span>}
+              </p>
+            )}
             {d.seeds.length > 0 && (
               <p className="text-slate-600 truncate">Similar to {d.seeds.slice(0, 4).join(", ")}{d.seeds.length > 4 ? ` +${d.seeds.length - 4}` : ""}</p>
             )}

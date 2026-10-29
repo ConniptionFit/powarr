@@ -35,6 +35,17 @@ class DiscoveredArtist(Base):
     image_url = Column(String, nullable=True)
     bio = Column(Text, nullable=True)
     years_active = Column(String, nullable=True)
+    # v0.101.0 — v2 ranking output, written by the direct lane and re-read by the
+    # Discover shelves: final blended score, familiarity bucket, per-signal
+    # breakdown (JSON), a one-line reason, optional LLM blurb, Last.fm listeners.
+    rank_score = Column(Float, nullable=True)
+    bucket = Column(String, nullable=True, index=True)  # close | branching | wildcard
+    breakdown = Column(Text, nullable=True)  # JSON {signal: {value, weight, detail}}
+    reason = Column(Text, nullable=True)
+    blurb = Column(Text, nullable=True)
+    listeners = Column(Integer, nullable=True)
+    tags = Column(Text, nullable=True)  # JSON list of Last.fm tags used for tag fit
+    latest_release = Column(Text, nullable=True)  # JSON {title, date}
 
 
 class ArtistDiscoveryRun(Base):

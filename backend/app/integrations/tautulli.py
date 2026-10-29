@@ -99,3 +99,41 @@ class TautulliIntegration(BaseIntegration):
                 return out
         except Exception:
             return []
+
+    async def get_music_history(self, days: int = 30, length: int = 5000) -> list[dict]:
+        """Music play history (v0.101.0): one row per played track with artist, track,
+        album, the unix start time, the account and how long was actually played.
+        Fail-soft -> []. Used as the alternative to reading Plex history directly."""
+        after = (datetime.utcnow() - timedelta(days=max(1, days))).strftime("%Y-%m-%d")
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                r = await client.get(self._api_url(), params={
+                    "apikey": self.api_key, "cmd": "get_history", "media_type": "track",
+                    "after": after, "length": min(max(1, length), 10000)})
+                r.raise_for_status()
+                data = r.json().get("response", {}).get("data", {})
+                rows = data.get("data") if isinstance(data, dict) else data
+                out = []
+                for row in rows or []:
+                    artist = row.get("grandparent_title") or ""
+                    title = row.get("title") or ""
+                    if not artist or not title:
+                        continue
+                    ts = row.get("started") or row.get("date")
+                    try:
+                        ts = int(ts)
+                    except (TypeError, ValueError):
+                        continue
+                    try:
+                        played = int(row.get("play_duration") or row.get("duration") or 0)
+                    except (TypeError, ValueError):
+                        played = 0
+                    out.append({
+                        "id": str(row.get("row_id") or row.get("id") or ""),
+                        "user": row.get("friendly_name") or row.get("user") or "",
+                        "artist": artist, "track": title, "album": row.get("parent_title") or "",
+                        "ts": ts, "played_s": played,
+                    })
+                return out
+        except Exception:
+            return []

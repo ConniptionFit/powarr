@@ -11,6 +11,10 @@ import { type Candidate, type CandidateSort, sortCandidates, type Stats, api } f
 import { CandidateCard } from "./artist-discovery/CandidateCard";
 import { RecentlyAdded, RecentRuns } from "./artist-discovery/RecentPanels";
 import { PreviewButton, StatusPanel } from "./artist-discovery/DiscoveryTools";
+import { DiscoverView } from "./artist-discovery/DiscoverView";
+import { InsightsView } from "./artist-discovery/InsightsView";
+
+type Tab = "discover" | "queue" | "insights";
 
 export default function ArtistDiscovery() {
   const qc = useQueryClient();
@@ -23,6 +27,7 @@ export default function ArtistDiscovery() {
   });
 
   const [msg, setMsg] = useState<string | null>(null);
+  const [tab, setTab] = usePersistedState<Tab>("powarr.artistDiscovery.tab", "discover");
   const [candidateSort, setCandidateSort] = usePersistedState<CandidateSort>(
     "powarr.artistDiscovery.candidateSort",
     "match"
@@ -42,6 +47,7 @@ export default function ArtistDiscovery() {
       qc.invalidateQueries({ queryKey: ["ad-candidates"] });
       qc.invalidateQueries({ queryKey: ["ad-stats"] });
       qc.invalidateQueries({ queryKey: ["ad-runs"] });
+      qc.invalidateQueries({ queryKey: ["ad-shelves"] });
     },
     onError: (e: Error) => setMsg(e.message),
   });
@@ -155,7 +161,7 @@ export default function ArtistDiscovery() {
   const countLowMeta = candidates.filter((c) => c.is_low_metadata).length;
 
   return (
-    <div className="p-4 sm:p-8 max-w-4xl pb-24">
+    <div className="p-4 sm:p-8 max-w-5xl pb-24">
       {/* Page Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
@@ -163,7 +169,7 @@ export default function ArtistDiscovery() {
           <div>
             <h1 className="text-2xl font-bold text-white">Artist Discovery</h1>
             <p className="text-slate-400 text-sm">
-              Last.fm listening → similar artists, scored → review queue or Lidarr
+              Your listening (Last.fm, Plex, ListenBrainz) → similar artists, scored → shelves, review queue or Lidarr
             </p>
           </div>
         </div>
@@ -214,6 +220,22 @@ export default function ArtistDiscovery() {
         </div>
       )}
 
+      {/* Tabs */}
+      <div className="flex gap-1 mb-6 border-b border-purple-900/30" role="tablist">
+        {([["discover", "Discover"], ["queue", `Review queue (${candidates.length})`], ["insights", "Insights"]] as [Tab, string][]).map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
+            className={`px-4 py-2 text-sm font-medium -mb-px border-b-2 transition-colors ${
+              tab === id ? "text-white border-brand" : "text-slate-400 border-transparent hover:text-white"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {msg && tab !== "queue" && <p className="text-xs text-slate-300 font-medium mb-4">{msg}</p>}
+      {tab === "discover" && <DiscoverView enabled={enabled} onRun={() => runMut.mutate()} running={runMut.isPending} />}
+      {tab === "insights" && <InsightsView />}
+
+      {tab === "queue" && (<>
       {/* Action Bar */}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <button
@@ -406,9 +428,10 @@ export default function ArtistDiscovery() {
           </div>
         )}
       </section>
+      </>)}
 
       {/* Floating Sticky Batch Action Bar */}
-      {selectedIds.size > 0 && (
+      {tab === "queue" && selectedIds.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-[#141424]/95 border border-purple-700/60 shadow-2xl rounded-2xl px-5 py-3.5 flex items-center gap-4 backdrop-blur-md animate-in fade-in slide-in-from-bottom-3 duration-200">
           <span className="text-xs font-semibold text-white">
             {selectedIds.size} artist{selectedIds.size === 1 ? "" : "s"} selected

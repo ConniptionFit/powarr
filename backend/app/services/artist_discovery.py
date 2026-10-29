@@ -1692,7 +1692,7 @@ async def run_differential_sync(db=None) -> dict[str, Any]:
 # --- Review queue actions --------------------------------------------------------
 
 async def _add_artist_to_lidarr(lidarr, cfg: ArtistDiscoverySettings,
-                                mbid: str | None, name: str) -> dict[str, Any]:
+                                mbid: str | None, name: str, tag: str | None = None) -> dict[str, Any]:
     """Core Lidarr lookup -> profile resolution -> add. Shared by the Discovery
     accept flow (add_to_lidarr, below) and the standalone Related Artists
     search's add action — neither DiscoveredArtist nor Qdrant bookkeeping
@@ -1738,6 +1738,13 @@ async def _add_artist_to_lidarr(lidarr, cfg: ArtistDiscoverySettings,
     match["monitored"] = True
     monitor = cfg.lidarr_monitor or "all"
     match["addOptions"] = {"monitor": monitor, "searchForMissingAlbums": bool(cfg.search_on_add)}
+    if tag:  # v0.101.0 — mark auto-added artists in Lidarr so they are easy to find; never blocks the add
+        try:
+            tag_id = await lidarr.get_or_create_tag(tag)
+            if tag_id:
+                match["tags"] = sorted(set(match.get("tags") or []) | {tag_id})
+        except Exception as e:
+            logger.info(f"Artist Discovery: Lidarr tag '{tag}' skipped: {e}")
 
     try:
         added = await lidarr.add_artist(match)
@@ -1761,7 +1768,7 @@ async def _add_artist_to_lidarr(lidarr, cfg: ArtistDiscoverySettings,
         return {"ok": False, "message": f"Lidarr add failed: {e}"}
 
 
-async def add_to_lidarr(db, candidate_id: int) -> dict[str, Any]:
+async def add_to_lidarr(db, candidate_id: int, auto: bool = False) -> dict[str, Any]:
     cand = db.query(DiscoveredArtist).filter_by(id=candidate_id).first()
     if not cand:
         return {"ok": False, "message": "Candidate not found"}
@@ -1775,7 +1782,8 @@ async def add_to_lidarr(db, candidate_id: int) -> dict[str, Any]:
     lidarr = _get_client(lidarr_row)
     cfg = load_settings(db)
 
-    result = await _add_artist_to_lidarr(lidarr, cfg, cand.musicbrainz_id, cand.artist_name)
+    result = await _add_artist_to_lidarr(lidarr, cfg, cand.musicbrainz_id, cand.artist_name,
+                                         tag=(cfg.lidarr_tag or None) if auto else None)
     if not result.get("ok"):
         return result
     lidarr_artist_id = result.get("lidarr_artist_id")
